@@ -33,6 +33,7 @@ func serve(ctx context.Context, w io.Writer, s *store.Store, c *common) error {
 		openBrowser(url)
 	}
 	sess := newSession(c, s, os.Stderr)
+	sess.Background = true
 	if sess.AutoPull {
 		sess.PullDue(ctx)
 	}

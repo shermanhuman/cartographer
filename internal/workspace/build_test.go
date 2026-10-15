@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"encoding/base64"
 	"os"
 	"os/exec"
@@ -382,5 +383,33 @@ func TestLoadValidatesKeepAndPrepareRepo(t *testing.T) {
 	write(t, filepath.Join(dir, FileName), "name = \"x\"\n[schema]\nprepare = \"true\"\ncommand = [\"cat\"]\n")
 	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "prepare_repo") {
 		t.Errorf("prepare without prepare_repo: %v", err)
+	}
+}
+
+// An extraction error with git archive output still unread must fail fast,
+// not block on the pipe (the old code waited on git before draining it).
+func TestArchiveErrorDoesNotHang(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "git", "init", "-q", "-b", "main")
+	big := strings.Repeat("x", 4096)
+	for i := 0; i < 200; i++ { // ~800 KB of archive, far beyond a pipe buffer
+		write(t, filepath.Join(repo, fmt.Sprintf("f%03d.txt", i)), big+fmt.Sprint(i))
+	}
+	run(t, repo, "git", "add", ".")
+	run(t, repo, "git", "commit", "-qm", "big")
+	blocker := filepath.Join(t.TempDir(), "file")
+	write(t, blocker, "not a directory")
+	done := make(chan error, 1)
+	go func() {
+		_, err := archive(context.Background(), repo, "HEAD", filepath.Join(blocker, "dst"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want an error extracting under a regular file")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("archive hung after an extraction error")
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/shermanhuman/cartographer/internal/output"
 	"github.com/shermanhuman/cartographer/internal/query"
+	cachesession "github.com/shermanhuman/cartographer/internal/session"
 	"github.com/shermanhuman/cartographer/internal/store"
 )
 
@@ -90,6 +91,8 @@ func New(o Options) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{Name: "map_status", Description: "Map freshness and coverage: snapshot id, repo revisions, commits behind, counts, annotation review state."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in StatusIn) (*mcp.CallToolResult, any, error) {
+			// An explicit status check recomputes freshness (e.g. right after an edit).
+			ctx = cachesession.WithoutCache(ctx)
 			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) { return q.Status(ctx) })
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "map_find", Description: "Find where something is defined: search functions, modules, tables, files, docs by words. On a miss returns the map's vocabulary to retry with."},

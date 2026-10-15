@@ -425,6 +425,7 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		defer s.Close()
 		// stdout carries the MCP protocol; warnings go to stderr.
 		sess := newSession(&c, s, os.Stderr)
+		sess.Background = true // long-lived: never hold a tool call for a pull
 		return mcpserver.Serve(ctx, mcpserver.Options{Version: version, Prepare: func(ctx context.Context) (*query.Q, error) {
 			q, _, err := sess.Query(ctx)
 			return q, err

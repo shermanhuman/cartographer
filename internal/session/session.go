@@ -25,10 +25,23 @@ import (
 // each burst to one round of git execs.
 var CacheTTL = 10 * time.Second
 
-// PullTimeout bounds the automatic pull on the query path, so an offline or
-// slow network delays a query by at most this much. `cartographer pull` is
-// not bounded.
-var PullTimeout = 5 * time.Second
+// PullTimeout bounds a foreground automatic pull (one-shot CLI queries), so
+// an offline or slow network delays a query by at most this much.
+// `cartographer pull` is not bounded.
+var PullTimeout = 30 * time.Second
+
+// BackgroundPullTimeout bounds a background pull (MCP server, serve): the
+// query answers from the snapshot already pulled and the next one sees the
+// new snapshot.
+var BackgroundPullTimeout = 10 * time.Minute
+
+type noCacheKey struct{}
+
+// WithoutCache marks ctx so the query recomputes freshness instead of
+// reusing the CacheTTL memo (e.g. an explicit status check after an edit).
+func WithoutCache(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noCacheKey{}, true)
+}
 
 // Session is safe for concurrent use (the MCP server runs tool calls in
 // parallel) once its exported fields are set.
@@ -38,7 +51,10 @@ type Session struct {
 	Cwd      string
 	Snapshot string // explicit snapshot id; "" selects by cwd
 	AutoPull bool
-	Log      io.Writer // warnings (pull failures); nil discards
+	// Background pulls off the query path (long-lived processes); otherwise
+	// the pull runs in the foreground within PullTimeout.
+	Background bool
+	Log        io.Writer // warnings (pull failures); nil discards
 	GitHub   *snapshot.GitHub
 
 	ghMu   sync.Mutex // guards GitHub's lazy creation
@@ -90,19 +106,34 @@ func (s *Session) Puller() *snapshot.Puller {
 }
 
 // PullDue pulls every configured workspace whose last check is older than
-// snapshot.AutoInterval, within PullTimeout. Failures are reported once and
-// never fatal. A call made while another is pulling returns at once.
+// snapshot.AutoInterval. Failures are reported once and never fatal. A call
+// made while another pull is running returns at once. With Background set it
+// returns immediately and pulls in a goroutine.
 func (s *Session) PullDue(ctx context.Context) {
 	if !s.pullMu.TryLock() {
 		return
 	}
+	if s.Background {
+		go func() {
+			defer s.pullMu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), BackgroundPullTimeout)
+			defer cancel()
+			s.pullDue(ctx)
+		}()
+		return
+	}
 	defer s.pullMu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, PullTimeout)
+	defer cancel()
+	s.pullDue(ctx)
+}
+
+// pullDue does the pulls. The caller holds pullMu.
+func (s *Session) pullDue(ctx context.Context) {
 	cfg, err := userconfig.Load()
 	if err != nil || len(cfg.Workspaces) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, PullTimeout)
-	defer cancel()
 	p := s.Puller()
 	for _, src := range cfg.Workspaces {
 		if !p.Due(src) {
@@ -142,6 +173,9 @@ func (s *Session) current(ctx context.Context) *memo {
 func (s *Session) resolve(ctx context.Context) (string, *fresh.Report, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if ctx.Value(noCacheKey{}) != nil {
+		s.memo = nil
+	}
 	m := s.current(ctx)
 	id := s.Snapshot
 	if id == "" {

@@ -273,3 +273,24 @@ func TestConcurrentPulls(t *testing.T) {
 		t.Errorf("snapshot dirs = %v", names)
 	}
 }
+
+func TestPruneDirsRemovesOnlyStalePartials(t *testing.T) {
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	p := &Puller{Store: s, DataDir: t.TempDir()}
+	snaps := filepath.Join(p.DataDir, "snapshots")
+	fresh := filepath.Join(snaps, "snapshot-x"+partialMark+"1")
+	stale := filepath.Join(snaps, "snapshot-y"+partialMark+"2")
+	for _, d := range []string{fresh, stale} {
+		os.MkdirAll(d, 0o755)
+	}
+	old := time.Now().Add(-2 * StalePartial)
+	os.Chtimes(stale, old, old)
+	p.pruneDirs(context.Background())
+	if _, err := os.Stat(fresh); err != nil {
+		t.Error("an in-progress pull's directory was removed")
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Error("an abandoned partial directory was kept")
+	}
+}

@@ -62,6 +62,9 @@ cartographer serve --open                  # the map in your browser (127.0.0.1)
 cartographer embed Shop.Billing.charge/2   # Markdown + Mermaid for an issue
 ```
 
+Private workspaces need a GitHub token: `GH_TOKEN`/`GITHUB_TOKEN`, else
+`gh auth token` (a `gh` on PATH, or one installed globally with mise).
+
 `cartographer help` lists every command. `--budget`, `--limit`/`--offset`
 and `--format json` work on all queries.
 
@@ -84,7 +87,9 @@ executable that prints [facts v1](docs/facts-format.md) JSON is a plugin.
 
 In CI, call the reusable workflows: `build-snapshot.yml` from the workspace
 repository (on dispatch and weekly), and `pr-impact.yml` from each product
-repository's pull requests for a sticky impact comment.
+repository's pull requests for a sticky impact comment. Pin both the
+workflow ref (`@v0.1.0`) and its `cartographer-version` input to the same
+release; the workflows install exactly that binary.
 
 ## How it works
 

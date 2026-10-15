@@ -107,6 +107,10 @@ func (p *Puller) Pull(ctx context.Context, source string) (res *Result, err erro
 	return &Result{Source: source, Snapshot: newest.Tag, Imported: true}, nil
 }
 
+// StalePartial is the age after which an unfinished unpack directory is
+// treated as abandoned.
+const StalePartial = time.Hour
+
 // partialMark names in-progress unpack directories.
 const partialMark = ".partial-"
 
@@ -151,7 +155,15 @@ func (p *Puller) pruneDirs(ctx context.Context) {
 	}
 	entries, _ := os.ReadDir(filepath.Join(p.DataDir, "snapshots"))
 	for _, e := range entries {
-		if !keep[e.Name()] && !strings.Contains(e.Name(), partialMark) && !strings.HasSuffix(e.Name(), ".partial") {
+		partial := strings.Contains(e.Name(), partialMark) || strings.HasSuffix(e.Name(), ".partial")
+		switch {
+		case partial:
+			// In-progress pulls are left alone; ones abandoned by a crash
+			// are removed once stale.
+			if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > StalePartial {
+				os.RemoveAll(filepath.Join(p.DataDir, "snapshots", e.Name()))
+			}
+		case !keep[e.Name()]:
 			os.RemoveAll(filepath.Join(p.DataDir, "snapshots", e.Name()))
 		}
 	}

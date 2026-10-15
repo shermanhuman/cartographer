@@ -310,3 +310,65 @@ func TestPullerCreatesOneClient(t *testing.T) {
 		}
 	}
 }
+
+func TestBackgroundPullNeverDelaysQueries(t *testing.T) {
+	ctx := context.Background()
+	withWorkspace(t)
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	importAs(t, s, "mini", "snapshot-20261015T120000Z", "")
+	gh, hits, _ := fakeGitHub(t, true) // every request hangs
+	old := BackgroundPullTimeout
+	BackgroundPullTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { BackgroundPullTimeout = old })
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: t.TempDir(), AutoPull: true, Background: true, GitHub: gh, Log: io.Discard}
+	start := time.Now()
+	if _, _, err := sess.Query(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Errorf("query waited %v for a background pull", d)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for hits.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if hits.Load() == 0 {
+		t.Error("the background pull never ran")
+	}
+	// Let the goroutine give up before the test's server closes.
+	for !sess.pullMu.TryLock() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestWithoutCacheSeesEditsInsideTTL(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("CARTOGRAPHER_CONFIG", filepath.Join(t.TempDir(), "none.toml"))
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	parent := t.TempDir()
+	app := filepath.Join(parent, "shop-app")
+	gitInit(t, app, "https://github.com/example/shop-app")
+	os.WriteFile(filepath.Join(app, "a.ex"), []byte("a"), 0o644)
+	for _, args := range [][]string{{"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a"}} {
+		if out, err := exec.Command("git", append([]string{"-C", app}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+	}
+	rev, _ := exec.Command("git", "-C", app, "rev-parse", "HEAD").Output()
+	importAs(t, s, "mini", "snapshot-20261015T120000Z", "")
+	s.DB.Exec(`UPDATE repos SET revision = ? WHERE name = 'shop-app'`, strings.TrimSpace(string(rev)))
+	sess := &Session{Store: s, Cwd: app}
+	_, rep, err := sess.Query(ctx)
+	if err != nil || rep.Changed("shop-app", "b.ex") {
+		t.Fatalf("before edit: %v %+v", err, rep)
+	}
+	os.WriteFile(filepath.Join(app, "b.ex"), []byte("b"), 0o644)
+	if _, rep, _ := sess.Query(ctx); rep.Changed("shop-app", "b.ex") {
+		t.Fatal("the memo should still be in effect")
+	}
+	if _, rep, _ := sess.Query(WithoutCache(ctx)); !rep.Changed("shop-app", "b.ex") {
+		t.Error("WithoutCache must recompute freshness")
+	}
+}

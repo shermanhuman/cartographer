@@ -252,6 +252,13 @@ func archive(ctx context.Context, src, rev, dst string) ([]string, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	// On an error, stop git before waiting: an undrained pipe would block it
+	// (and Wait) forever.
+	abort := func(err error) error {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return err
+	}
 	var files []string
 	tr := tar.NewReader(stdout)
 	for {
@@ -260,8 +267,7 @@ func archive(ctx context.Context, src, rev, dst string) ([]string, error) {
 			break
 		}
 		if err != nil {
-			cmd.Wait()
-			return nil, err
+			return nil, abort(err)
 		}
 		name := path.Clean(h.Name)
 		if strings.HasPrefix(name, "../") || path.IsAbs(name) {
@@ -271,26 +277,22 @@ func archive(ctx context.Context, src, rev, dst string) ([]string, error) {
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o755); err != nil {
-				cmd.Wait()
-				return nil, err
+				return nil, abort(err)
 			}
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				cmd.Wait()
-				return nil, err
+				return nil, abort(err)
 			}
 			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(h.Mode)&0o755|0o600)
 			if err != nil {
-				cmd.Wait()
-				return nil, err
+				return nil, abort(err)
 			}
 			_, err = io.Copy(f, tr)
 			if cerr := f.Close(); err == nil {
 				err = cerr
 			}
 			if err != nil {
-				cmd.Wait()
-				return nil, err
+				return nil, abort(err)
 			}
 			files = append(files, name)
 		}
