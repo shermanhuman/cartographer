@@ -34,7 +34,10 @@ documents are merged:
    `heuristic` (the dependency between repositories is not proven);
 3. otherwise the call stays unresolved and is reported as such.
 
-Calls with `kind` `dynamic` are never resolved.
+Targets without a `module` resolve only against the caller's own module (a
+local call); they never match elsewhere. Calls with `kind` `dynamic`, or any
+kind starting with `js_`, are never resolved: name-only evidence without
+lexical binding is not enough. See each plugin's README for its call kinds.
 
 ## Precision
 
