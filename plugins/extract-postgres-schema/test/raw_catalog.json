@@ -1,0 +1,43 @@
+{
+  "tables": [
+    {"id": "public.customers", "name": "customers", "schema": "public", "kind": "r",
+     "columns": [
+       {"name": "id", "type": "bigint", "nullable": false, "default": "nextval('customers_id_seq'::regclass)"},
+       {"name": "email", "type": "citext", "nullable": false, "default": null}
+     ],
+     "constraints": [
+       {"name": "customers_pkey", "type": "p", "definition": "PRIMARY KEY (id)"},
+       {"name": "customers_email_not_null", "type": "n", "definition": "NOT NULL email"}
+     ],
+     "indexes": [
+       {"name": "customers_pkey", "definition": "CREATE UNIQUE INDEX customers_pkey ON public.customers USING btree (id)"},
+       {"name": "customers_email_index", "definition": "CREATE UNIQUE INDEX customers_email_index ON public.customers USING btree (email)"}
+     ]},
+    {"id": "public.orders", "name": "orders", "schema": "public", "kind": "r",
+     "columns": [
+       {"name": "id", "type": "bigint", "nullable": false, "default": null},
+       {"name": "customer_id", "type": "bigint", "nullable": false, "default": null},
+       {"name": "region_id", "type": "integer", "nullable": true, "default": null},
+       {"name": "total_cents", "type": "integer", "nullable": false, "default": "0"}
+     ],
+     "constraints": [
+       {"name": "orders_total_cents_check", "type": "c", "definition": "CHECK ((total_cents >= 0))"},
+       {"name": "orders_pkey", "type": "p", "definition": "PRIMARY KEY (id)"},
+       {"name": "orders_customer_id_fkey", "type": "f", "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id)"},
+       {"name": "orders_region_id_fkey", "type": "f", "definition": "FOREIGN KEY (region_id) REFERENCES geo.regions(id)"}
+     ],
+     "indexes": [
+       {"name": "orders_pkey", "definition": "CREATE UNIQUE INDEX orders_pkey ON public.orders USING btree (id)"}
+     ]},
+    {"id": "public.order_totals", "name": "order_totals", "schema": "public", "kind": "v",
+     "columns": [
+       {"name": "customer_id", "type": "bigint", "nullable": true, "default": null},
+       {"name": "total_cents", "type": "bigint", "nullable": true, "default": null}
+     ],
+     "constraints": [], "indexes": []}
+  ],
+  "foreign_keys": [
+    {"name": "orders_customer_id_fkey", "from": "public.orders", "to": "public.customers", "columns": ["customer_id"], "target_columns": ["id"]},
+    {"name": "orders_region_id_fkey", "from": "public.orders", "to": "geo.regions", "columns": ["region_id"], "target_columns": ["id"]}
+  ]
+}
