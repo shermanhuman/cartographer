@@ -1,0 +1,168 @@
+// Package bundle reads and writes the on-disk layout of a snapshot:
+//
+//	manifest.json
+//	facts/*.json              facts v1 documents listed in the manifest
+//	docs/<repo>/<path>.md     tracked Markdown, copied at build time
+//	annotations/*.json        human-reviewed journeys and notes
+package bundle
+
+import (
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/shermanhuman/cartographer/internal/facts"
+)
+
+const Format = 1
+
+type Manifest struct {
+	SnapshotFormat int        `json:"snapshot_format"`
+	ID             string     `json:"id"`
+	CreatedAt      string     `json:"created_at"`
+	Workspace      string     `json:"workspace"`
+	Repos          []Repo     `json:"repos"`
+	Facts          []string   `json:"facts"`
+	Contexts       ContextCfg `json:"contexts"`
+}
+
+type Repo struct {
+	Name     string `json:"name"`
+	URL      string `json:"url,omitempty"`
+	Revision string `json:"revision,omitempty"`
+}
+
+// ContextCfg groups modules into contexts by their first Depth namespace parts.
+type ContextCfg struct {
+	Depth int `json:"depth,omitempty"`
+}
+
+type Doc struct {
+	Repo    string
+	Path    string
+	Content string
+}
+
+// Annotation is a human-written explanation that cites map entities.
+type Annotation struct {
+	Kind     string            `json:"kind"`
+	ID       string            `json:"id"`
+	Title    string            `json:"title"`
+	Summary  string            `json:"summary,omitempty"`
+	Body     string            `json:"body,omitempty"`
+	Cites    []string          `json:"cites,omitempty"`
+	Reviewed map[string]string `json:"reviewed,omitempty"`
+	Steps    []Step            `json:"steps,omitempty"`
+}
+
+type Step struct {
+	ID       string            `json:"id"`
+	Title    string            `json:"title"`
+	Body     string            `json:"body,omitempty"`
+	Cites    []string          `json:"cites,omitempty"`
+	Reviewed map[string]string `json:"reviewed,omitempty"`
+}
+
+type Bundle struct {
+	Manifest    Manifest
+	Facts       []*facts.Doc
+	Docs        []Doc
+	Annotations []Annotation
+}
+
+// Read loads and validates a snapshot directory.
+func Read(dir string) (*Bundle, error) {
+	b := &Bundle{}
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(raw, &b.Manifest); err != nil {
+		return nil, fmt.Errorf("bundle: manifest: %w", err)
+	}
+	m := &b.Manifest
+	if m.SnapshotFormat != Format {
+		return nil, fmt.Errorf("bundle: snapshot_format %d not supported (want %d)", m.SnapshotFormat, Format)
+	}
+	if m.ID == "" || m.CreatedAt == "" {
+		return nil, fmt.Errorf("bundle: manifest needs id and created_at")
+	}
+	if m.Contexts.Depth == 0 {
+		m.Contexts.Depth = 2
+	}
+
+	for _, rel := range m.Facts {
+		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return nil, err
+		}
+		d, err := facts.Decode(f)
+		f.Close()
+		if err != nil {
+			return nil, fmt.Errorf("bundle: %s: %w", rel, err)
+		}
+		if err := d.Validate(); err != nil {
+			return nil, fmt.Errorf("bundle: %s: %w", rel, err)
+		}
+		b.Facts = append(b.Facts, d)
+	}
+
+	docsDir := filepath.Join(dir, "docs")
+	err = filepath.WalkDir(docsDir, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) && p == docsDir {
+				return filepath.SkipDir
+			}
+			return err
+		}
+		if e.IsDir() || !strings.HasSuffix(p, ".md") {
+			return nil
+		}
+		rel, _ := filepath.Rel(docsDir, p)
+		parts := strings.SplitN(filepath.ToSlash(rel), "/", 2)
+		if len(parts) != 2 {
+			return nil
+		}
+		content, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		b.Docs = append(b.Docs, Doc{Repo: parts[0], Path: parts[1], Content: string(content)})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(b.Docs, func(i, j int) bool {
+		if b.Docs[i].Repo != b.Docs[j].Repo {
+			return b.Docs[i].Repo < b.Docs[j].Repo
+		}
+		return b.Docs[i].Path < b.Docs[j].Path
+	})
+
+	files, _ := filepath.Glob(filepath.Join(dir, "annotations", "*.json"))
+	sort.Strings(files)
+	for _, p := range files {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		var doc struct {
+			Annotations []Annotation `json:"annotations"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return nil, fmt.Errorf("bundle: %s: %w", filepath.Base(p), err)
+		}
+		for _, a := range doc.Annotations {
+			if a.ID == "" || a.Kind == "" {
+				return nil, fmt.Errorf("bundle: %s: annotation needs id and kind", filepath.Base(p))
+			}
+		}
+		b.Annotations = append(b.Annotations, doc.Annotations...)
+	}
+	return b, nil
+}

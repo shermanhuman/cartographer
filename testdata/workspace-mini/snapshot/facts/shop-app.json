@@ -1,44 +1,278 @@
 {
   "facts_version": 1,
-  "producer": {"name": "extract-elixir", "version": "0.1.0", "call_precision": "precise"},
+  "producer": {
+    "name": "extract-elixir",
+    "version": "0.1.0",
+    "call_precision": "precise"
+  },
   "repo": "shop-app",
   "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "files": [
-    {"path": "lib/shop/orders.ex", "language": "elixir", "category": "source"},
-    {"path": "lib/shop/billing.ex", "language": "elixir", "category": "source"},
-    {"path": "lib/shop_web/order_controller.ex", "language": "elixir", "category": "source"},
-    {"path": "test/shop/orders_test.exs", "language": "elixir", "category": "test"},
-    {"path": "docs/orders.md", "language": "markdown", "category": "documentation"}
+    {
+      "path": "lib/shop/orders.ex",
+      "language": "elixir",
+      "category": "source"
+    },
+    {
+      "path": "lib/shop/billing.ex",
+      "language": "elixir",
+      "category": "source"
+    },
+    {
+      "path": "lib/shop_web/order_controller.ex",
+      "language": "elixir",
+      "category": "source"
+    },
+    {
+      "path": "test/shop/orders_test.exs",
+      "language": "elixir",
+      "category": "test"
+    },
+    {
+      "path": "docs/orders.md",
+      "language": "markdown",
+      "category": "documentation"
+    }
   ],
   "modules": [
-    {"id": "shop-app:Shop.Orders", "name": "Shop.Orders", "namespace": ["Shop", "Orders"], "file": "lib/shop/orders.ex", "line": 1, "language": "elixir"},
-    {"id": "shop-app:Shop.Billing", "name": "Shop.Billing", "namespace": ["Shop", "Billing"], "file": "lib/shop/billing.ex", "line": 1, "language": "elixir"},
-    {"id": "shop-app:ShopWeb.OrderController", "name": "ShopWeb.OrderController", "namespace": ["ShopWeb", "OrderController"], "file": "lib/shop_web/order_controller.ex", "line": 1, "language": "elixir"},
-    {"id": "shop-app:Shop.OrdersTest", "name": "Shop.OrdersTest", "namespace": ["Shop", "OrdersTest"], "file": "test/shop/orders_test.exs", "line": 1, "language": "elixir"}
+    {
+      "id": "shop-app:Shop.Orders",
+      "name": "Shop.Orders",
+      "namespace": [
+        "Shop",
+        "Orders"
+      ],
+      "file": "lib/shop/orders.ex",
+      "line": 1,
+      "language": "elixir"
+    },
+    {
+      "id": "shop-app:Shop.Billing",
+      "name": "Shop.Billing",
+      "namespace": [
+        "Shop",
+        "Billing"
+      ],
+      "file": "lib/shop/billing.ex",
+      "line": 1,
+      "language": "elixir"
+    },
+    {
+      "id": "shop-app:ShopWeb.OrderController",
+      "name": "ShopWeb.OrderController",
+      "namespace": [
+        "ShopWeb",
+        "OrderController"
+      ],
+      "file": "lib/shop_web/order_controller.ex",
+      "line": 1,
+      "language": "elixir"
+    },
+    {
+      "id": "shop-app:Shop.OrdersTest",
+      "name": "Shop.OrdersTest",
+      "namespace": [
+        "Shop",
+        "OrdersTest"
+      ],
+      "file": "test/shop/orders_test.exs",
+      "line": 1,
+      "language": "elixir"
+    }
   ],
   "functions": [
-    {"id": "shop-app:Shop.Orders.create/2", "module": "shop-app:Shop.Orders", "name": "create", "arity": 2, "min_arity": 1, "kind": "def", "file": "lib/shop/orders.ex", "line": 10, "clauses": [10]},
-    {"id": "shop-app:Shop.Orders.total/1", "module": "shop-app:Shop.Orders", "name": "total", "arity": 1, "min_arity": 1, "kind": "def", "file": "lib/shop/orders.ex", "line": 20, "clauses": [20, 24]},
-    {"id": "shop-app:Shop.Orders.validate/1", "module": "shop-app:Shop.Orders", "name": "validate", "arity": 1, "min_arity": 1, "kind": "defp", "file": "lib/shop/orders.ex", "line": 30, "clauses": [30]},
-    {"id": "shop-app:Shop.Billing.charge/2", "module": "shop-app:Shop.Billing", "name": "charge", "arity": 2, "min_arity": 2, "kind": "def", "file": "lib/shop/billing.ex", "line": 5, "clauses": [5]},
-    {"id": "shop-app:ShopWeb.OrderController.create/2", "module": "shop-app:ShopWeb.OrderController", "name": "create", "arity": 2, "min_arity": 2, "kind": "def", "file": "lib/shop_web/order_controller.ex", "line": 8, "clauses": [8]},
-    {"id": "shop-app:Shop.OrdersTest.test_total/1", "module": "shop-app:Shop.OrdersTest", "name": "test_total", "arity": 1, "min_arity": 1, "kind": "def", "file": "test/shop/orders_test.exs", "line": 5, "clauses": [5]}
+    {
+      "id": "shop-app:Shop.Orders.create/2",
+      "module": "shop-app:Shop.Orders",
+      "name": "create",
+      "arity": 2,
+      "min_arity": 1,
+      "kind": "def",
+      "file": "lib/shop/orders.ex",
+      "line": 10,
+      "clauses": [
+        10
+      ],
+      "fingerprint": "h2-changed"
+    },
+    {
+      "id": "shop-app:Shop.Orders.total/1",
+      "module": "shop-app:Shop.Orders",
+      "name": "total",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "def",
+      "file": "lib/shop/orders.ex",
+      "line": 20,
+      "clauses": [
+        20,
+        24
+      ]
+    },
+    {
+      "id": "shop-app:Shop.Orders.validate/1",
+      "module": "shop-app:Shop.Orders",
+      "name": "validate",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "defp",
+      "file": "lib/shop/orders.ex",
+      "line": 30,
+      "clauses": [
+        30
+      ]
+    },
+    {
+      "id": "shop-app:Shop.Billing.charge/2",
+      "module": "shop-app:Shop.Billing",
+      "name": "charge",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "def",
+      "file": "lib/shop/billing.ex",
+      "line": 5,
+      "clauses": [
+        5
+      ],
+      "fingerprint": "h3"
+    },
+    {
+      "id": "shop-app:ShopWeb.OrderController.create/2",
+      "module": "shop-app:ShopWeb.OrderController",
+      "name": "create",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "def",
+      "file": "lib/shop_web/order_controller.ex",
+      "line": 8,
+      "clauses": [
+        8
+      ],
+      "fingerprint": "h1"
+    },
+    {
+      "id": "shop-app:Shop.OrdersTest.test_total/1",
+      "module": "shop-app:Shop.OrdersTest",
+      "name": "test_total",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "def",
+      "file": "test/shop/orders_test.exs",
+      "line": 5,
+      "clauses": [
+        5
+      ]
+    }
   ],
   "calls": [
-    {"from": "shop-app:ShopWeb.OrderController.create/2", "target": {"module": "Shop.Orders", "name": "create", "arity": 1}, "kind": "remote", "file": "lib/shop_web/order_controller.ex", "line": 9},
-    {"from": "shop-app:ShopWeb.OrderController.create/2", "target": {"module": "Shop.Billing", "name": "charge", "arity": 2}, "kind": "remote", "file": "lib/shop_web/order_controller.ex", "line": 11},
-    {"from": "shop-app:Shop.Orders.create/2", "target": {"module": "Shop.Orders", "name": "validate", "arity": 1}, "kind": "local", "file": "lib/shop/orders.ex", "line": 11},
-    {"from": "shop-app:Shop.Orders.create/2", "target": {"module": "Shop.Orders", "name": "validate", "arity": 1}, "kind": "local", "file": "lib/shop/orders.ex", "line": 13},
-    {"from": "shop-app:Shop.Billing.charge/2", "target": {"module": "Shop.Orders", "name": "total", "arity": 1}, "kind": "remote", "file": "lib/shop/billing.ex", "line": 6},
-    {"from": "shop-app:Shop.Billing.charge/2", "target": {"module": "Stripe", "name": "charge", "arity": 1}, "kind": "remote", "file": "lib/shop/billing.ex", "line": 7},
-    {"from": "shop-app:Shop.Billing.charge/2", "target": {"name": "apply", "arity": 3}, "kind": "dynamic", "file": "lib/shop/billing.ex", "line": 8},
-    {"from": "shop-app:Shop.OrdersTest.test_total/1", "target": {"module": "Shop.Orders", "name": "total", "arity": 1}, "kind": "remote", "file": "test/shop/orders_test.exs", "line": 6}
+    {
+      "from": "shop-app:ShopWeb.OrderController.create/2",
+      "target": {
+        "module": "Shop.Orders",
+        "name": "create",
+        "arity": 1
+      },
+      "kind": "remote",
+      "file": "lib/shop_web/order_controller.ex",
+      "line": 9
+    },
+    {
+      "from": "shop-app:ShopWeb.OrderController.create/2",
+      "target": {
+        "module": "Shop.Billing",
+        "name": "charge",
+        "arity": 2
+      },
+      "kind": "remote",
+      "file": "lib/shop_web/order_controller.ex",
+      "line": 11
+    },
+    {
+      "from": "shop-app:Shop.Orders.create/2",
+      "target": {
+        "module": "Shop.Orders",
+        "name": "validate",
+        "arity": 1
+      },
+      "kind": "local",
+      "file": "lib/shop/orders.ex",
+      "line": 11
+    },
+    {
+      "from": "shop-app:Shop.Orders.create/2",
+      "target": {
+        "module": "Shop.Orders",
+        "name": "validate",
+        "arity": 1
+      },
+      "kind": "local",
+      "file": "lib/shop/orders.ex",
+      "line": 13
+    },
+    {
+      "from": "shop-app:Shop.Billing.charge/2",
+      "target": {
+        "module": "Shop.Orders",
+        "name": "total",
+        "arity": 1
+      },
+      "kind": "remote",
+      "file": "lib/shop/billing.ex",
+      "line": 6
+    },
+    {
+      "from": "shop-app:Shop.Billing.charge/2",
+      "target": {
+        "module": "Stripe",
+        "name": "charge",
+        "arity": 1
+      },
+      "kind": "remote",
+      "file": "lib/shop/billing.ex",
+      "line": 7
+    },
+    {
+      "from": "shop-app:Shop.Billing.charge/2",
+      "target": {
+        "name": "apply",
+        "arity": 3
+      },
+      "kind": "dynamic",
+      "file": "lib/shop/billing.ex",
+      "line": 8
+    },
+    {
+      "from": "shop-app:Shop.OrdersTest.test_total/1",
+      "target": {
+        "module": "Shop.Orders",
+        "name": "total",
+        "arity": 1
+      },
+      "kind": "remote",
+      "file": "test/shop/orders_test.exs",
+      "line": 6
+    }
   ],
   "table_refs": [
-    {"table": "public.orders", "file": "lib/shop/orders.ex", "line": 12, "function": "shop-app:Shop.Orders.create/2", "text": "Repo.insert(%Order{}) # orders"},
-    {"table": "public.customers", "file": "lib/shop/billing.ex", "line": 6, "text": "from c in \"customers\""}
+    {
+      "table": "public.orders",
+      "file": "lib/shop/orders.ex",
+      "line": 12,
+      "function": "shop-app:Shop.Orders.create/2",
+      "text": "Repo.insert(%Order{}) # orders"
+    },
+    {
+      "table": "public.customers",
+      "file": "lib/shop/billing.ex",
+      "line": 6,
+      "text": "from c in \"customers\""
+    }
   ],
   "notes": [
-    {"kind": "dynamic_call", "file": "lib/shop/billing.ex", "message": "apply/3 target not statically known"}
+    {
+      "kind": "dynamic_call",
+      "file": "lib/shop/billing.ex",
+      "message": "apply/3 target not statically known"
+    }
   ]
 }
