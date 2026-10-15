@@ -76,3 +76,45 @@ func TestNormalizeURL(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckValidatesRevisions(t *testing.T) {
+	ctx := context.Background()
+	app := t.TempDir()
+	sh(t, app, "git", "init", "-q", "-b", "main")
+	commit(t, app, "a.txt", "a")
+	paths := map[string]string{"x": app}
+	for rev, note := range map[string]string{
+		"--output=/tmp/pwned":                  "snapshot revision is not a commit id",
+		"HEAD":                                 "snapshot revision is not a commit id",
+		"abc":                                  "snapshot revision is not a commit id",
+		strings.Repeat("c", 40):                "snapshot revision not in local clone (git fetch)",
+		strings.Repeat("d", 64):                "snapshot revision not in local clone (git fetch)",
+		"g" + strings.Repeat("a", 39):          "snapshot revision is not a commit id",
+		sh(t, app, "git", "rev-parse", "HEAD"): "",
+	} {
+		rep := Check(ctx, []Repo{{Name: "x", Revision: rev}}, paths)
+		if got := rep.Repos[0].Note; got != note {
+			t.Errorf("%q: note %q, want %q", rev, got, note)
+		}
+	}
+}
+
+func TestLocateScansSiblingsOnlyWhileUnmatched(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	for _, n := range []string{"app", "zz-other"} {
+		os.MkdirAll(filepath.Join(parent, n), 0o755)
+		sh(t, filepath.Join(parent, n), "git", "init", "-q", "-b", "main")
+	}
+	sh(t, filepath.Join(parent, "zz-other"), "git", "remote", "add", "origin", "https://github.com/example/app")
+	repos := []Repo{{Name: "app", URL: "https://github.com/example/app"}}
+	// Every repo matched at cwd: zz-other (same origin) is never looked at.
+	if got := Locate(ctx, repos, filepath.Join(parent, "app"), nil); filepath.Base(got["app"]) != "app" {
+		t.Errorf("locate = %v", got)
+	}
+	// Explicit checkouts count as matched.
+	got := Locate(ctx, append(repos, Repo{Name: "lib"}), filepath.Join(parent, "app"), map[string]string{"lib": "/somewhere/lib"})
+	if got["lib"] != "/somewhere/lib" || filepath.Base(got["app"]) != "app" {
+		t.Errorf("explicit = %v", got)
+	}
+}

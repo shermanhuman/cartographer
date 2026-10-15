@@ -171,6 +171,7 @@ func (q *Q) Find(ctx context.Context, terms string, limit, offset int) (*output.
 	if limit <= 0 {
 		limit = 25
 	}
+	offset = max(offset, 0)
 	words := ident.Words(terms)
 	hits, err := q.search(ctx, words, limit+1, offset)
 	if err != nil {
@@ -318,8 +319,8 @@ func (q *Q) docsAbout(ctx context.Context, d *output.Doc, id string) {
 			d.Body = append(d.Body, lines...)
 		}
 	}
-	like := `%"` + id + `"%`
-	rows, err = q.S.DB.QueryContext(ctx, `SELECT id, title, status FROM annotations WHERE snapshot_id = ? AND body LIKE ? ORDER BY id`, q.Snapshot, like)
+	// The annotation body is JSON; a citation holds the id as a JSON string.
+	rows, err = q.S.DB.QueryContext(ctx, `SELECT id, title, status FROM annotations WHERE snapshot_id = ? AND instr(body, ?) > 0 ORDER BY id`, q.Snapshot, `"`+id+`"`)
 	if err == nil {
 		for rows.Next() {
 			var aid, title, status string
@@ -374,10 +375,10 @@ func (q *Q) Calls(ctx context.Context, ref string, depth int, reverse bool, limi
 	return d, nil
 }
 
+// page appends items[offset:offset+limit]; limit <= 0 means all, and a
+// negative offset counts as 0.
 func page[T any](d *output.Doc, items []T, limit, offset int, line func(T) string) {
-	if offset > len(items) {
-		offset = len(items)
-	}
+	offset = min(max(offset, 0), len(items))
 	items = items[offset:]
 	more := limit > 0 && len(items) > limit
 	if more {

@@ -94,6 +94,7 @@ func New(o Options) *mcp.Server {
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "map_find", Description: "Find where something is defined: search functions, modules, tables, files, docs by words. On a miss returns the map's vocabulary to retry with."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in FindIn) (*mcp.CallToolResult, any, error) {
+			nonNegative(&in.Limit, &in.Offset)
 			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) { return q.Find(ctx, in.Terms, in.Limit, in.Offset) })
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "map_entity", Description: "Explain one function, module, table, context or annotation: location, top callers/callees, tables, docs, review status."},
@@ -102,18 +103,21 @@ func New(o Options) *mcp.Server {
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "map_callers", Description: "Who calls a function (or any function of a module, file, context, or code mentioning a table); cross-repo callers flagged."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in Traverse) (*mcp.CallToolResult, any, error) {
+			nonNegative(&in.Depth, &in.Limit, &in.Offset)
 			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) {
 				return q.Calls(ctx, in.Ref, in.Depth, true, in.Limit, in.Offset)
 			})
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "map_callees", Description: "What a function calls (resolved calls; unresolved/external sites counted)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in Traverse) (*mcp.CallToolResult, any, error) {
+			nonNegative(&in.Depth, &in.Limit, &in.Offset)
 			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) {
 				return q.Calls(ctx, in.Ref, in.Depth, false, in.Limit, in.Offset)
 			})
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "map_impact", Description: "Blast radius / what breaks if this changes: transitive callers grouped by repo, context and tests."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in Traverse) (*mcp.CallToolResult, any, error) {
+			nonNegative(&in.Depth, &in.Limit, &in.Offset)
 			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) { return q.Impact(ctx, in.Ref, in.Depth) })
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "map_path", Description: "Shortest call path between two functions (how A reaches B)."},
@@ -132,6 +136,13 @@ func New(o Options) *mcp.Server {
 		o.Extra(s, o.Prepare)
 	}
 	return s
+}
+
+// nonNegative clamps paging and depth inputs: agents send -1 for "none".
+func nonNegative(vs ...*int) {
+	for _, v := range vs {
+		*v = max(*v, 0)
+	}
 }
 
 func text(s string, isErr bool) *mcp.CallToolResult {

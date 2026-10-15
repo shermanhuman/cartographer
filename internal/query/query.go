@@ -71,11 +71,16 @@ func (q *Q) Loc(repo, file string, line int) string {
 type ErrAmbiguous struct {
 	Ref        string
 	Candidates []Entity
+	More       bool // more entities match than Candidates lists
 }
 
 func (e *ErrAmbiguous) Error() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%q matches %d entities; use an id:", e.Ref, len(e.Candidates))
+	if e.More {
+		fmt.Fprintf(&b, "%q matches more than %d entities; narrow it with map_find (cartographer find) or use an id:", e.Ref, len(e.Candidates))
+	} else {
+		fmt.Fprintf(&b, "%q matches %d entities; use an id:", e.Ref, len(e.Candidates))
+	}
 	for _, c := range e.Candidates {
 		fmt.Fprintf(&b, "\n  %s %s", abbrev(c.Kind), c.ID)
 	}
@@ -140,18 +145,22 @@ func (q *Q) Resolve(ctx context.Context, ref string) (*Entity, error) {
 	  SELECT f.id, 'function', coalesce(m.name || '.', '') || f.name || '/' || f.arity AS label, f.repo, f.file, f.line
 	    FROM functions f LEFT JOIN modules m ON m.snapshot_id = f.snapshot_id AND m.id = f.module
 	   WHERE f.snapshot_id = ?1
-	     AND (label = ?2 OR label GLOB '*.' || ?2 OR label GLOB ?2 || '/*' OR label GLOB '*.' || ?2 || '/*')
+	     AND (label = ?2 OR label GLOB '*.' || ?3 OR label GLOB ?3 || '/*' OR label GLOB '*.' || ?3 || '/*')
 	  UNION ALL SELECT id, 'module', name, repo, file, line FROM modules
-	   WHERE snapshot_id = ?1 AND (name = ?2 OR name GLOB '*.' || ?2)
+	   WHERE snapshot_id = ?1 AND (name = ?2 OR name GLOB '*.' || ?3)
 	  UNION ALL SELECT id, 'table', id, '', '', 0 FROM db_tables WHERE snapshot_id = ?1 AND (name = ?2)
 	  UNION ALL SELECT id, 'context', name, repo, '', 0 FROM contexts WHERE snapshot_id = ?1 AND name = ?2
-	  LIMIT 50`, q.Snapshot, ref)
+	  LIMIT ?4`, q.Snapshot, ref, globLiteral(ref), maxCandidates+1)
 	if err != nil {
 		return nil, err
 	}
 	cands, err := scanEntities(rows)
 	if err != nil {
 		return nil, err
+	}
+	more := len(cands) > maxCandidates
+	if more {
+		cands = cands[:maxCandidates]
 	}
 	cands = preferModules(cands)
 	// Prefer exact label matches over suffix matches.
@@ -168,9 +177,9 @@ func (q *Q) Resolve(ctx context.Context, ref string) (*Entity, error) {
 	case len(cands) == 1:
 		return &cands[0], nil
 	case len(cands) > 1:
-		return nil, &ErrAmbiguous{Ref: ref, Candidates: cands}
+		return nil, &ErrAmbiguous{Ref: ref, Candidates: cands, More: more && len(exact) == 0}
 	}
-	hits, err := q.search(ctx, ident.Words(ref), 10, 0)
+	hits, err := q.search(ctx, ident.Words(ref), maxSearchCandidates+1, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -178,13 +187,39 @@ func (q *Q) Resolve(ctx context.Context, ref string) (*Entity, error) {
 		return &hits[0], nil
 	}
 	if len(hits) > 1 {
-		return nil, &ErrAmbiguous{Ref: ref, Candidates: hits}
+		more := len(hits) > maxSearchCandidates
+		if more {
+			hits = hits[:maxSearchCandidates]
+		}
+		return nil, &ErrAmbiguous{Ref: ref, Candidates: hits, More: more}
 	}
 	sugg, err := q.suggest(ctx, ident.Words(ref))
 	if err != nil {
 		return nil, err
 	}
 	return nil, &ErrNotFound{Ref: ref, Suggestions: sugg}
+}
+
+// Candidate caps for an ambiguous reference: label matches, search hits.
+const (
+	maxCandidates       = 50
+	maxSearchCandidates = 10
+)
+
+// globLiteral escapes GLOB metacharacters so ref matches only itself.
+func globLiteral(ref string) string {
+	var b strings.Builder
+	for _, r := range ref {
+		switch r {
+		case '*', '?', '[':
+			b.WriteByte('[')
+			b.WriteRune(r)
+			b.WriteByte(']')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // preferModules drops a context whose name equals a candidate module's name:
@@ -242,9 +277,10 @@ func scanEntities(rows *sql.Rows) ([]Entity, error) {
 
 // search runs an FTS query: every word must match (prefix), ranked by bm25.
 func (q *Q) search(ctx context.Context, words []string, limit, offset int) ([]Entity, error) {
-	if len(words) == 0 {
+	if len(words) == 0 || limit <= 0 {
 		return nil, nil
 	}
+	offset = max(offset, 0)
 	terms := make([]string, len(words))
 	for i, w := range words {
 		terms[i] = `"` + strings.ReplaceAll(w, `"`, ``) + `"*`

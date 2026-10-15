@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -100,4 +101,40 @@ func TestNoSnapshot(t *testing.T) {
 	if !isErr || !strings.Contains(out, "cartographer pull") {
 		t.Errorf("got (%v) %s", isErr, out)
 	}
+}
+
+func TestNegativePagingDoesNotCrash(t *testing.T) {
+	cs := session(t, true)
+	for _, args := range []map[string]any{
+		{"ref": "Shop.Orders.total/1", "offset": -1},
+		{"ref": "Shop.Orders.total/1", "offset": -5, "limit": -2, "depth": -1},
+	} {
+		out, isErr := call(t, cs, "map_callers", args)
+		if isErr || !strings.Contains(out, "shop-app:Shop.Billing.charge/2") {
+			t.Errorf("%v: (%v)\n%s", args, isErr, out)
+		}
+	}
+	if out, isErr := call(t, cs, "map_find", map[string]any{"terms": "orders", "offset": -3, "limit": -1}); isErr || !strings.Contains(out, "Shop.Orders") {
+		t.Errorf("find: (%v)\n%s", isErr, out)
+	}
+	// The server is still alive.
+	if _, isErr := call(t, cs, "map_status", map[string]any{}); isErr {
+		t.Error("server died")
+	}
+}
+
+func TestConcurrentCalls(t *testing.T) {
+	cs := session(t, true)
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "map_callers", Arguments: map[string]any{"ref": "Shop.Orders.total/1", "offset": i%3 - 1}})
+			if err != nil || res.IsError {
+				t.Errorf("call %d: %v %v", i, err, res)
+			}
+		}()
+	}
+	wg.Wait()
 }
