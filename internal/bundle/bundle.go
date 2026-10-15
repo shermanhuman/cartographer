@@ -47,8 +47,12 @@ type Doc struct {
 	Content string
 }
 
-// Annotation is a human-written explanation that cites map entities.
+// Annotation is a human-written explanation that cites map entities. Only
+// the fields below are interpreted; Raw keeps the authored JSON verbatim, so
+// richer presentation fields (groups, owners, outcomes, ...) reach the UI.
 type Annotation struct {
+	Raw json.RawMessage `json:"-"`
+
 	Kind     string            `json:"kind"`
 	ID       string            `json:"id"`
 	Title    string            `json:"title"`
@@ -152,17 +156,22 @@ func Read(dir string) (*Bundle, error) {
 			return nil, err
 		}
 		var doc struct {
-			Annotations []Annotation `json:"annotations"`
+			Annotations []json.RawMessage `json:"annotations"`
 		}
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			return nil, fmt.Errorf("bundle: %s: %w", filepath.Base(p), err)
 		}
-		for _, a := range doc.Annotations {
-			if a.ID == "" || a.Kind == "" {
-				return nil, fmt.Errorf("bundle: %s: annotation needs id and kind", filepath.Base(p))
+		for i, r := range doc.Annotations {
+			var a Annotation
+			if err := json.Unmarshal(r, &a); err != nil {
+				return nil, fmt.Errorf("bundle: %s: annotations[%d]: %w", filepath.Base(p), i, err)
 			}
+			if a.ID == "" || a.Kind == "" {
+				return nil, fmt.Errorf("bundle: %s: annotations[%d] needs id and kind", filepath.Base(p), i)
+			}
+			a.Raw = r
+			b.Annotations = append(b.Annotations, a)
 		}
-		b.Annotations = append(b.Annotations, doc.Annotations...)
 	}
 	return b, nil
 }

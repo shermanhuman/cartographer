@@ -54,6 +54,7 @@ Building (in a workspace with cartographer.toml):
   build [--out DIR] [--ref repo=sha]... [--import] [--fetch]
                               snapshot every repo and run its extractor plugins
   publish <snapshot-dir>      pack and publish as a GitHub release, prune old ones
+  review <annotation-id>      mark an annotation reviewed against the snapshot's code
   validate-facts <file>...    check extractor plugin output (facts v1)
   plugins-dir                 print the directory of the bundled extractor plugins
 
@@ -284,6 +285,31 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(w, "published %s to %s (%d bytes); pruned %d old snapshot(s)\n", b.Manifest.ID, cfg.Publish, buf.Len(), n)
+		return nil
+	case "review":
+		if err := need(1, "an annotation id"); err != nil {
+			return err
+		}
+		cfg, err := workspace.Load(c.workspace)
+		if err != nil {
+			return err
+		}
+		s, err := openStore(&c)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		sid := c.snapshot
+		if sid == "" {
+			if sid, err = s.Latest(ctx); err != nil {
+				return err
+			}
+		}
+		n, err := workspace.Review(ctx, cfg, s.DB, sid, pos[0])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "reviewed %s against %s: %d citations stamped; commit the annotation file\n", pos[0], sid, n)
 		return nil
 	case "plugins-dir":
 		dir, err := plugins.Extract(workspace.DefaultCacheDir())

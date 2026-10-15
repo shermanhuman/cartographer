@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shermanhuman/cartographer/internal/bundle"
+	"github.com/shermanhuman/cartographer/internal/store"
 )
 
 func run(t *testing.T, dir string, args ...string) string {
@@ -199,5 +200,32 @@ func TestBuildFetchClonesMissingCheckout(t *testing.T) {
 	}
 	if m.Repos[0].Revision != run(t, repo, "git", "rev-parse", "HEAD") {
 		t.Errorf("revision = %s", m.Repos[0].Revision)
+	}
+}
+
+func TestReviewStampsFingerprints(t *testing.T) {
+	ws, _, _ := setup(t)
+	c, _ := Load(ws)
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sid, err := s.Import(context.Background(), "../../testdata/workspace-mini/snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := Review(context.Background(), c, s.DB, sid, "checkout")
+	if err != nil || n != 3 {
+		t.Fatalf("Review = %d, %v", n, err)
+	}
+	b := mustRead(t, filepath.Join(ws, "annotations/journeys.json"))
+	for _, want := range []string{`"shop-app:Shop.Orders.create/2": "h2-changed"`, `"shop-app:Shop.Billing.charge/2": "h3"`, `"outcome": "An order row exists."`} {
+		if !strings.Contains(b, want) {
+			t.Errorf("missing %s in\n%s", want, b)
+		}
+	}
+	if _, err := Review(context.Background(), c, s.DB, sid, "nope"); err == nil {
+		t.Error("unknown annotation should fail")
 	}
 }

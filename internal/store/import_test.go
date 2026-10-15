@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -167,5 +168,16 @@ func TestReimportReplacesAndPrune(t *testing.T) {
 	}
 	if _, err := s.Latest(ctx); err != ErrNoSnapshot {
 		t.Errorf("Latest after prune = %v", err)
+	}
+}
+
+func TestAnnotationExtraFieldsPreserved(t *testing.T) {
+	s, _ := imported(t)
+	var body string
+	s.DB.QueryRow(`SELECT body FROM annotations WHERE id = 'checkout'`).Scan(&body)
+	for _, want := range []string{`"groups"`, `"outcome"`, `"An order row exists."`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("annotation body lost %s: %s", want, body)
+		}
 	}
 }

@@ -507,7 +507,7 @@ func (im *importer) annotations() error {
 			}
 		}
 		if err := im.exec(`INSERT INTO annotations(snapshot_id, id, kind, title, body, status, steps) VALUES (?,?,?,?,?,?,?)`,
-			im.sid, a.ID, a.Kind, a.Title, js(a), overall, js(steps)); err != nil {
+			im.sid, a.ID, a.Kind, a.Title, rawOr(a), overall, js(steps)); err != nil {
 			return err
 		}
 		if err := im.entity("ann:"+a.ID, "annotation", a.Title, a.Summary); err != nil {
@@ -525,4 +525,11 @@ func (im *importer) knownOther(id string) bool {
 	  (SELECT count(*) FROM contexts WHERE snapshot_id = ?1 AND id = ?2) +
 	  (SELECT count(*) FROM files WHERE snapshot_id = ?1 AND 'file:' || repo || ':' || path = ?2)`, im.sid, id).Scan(&n)
 	return n > 0
+}
+
+func rawOr(a bundle.Annotation) string {
+	if len(a.Raw) > 0 {
+		return string(a.Raw)
+	}
+	return js(a)
 }
