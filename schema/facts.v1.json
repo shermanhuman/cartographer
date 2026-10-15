@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shermanhuman/cartographer/schema/facts.v1.json",
+  "title": "cartographer facts v1",
+  "type": "object",
+  "required": ["facts_version", "producer"],
+  "additionalProperties": false,
+  "properties": {
+    "facts_version": {"const": 1},
+    "producer": {
+      "type": "object", "required": ["name"], "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "string"},
+        "call_precision": {"$ref": "#/$defs/precision"}
+      }
+    },
+    "repo": {"type": "string"},
+    "revision": {"type": "string"},
+    "files": {"type": "array", "items": {
+      "type": "object", "required": ["path"], "additionalProperties": false,
+      "properties": {"path": {"type": "string"}, "language": {"type": "string"}, "category": {"type": "string"}}
+    }},
+    "modules": {"type": "array", "items": {
+      "type": "object", "required": ["id", "name", "file"], "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"}, "name": {"type": "string"},
+        "namespace": {"type": "array", "items": {"type": "string"}},
+        "file": {"type": "string"}, "line": {"type": "integer"}, "language": {"type": "string"}
+      }
+    }},
+    "functions": {"type": "array", "items": {
+      "type": "object", "required": ["id", "name", "arity", "min_arity", "file"], "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"}, "module": {"type": "string"}, "name": {"type": "string"},
+        "arity": {"type": "integer", "minimum": 0}, "min_arity": {"type": "integer", "minimum": 0},
+        "kind": {"type": "string"}, "file": {"type": "string"}, "line": {"type": "integer"},
+        "clauses": {"type": "array", "items": {"type": "integer"}},
+        "fingerprint": {"type": "string"}
+      }
+    }},
+    "calls": {"type": "array", "items": {
+      "type": "object", "required": ["from"], "additionalProperties": false,
+      "properties": {
+        "from": {"type": "string"}, "to": {"type": "string"},
+        "target": {"type": "object", "required": ["name", "arity"], "additionalProperties": false,
+          "properties": {"module": {"type": "string"}, "name": {"type": "string"}, "arity": {"type": "integer"}}},
+        "kind": {"type": "string"}, "file": {"type": "string"}, "line": {"type": "integer"},
+        "precision": {"$ref": "#/$defs/precision"}
+      }
+    }},
+    "tables": {"type": "array", "items": {
+      "type": "object", "required": ["id", "name"], "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"}, "schema": {"type": "string"}, "name": {"type": "string"},
+        "columns": {"type": "array", "items": {"type": "object", "required": ["name", "type", "nullable"], "additionalProperties": false,
+          "properties": {"name": {"type": "string"}, "type": {"type": "string"}, "nullable": {"type": "boolean"}, "default": {"type": "string"}}}},
+        "constraints": {"type": "array", "items": {"type": "object", "required": ["name", "kind"], "additionalProperties": false,
+          "properties": {"name": {"type": "string"}, "kind": {"type": "string"}, "definition": {"type": "string"}}}},
+        "indexes": {"type": "array", "items": {"type": "string"}}
+      }
+    }},
+    "foreign_keys": {"type": "array", "items": {
+      "type": "object", "required": ["from_table", "from_columns", "to_table", "to_columns"], "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"}, "from_table": {"type": "string"}, "to_table": {"type": "string"},
+        "from_columns": {"type": "array", "items": {"type": "string"}},
+        "to_columns": {"type": "array", "items": {"type": "string"}}
+      }
+    }},
+    "table_refs": {"type": "array", "items": {
+      "type": "object", "required": ["table", "file", "line"], "additionalProperties": false,
+      "properties": {"table": {"type": "string"}, "file": {"type": "string"}, "line": {"type": "integer"}, "function": {"type": "string"}, "text": {"type": "string"}}
+    }},
+    "notes": {"type": "array", "items": {
+      "type": "object", "required": ["kind", "message"], "additionalProperties": false,
+      "properties": {"kind": {"type": "string"}, "file": {"type": "string"}, "message": {"type": "string"}}
+    }}
+  },
+  "$defs": {"precision": {"enum": ["precise", "heuristic", "candidate"]}}
+}

@@ -1,0 +1,18 @@
+{
+  "facts_version": 1,
+  "producer": {"name": "extract-postgres-schema", "version": "0.1.0"},
+  "tables": [
+    {"id": "public.customers", "schema": "public", "name": "customers", "columns": [
+      {"name": "id", "type": "bigint", "nullable": false},
+      {"name": "email", "type": "citext", "nullable": false}
+    ], "constraints": [{"name": "customers_pkey", "kind": "primary_key", "definition": "PRIMARY KEY (id)"}], "indexes": ["customers_email_index"]},
+    {"id": "public.orders", "schema": "public", "name": "orders", "columns": [
+      {"name": "id", "type": "bigint", "nullable": false},
+      {"name": "customer_id", "type": "bigint", "nullable": false},
+      {"name": "total_cents", "type": "integer", "nullable": false, "default": "0"}
+    ], "constraints": [{"name": "orders_pkey", "kind": "primary_key", "definition": "PRIMARY KEY (id)"}]}
+  ],
+  "foreign_keys": [
+    {"name": "orders_customer_id_fkey", "from_table": "public.orders", "from_columns": ["customer_id"], "to_table": "public.customers", "to_columns": ["id"]}
+  ]
+}
