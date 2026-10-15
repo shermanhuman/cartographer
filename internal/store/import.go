@@ -49,11 +49,12 @@ type importer struct {
 	sid   string
 	stmts map[string]*sql.Stmt
 
-	funcs   map[string]facts.Function // id -> function
-	fnRepo  map[string]string         // function id -> repo
-	modules map[string]facts.Module   // id -> module
-	modRepo map[string]string
-	vocab   map[string]int
+	funcs     map[string]facts.Function // id -> function
+	fnRepo    map[string]string         // function id -> repo
+	modules   map[string]facts.Module   // id -> module
+	modRepo   map[string]string
+	vocab     map[string]int
+	seenFiles map[string]bool
 }
 
 func (im *importer) exec(query string, args ...any) error {
@@ -95,6 +96,7 @@ func (im *importer) run() error {
 	im.funcs, im.fnRepo = map[string]facts.Function{}, map[string]string{}
 	im.modules, im.modRepo = map[string]facts.Module{}, map[string]string{}
 	im.vocab = map[string]int{}
+	im.seenFiles = map[string]bool{}
 
 	for _, d := range im.b.Facts {
 		if err := im.definitions(d); err != nil {
@@ -143,7 +145,12 @@ func (im *importer) entity(id, kind, label string, extra ...string) error {
 func (im *importer) definitions(d *facts.Doc) error {
 	repo := d.Repo
 	for _, f := range d.Files {
-		if err := im.exec(`INSERT INTO files(snapshot_id, repo, path, language, category) VALUES (?,?,?,?,?)`, im.sid, repo, f.Path, f.Language, f.Category); err != nil {
+		key := repo + "|" + f.Path
+		if im.seenFiles[key] {
+			continue // several plugins may list the same file
+		}
+		im.seenFiles[key] = true
+		if err := im.exec(`INSERT OR IGNORE INTO files(snapshot_id, repo, path, language, category) VALUES (?,?,?,?,?)`, im.sid, repo, f.Path, f.Language, f.Category); err != nil {
 			return err
 		}
 		if err := im.entity("file:"+repo+":"+f.Path, "file", f.Path); err != nil {

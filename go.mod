@@ -3,6 +3,7 @@ module github.com/shermanhuman/cartographer
 go 1.27.2
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	modernc.org/sqlite v1.60.1
 )
