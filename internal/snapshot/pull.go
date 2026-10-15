@@ -15,6 +15,10 @@ import (
 // AutoInterval is the minimum time between automatic pull checks per source.
 const AutoInterval = time.Hour
 
+// FailBackoff is the minimum time before retrying a source whose last check
+// failed (e.g. offline), so a failing source isn't retried on every call.
+const FailBackoff = 5 * time.Minute
+
 // Puller fetches published snapshots into the store.
 type Puller struct {
 	Store   *store.Store
@@ -32,7 +36,9 @@ type Result struct {
 
 // Pull imports the newest snapshot release of source (owner/name) if the
 // store doesn't have it yet.
-func (p *Puller) Pull(ctx context.Context, source string) (*Result, error) {
+// Every attempt is stamped, failed ones included, so Due backs off.
+func (p *Puller) Pull(ctx context.Context, source string) (res *Result, err error) {
+	defer func() { p.stamp(source, err == nil) }()
 	rs, err := p.GitHub.Snapshots(ctx, source)
 	if err != nil {
 		return nil, err
@@ -41,7 +47,6 @@ func (p *Puller) Pull(ctx context.Context, source string) (*Result, error) {
 		return nil, fmt.Errorf("%s: %w", source, ErrNoReleases)
 	}
 	newest := rs[0]
-	p.stamp(source)
 	have, err := p.Store.Snapshots(ctx)
 	if err != nil {
 		return nil, err
@@ -56,9 +61,17 @@ func (p *Puller) Pull(ctx context.Context, source string) (*Result, error) {
 		return nil, err
 	}
 	defer body.Close()
-	dir := filepath.Join(p.DataDir, "snapshots", newest.Tag)
-	tmp := dir + ".partial"
-	os.RemoveAll(tmp)
+	snaps := filepath.Join(p.DataDir, "snapshots")
+	dir := filepath.Join(snaps, newest.Tag)
+	if err := os.MkdirAll(snaps, 0o755); err != nil {
+		return nil, err
+	}
+	// A unique temp dir per pull: concurrent pulls never share one, and
+	// pruneDirs leaves anything marked partial alone.
+	tmp, err := os.MkdirTemp(snaps, newest.Tag+partialMark+"*")
+	if err != nil {
+		return nil, err
+	}
 	if err := bundle.Unpack(body, tmp); err != nil {
 		os.RemoveAll(tmp)
 		return nil, fmt.Errorf("%s: unpack: %w", newest.Tag, err)
@@ -76,9 +89,12 @@ func (p *Puller) Pull(ctx context.Context, source string) (*Result, error) {
 		os.RemoveAll(tmp)
 		return nil, err
 	}
-	os.RemoveAll(dir)
 	if err := os.Rename(tmp, dir); err != nil {
-		return nil, err
+		// A concurrent pull of the same snapshot may have renamed first.
+		os.RemoveAll(tmp)
+		if _, serr := os.Stat(filepath.Join(dir, "manifest.json")); serr != nil {
+			return nil, err
+		}
 	}
 	keep := p.Keep
 	if keep == 0 {
@@ -91,20 +107,36 @@ func (p *Puller) Pull(ctx context.Context, source string) (*Result, error) {
 	return &Result{Source: source, Snapshot: newest.Tag, Imported: true}, nil
 }
 
-// Due reports whether source hasn't been checked within AutoInterval.
+// partialMark names in-progress unpack directories.
+const partialMark = ".partial-"
+
+// Due reports whether source hasn't been checked within AutoInterval, or
+// within FailBackoff when the last check failed.
 func (p *Puller) Due(source string) bool {
-	fi, err := os.Stat(p.stampPath(source))
-	return err != nil || time.Since(fi.ModTime()) > AutoInterval
+	path := p.stampPath(source)
+	fi, err := os.Stat(path)
+	if err != nil {
+		return true
+	}
+	interval := AutoInterval
+	if b, err := os.ReadFile(path); err == nil && strings.HasPrefix(string(b), "failed") {
+		interval = FailBackoff
+	}
+	return time.Since(fi.ModTime()) > interval
 }
 
 func (p *Puller) stampPath(source string) string {
 	return filepath.Join(p.DataDir, "stamps", strings.ReplaceAll(source, "/", "__"))
 }
 
-func (p *Puller) stamp(source string) {
+func (p *Puller) stamp(source string, ok bool) {
 	path := p.stampPath(source)
 	os.MkdirAll(filepath.Dir(path), 0o755)
-	os.WriteFile(path, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
+	status := "ok"
+	if !ok {
+		status = "failed"
+	}
+	os.WriteFile(path, []byte(status+" "+time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
 }
 
 // pruneDirs removes unpacked snapshot directories no longer in the store.
@@ -119,7 +151,7 @@ func (p *Puller) pruneDirs(ctx context.Context) {
 	}
 	entries, _ := os.ReadDir(filepath.Join(p.DataDir, "snapshots"))
 	for _, e := range entries {
-		if !keep[e.Name()] {
+		if !keep[e.Name()] && !strings.Contains(e.Name(), partialMark) && !strings.HasSuffix(e.Name(), ".partial") {
 			os.RemoveAll(filepath.Join(p.DataDir, "snapshots", e.Name()))
 		}
 	}

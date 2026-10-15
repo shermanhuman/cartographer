@@ -1,15 +1,16 @@
 name: Release
 on:
   push:
-    tags: ["v*"]
+    # Full versions only: the moving major tag (v0) must not trigger a release.
+    tags: ["v*.*.*"]
 permissions:
   contents: write
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: jdx/mise-action@v5.1.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
       - name: Test
         run: go test ./...
       - name: Build
@@ -29,3 +30,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt --title "$GITHUB_REF_NAME" --generate-notes
+      - name: Move major tag
+        # Reusable workflows reference shermanhuman/cartographer/action@v0;
+        # point that tag at this stable release.
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          major=${VERSION%%.*}
+          git tag -f "$major" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$major"

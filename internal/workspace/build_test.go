@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -227,5 +228,159 @@ func TestReviewStampsFingerprints(t *testing.T) {
 	}
 	if _, err := Review(context.Background(), c, s.DB, sid, "nope"); err == nil {
 		t.Error("unknown annotation should fail")
+	}
+}
+
+// A filtered (blobless) clone from a remote that honours --filter: git
+// archive must lazily fetch blobs through the same environment.
+func TestBuildFetchPartialCloneFromFilteredRemote(t *testing.T) {
+	t.Setenv("GH_TOKEN", "tok-partial")
+	ws, repo, _ := setup(t)
+	// A PR head that the default refspec doesn't fetch.
+	run(t, repo, "git", "checkout", "-qb", "pr")
+	write(t, filepath.Join(repo, "lib/shop/billing.ex"), "defmodule Shop.Billing do end\n")
+	run(t, repo, "git", "add", ".")
+	run(t, repo, "git", "commit", "-qm", "pr")
+	head := run(t, repo, "git", "rev-parse", "HEAD")
+	run(t, repo, "git", "checkout", "-q", "main")
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	run(t, repo, "git", "clone", "-q", "--bare", repo, bare)
+	run(t, bare, "git", "update-ref", "refs/pull/1/head", head)
+	run(t, bare, "git", "branch", "-D", "pr")
+	run(t, bare, "git", "config", "uploadpack.allowFilter", "true")
+	run(t, bare, "git", "config", "uploadpack.allowAnySHA1InWant", "true")
+
+	c, _ := Load(ws)
+	c.Schema = nil
+	c.Repos[0].URL = "file://" + bare
+	clone := filepath.Join(t.TempDir(), "clone", "shop-app")
+	c.Repos[0].Path = clone
+	m, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: t.TempDir(), Fetch: true, Refs: map[string]string{"shop-app": head}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Repos[0].Revision != head {
+		t.Errorf("revision = %s, want %s", m.Repos[0].Revision, head)
+	}
+	if got := run(t, clone, "git", "config", "remote.origin.partialclonefilter"); got != "blob:none" {
+		t.Errorf("clone is not partial (filter %q): the test would not exercise lazy fetch", got)
+	}
+}
+
+func TestGitEnvCarriesAuthOffArgv(t *testing.T) {
+	t.Setenv("GH_TOKEN", "tok-env")
+	t.Setenv("GIT_CONFIG_COUNT", "")
+	dir := t.TempDir()
+	run(t, dir, "git", "init", "-q")
+	got, err := git(context.Background(), dir, "config", "--get", extraHeaderKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "AUTHORIZATION: basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:tok-env"))
+	if strings.TrimSpace(got) != want {
+		t.Errorf("extraheader = %q, want %q", got, want)
+	}
+}
+
+func TestFetchErrorDoesNotLeakToken(t *testing.T) {
+	const tok = "ghs_supersecret123"
+	t.Setenv("GH_TOKEN", tok)
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + tok))
+	r := Repo{Name: "x", URL: "file://" + filepath.Join(t.TempDir(), "missing.git")}
+	err := fetchRepo(context.Background(), r, filepath.Join(t.TempDir(), "x"), "")
+	if err == nil {
+		t.Fatal("fetch of a missing remote should fail")
+	}
+	for _, s := range []string{tok, basic} {
+		if strings.Contains(err.Error(), s) {
+			t.Errorf("error leaks credential: %v", err)
+		}
+	}
+	got := redact("fatal: bad config http.https://github.com/.extraheader=AUTHORIZATION: basic " + basic + "\nnext " + tok)
+	if strings.Contains(got, basic) || strings.Contains(got, tok) || !strings.Contains(got, "next") {
+		t.Errorf("redact = %q", got)
+	}
+}
+
+func TestPluginsAndPrepareDoNotSeeTokens(t *testing.T) {
+	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
+		t.Setenv(k, "secret-"+k)
+	}
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "http.extraheader")
+	t.Setenv("GIT_CONFIG_VALUE_0", "secret-header")
+	ws, _, _ := setup(t)
+	c, _ := Load(ws)
+	envOut := filepath.Join(t.TempDir(), "env")
+	p := c.Plugins["fake"]
+	p.Command = []string{"sh", "-c", "env >> " + envOut + " && " + p.Command[2], "plugin", "{root}"}
+	c.Plugins["fake"] = p
+	c.Schema.Prepare = "env >> " + envOut
+	if _, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	env := mustRead(t, envOut)
+	if !strings.Contains(env, "SF=set") {
+		t.Fatalf("plugin env not captured:\n%s", env)
+	}
+	if strings.Contains(env, "secret") || strings.Contains(env, "GIT_CONFIG_") {
+		t.Errorf("child env carries credentials:\n%s", env)
+	}
+}
+
+func TestSchemaCacheRebuildsInvalidEntryAndKeysOnEnv(t *testing.T) {
+	ws, _, log := setup(t)
+	c, _ := Load(ws)
+	cache := t.TempDir()
+	build := func() {
+		t.Helper()
+		if _, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: cache}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build()
+	entries, _ := filepath.Glob(filepath.Join(cache, "schema", "*.json"))
+	if len(entries) != 1 {
+		t.Fatalf("cache entries = %v", entries)
+	}
+	// A truncated entry is rebuilt, not trusted.
+	os.WriteFile(entries[0], []byte(`{"facts_version":`), 0o644)
+	build()
+	if n := strings.Count(mustRead(t, log), "prepared"); n != 2 {
+		t.Errorf("prepare ran %d times, want 2 (invalid cache rebuilt)", n)
+	}
+	build()
+	if n := strings.Count(mustRead(t, log), "prepared"); n != 2 {
+		t.Errorf("prepare ran %d times, want 2 (rebuilt entry reused)", n)
+	}
+	// Changing schema env or the plugin code misses the cache.
+	c.Schema.Env = map[string]string{"MIX_ENV": "test"}
+	build()
+	if _, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: cache, PluginsDigest: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(mustRead(t, log), "prepared"); n != 4 {
+		t.Errorf("prepare ran %d times, want 4 (env and plugins in key)", n)
+	}
+	if tmps, _ := filepath.Glob(filepath.Join(cache, "schema", ".*")); len(tmps) != 0 {
+		t.Errorf("temp files left: %v", tmps)
+	}
+}
+
+func TestLoadValidatesKeepAndPrepareRepo(t *testing.T) {
+	dir := t.TempDir()
+	for _, keep := range []string{"0", "-1"} {
+		write(t, filepath.Join(dir, FileName), "name = \"x\"\nkeep = "+keep+"\n")
+		if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "keep must be at least 1") {
+			t.Errorf("keep=%s: %v", keep, err)
+		}
+	}
+	write(t, filepath.Join(dir, FileName), "name = \"x\"\n")
+	if c, err := Load(dir); err != nil || c.Keep != 30 {
+		t.Errorf("default keep: %v %v", c, err)
+	}
+	write(t, filepath.Join(dir, FileName), "name = \"x\"\n[schema]\nprepare = \"true\"\ncommand = [\"cat\"]\n")
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "prepare_repo") {
+		t.Errorf("prepare without prepare_repo: %v", err)
 	}
 }

@@ -33,7 +33,8 @@ on:
         required: false
 jobs:
   impact:
-    if: github.event.pull_request.draft == false
+    # Fork PRs get no secrets, so they are skipped rather than failed.
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,52 +52,90 @@ jobs:
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       HAS_APP: ${{ secrets.app-id != '' }}
+      HAS_REPO_TOKEN: ${{ secrets.repo-token != '' }}
       PGHOST: 127.0.0.1
       PGUSER: postgres
       PGPASSWORD: postgres
       CARTOGRAPHER_NO_PULL: "1"
     steps:
+      - id: creds
+        name: Credentials
+        run: |
+          if [ "$HAS_APP" = true ] || [ "$HAS_REPO_TOKEN" = true ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::cartographer impact skipped: no app-id/app-private-key or repo-token secret is available to this run."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
       - id: app
         if: env.HAS_APP == 'true'
-        uses: actions/create-github-app-token@v3.3.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.app-id }}
           private-key: ${{ secrets.app-private-key }}
           owner: ${{ github.repository_owner }}
       - name: Token
-        run: echo "GH_TOKEN=${{ steps.app.outputs.token || secrets.repo-token }}" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v7.0.1
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          TOKEN: ${{ steps.app.outputs.token || secrets.repo-token }}
+        run: echo "GH_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+      - if: steps.creds.outputs.ok == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.workspace }}
           token: ${{ steps.app.outputs.token || secrets.repo-token }}
           path: workspace
-      - uses: jdx/mise-action@v5.1.2
+      - if: steps.creds.outputs.ok == 'true'
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           working_directory: workspace/${{ inputs.workspace-path }}
-      - uses: shermanhuman/cartographer/action@main
+      # Follows the moving `v0` tag (see release.yml); pin this workflow to a
+      # release tag and set cartographer-version to match.
+      - if: steps.creds.outputs.ok == 'true'
+        uses: shermanhuman/cartographer/action@v0
         with:
           version: ${{ inputs.cartographer-version }}
-      - uses: actions/cache@v6.1.0
+      # Schema cache: restore the newest entry for this workspace config; save
+      # a new entry only when the cached files changed (key = their hash).
+      - if: steps.creds.outputs.ok == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/cartographer/schema
-          key: cartographer-schema-${{ github.run_id }}
-          restore-keys: cartographer-schema-
+          path: _cartographer-cache/cartographer/schema
+          key: cartographer-schema-${{ hashFiles(format('workspace/{0}/cartographer.toml', inputs.workspace-path)) }}-
+          restore-keys: cartographer-schema-${{ hashFiles(format('workspace/{0}/cartographer.toml', inputs.workspace-path)) }}-
       - name: Base snapshot
         id: base
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          WORKSPACE: ${{ inputs.workspace }}
         run: |
-          cartographer pull "${{ inputs.workspace }}"
+          cartographer pull "$WORKSPACE"
           echo "id=$(cartographer snapshots | head -1 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Head snapshot
         id: head
+        if: steps.creds.outputs.ok == 'true'
         working-directory: workspace/${{ inputs.workspace-path }}
+        env:
+          REPO: ${{ inputs.repo }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          XDG_CACHE_HOME: ${{ github.workspace }}/_cartographer-cache
         run: |
-          out=$(cartographer build --fetch --import --out "$RUNNER_TEMP/head" \
-            --ref "${{ inputs.repo }}=${{ github.event.pull_request.head.sha }}")
+          out=$(cartographer build --fetch --import --out "$RUNNER_TEMP/head" --ref "$REPO=$HEAD_SHA")
           echo "$out"
           echo "id=$(echo "$out" | sed -n 's/^imported //p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: success() && steps.creds.outputs.ok == 'true' && hashFiles('_cartographer-cache/cartographer/schema/*.json') != ''
+        with:
+          path: _cartographer-cache/cartographer/schema
+          key: cartographer-schema-${{ hashFiles(format('workspace/{0}/cartographer.toml', inputs.workspace-path)) }}-${{ hashFiles('_cartographer-cache/cartographer/schema/*.json') }}
       - name: Diff
-        run: cartographer diff "${{ steps.base.outputs.id }}" "${{ steps.head.outputs.id }}" > "$RUNNER_TEMP/impact.md"
-      - uses: marocchino/sticky-pull-request-comment@v3.0.5
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          BASE_ID: ${{ steps.base.outputs.id }}
+          HEAD_ID: ${{ steps.head.outputs.id }}
+        run: cartographer diff "$BASE_ID" "$HEAD_ID" > "$RUNNER_TEMP/impact.md"
+      - if: steps.creds.outputs.ok == 'true'
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: cartographer
           path: ${{ runner.temp }}/impact.md

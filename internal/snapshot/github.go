@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 )
 
 // TagPrefix marks releases that hold snapshots.
@@ -23,29 +24,72 @@ const TagPrefix = "snapshot-"
 // AssetName is the release asset holding the packed snapshot.
 const AssetName = "snapshot.tar.gz"
 
+// Default request timeouts. API calls are small; asset transfers get longer.
+const (
+	DefaultTimeout         = 30 * time.Second
+	DefaultTransferTimeout = 10 * time.Minute
+)
+
 // GitHub is a minimal REST client for releases.
 type GitHub struct {
 	API     string // default https://api.github.com
 	Uploads string // default https://uploads.github.com
 	Token   string
 	HTTP    *http.Client
+	// Timeout bounds each API call (default DefaultTimeout).
+	Timeout time.Duration
+	// TransferTimeout bounds an asset upload or download, including reading
+	// the body (default DefaultTransferTimeout).
+	TransferTimeout time.Duration
 }
 
-// Token finds a GitHub token: $GH_TOKEN, $GITHUB_TOKEN, then `gh auth token`.
+// defaultClient has no overall timeout (asset bodies can be large; each call
+// sets a context deadline instead) but bounds connecting and waiting for
+// response headers, so a dead network fails fast.
+var defaultClient = func() *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = DefaultTimeout
+	t.TLSHandshakeTimeout = 10 * time.Second
+	return &http.Client{Transport: t}
+}()
+
+// Token finds a GitHub token: $GH_TOKEN, $GITHUB_TOKEN, then `gh auth token`
+// (gh on PATH, else a gh that `mise which` finds). Commands run from the
+// temp directory with mise auto-install off, so the current repository's
+// tool config is never installed or trusted.
 func Token() string {
 	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
 		if v := os.Getenv(k); v != "" {
 			return v
 		}
 	}
-	for _, argv := range [][]string{{"gh", "auth", "token"}, {"mise", "exec", "--", "gh", "auth", "token"}} {
-		if out, err := exec.Command(argv[0], argv[1:]...).Output(); err == nil {
-			if t := strings.TrimSpace(string(out)); t != "" {
-				return t
-			}
+	gh, err := exec.LookPath("gh")
+	if err != nil {
+		out, err := neutralOutput("mise", "which", "gh")
+		if err != nil {
+			return ""
 		}
+		gh = strings.TrimSpace(string(out))
 	}
-	return ""
+	if gh == "" {
+		return ""
+	}
+	out, err := neutralOutput(gh, "auth", "token")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// neutralOutput runs a short command from the temp directory with mise
+// auto-install disabled and returns its stdout.
+func neutralOutput(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = os.TempDir()
+	cmd.Env = append(os.Environ(), "MISE_EXEC_AUTO_INSTALL=false", "MISE_AUTO_INSTALL=false", "MISE_NOT_FOUND_AUTO_INSTALL=false")
+	return cmd.Output()
 }
 
 // NewGitHub returns a client using Token().
@@ -69,7 +113,33 @@ func (g *GitHub) client() *http.Client {
 	if g.HTTP != nil {
 		return g.HTTP
 	}
-	return http.DefaultClient
+	return defaultClient
+}
+
+func (g *GitHub) timeout() time.Duration {
+	if g.Timeout > 0 {
+		return g.Timeout
+	}
+	return DefaultTimeout
+}
+
+func (g *GitHub) transferTimeout() time.Duration {
+	if g.TransferTimeout > 0 {
+		return g.TransferTimeout
+	}
+	return DefaultTransferTimeout
+}
+
+// cancelBody cancels its request context when the body is closed.
+type cancelBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b cancelBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
 }
 
 func (g *GitHub) do(ctx context.Context, method, u string, body io.Reader, contentType, accept string) (*http.Response, error) {
@@ -105,6 +175,8 @@ func (g *GitHub) do(ctx context.Context, method, u string, body io.Reader, conte
 }
 
 func (g *GitHub) json(ctx context.Context, method, u string, in, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, g.timeout())
+	defer cancel()
 	var body io.Reader
 	if in != nil {
 		b, _ := json.Marshal(in)
@@ -166,7 +238,9 @@ func (g *GitHub) Publish(ctx context.Context, repo, id, notes string, asset []by
 		return nil, err
 	}
 	u := fmt.Sprintf("%s/repos/%s/releases/%d/assets?name=%s", g.uploads(), repo, r.ID, url.QueryEscape(AssetName))
-	resp, err := g.do(ctx, "POST", u, bytes.NewReader(asset), "application/gzip", "")
+	uctx, cancel := context.WithTimeout(ctx, g.transferTimeout())
+	defer cancel()
+	resp, err := g.do(uctx, "POST", u, bytes.NewReader(asset), "application/gzip", "")
 	if err != nil {
 		// Don't leave a release without its asset behind.
 		g.deleteRelease(ctx, repo, r)
@@ -180,18 +254,24 @@ func (g *GitHub) Publish(ctx context.Context, repo, id, notes string, asset []by
 func (g *GitHub) Download(ctx context.Context, r Release) (io.ReadCloser, error) {
 	for _, a := range r.Assets {
 		if a.Name == AssetName {
-			resp, err := g.do(ctx, "GET", a.URL, nil, "", "application/octet-stream")
+			dctx, cancel := context.WithTimeout(ctx, g.transferTimeout())
+			resp, err := g.do(dctx, "GET", a.URL, nil, "", "application/octet-stream")
 			if err != nil {
+				cancel()
 				return nil, err
 			}
-			return resp.Body, nil
+			return cancelBody{resp.Body, cancel}, nil
 		}
 	}
 	return nil, fmt.Errorf("release %s has no %s asset", r.Tag, AssetName)
 }
 
-// Prune deletes snapshot releases (and their tags) beyond the newest keep.
+// Prune deletes snapshot releases (and their tags) beyond the newest keep,
+// which must be at least 1.
 func (g *GitHub) Prune(ctx context.Context, repo string, keep int) (int, error) {
+	if keep < 1 {
+		return 0, fmt.Errorf("prune: keep must be at least 1, got %d", keep)
+	}
 	rs, err := g.Snapshots(ctx, repo)
 	if err != nil {
 		return 0, err
