@@ -131,7 +131,7 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 				}
 			}
 			v := map[string]string{"plugins": o.PluginsDir, "workspace": c.dir, "root": prep.root, "repo": prep.repo.Name, "revision": prep.revision}
-			if err := runPlugin(ctx, prep.root, env, expand(c.Schema.Command, v), cached, ""); err != nil {
+			if err := runPlugin(ctx, c.dir, env, expand(c.Schema.Command, v), cached, ""); err != nil {
 				return nil, fmt.Errorf("build: schema: %w", err)
 			}
 		}
@@ -151,7 +151,9 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 			}
 			rel := fmt.Sprintf("facts/%s.%s.json", co.repo.Name, pname)
 			logf("%s: plugin %s", co.repo.Name, pname)
-			if err := runPlugin(ctx, co.root, mapEnv(p.Env), expand(p.Command, v), filepath.Join(o.Out, rel), co.repo.Name); err != nil {
+			// Plugins run in the workspace directory, never inside the archived
+			// repository: its tool config (e.g. mise.toml) is not trusted here.
+			if err := runPlugin(ctx, c.dir, mapEnv(p.Env), expand(p.Command, v), filepath.Join(o.Out, rel), co.repo.Name); err != nil {
 				return nil, fmt.Errorf("build: %s: plugin %s: %w", co.repo.Name, pname, err)
 			}
 			m.Facts = append(m.Facts, rel)

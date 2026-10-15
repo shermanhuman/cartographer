@@ -142,3 +142,14 @@ func TestBudgetAndPaging(t *testing.T) {
 	}
 	has(t, d.Render(0), "more: offset=1")
 }
+
+func TestTableFallsBackToNameContains(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	out := render(t)(q.Table(ctx, "custom"))
+	has(t, out, "TBL public.customers")
+	_, err := q.Table(ctx, "o")
+	var amb *ErrAmbiguous
+	if !errors.As(err, &amb) || !strings.Contains(err.Error(), "TBL public.orders") {
+		t.Errorf("want table candidates, got %v", err)
+	}
+}

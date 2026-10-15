@@ -537,8 +537,26 @@ func (q *Q) bfsPath(ctx context.Context, src, dst string, maxDepth int) ([]strin
 // Table shows columns, keys and the code that mentions a table.
 func (q *Q) Table(ctx context.Context, ref string) (*output.Doc, error) {
 	e, err := q.ResolveKind(ctx, ref, "table")
-	if err != nil {
-		return nil, err
+	if err != nil || e.Kind != "table" {
+		// Fall back to table names containing the reference.
+		rows, qerr := q.S.DB.QueryContext(ctx, `SELECT id, 'table', id, '', '', 0 FROM db_tables WHERE snapshot_id = ? AND instr(name, ?) > 0 ORDER BY length(name), id LIMIT 20`, q.Snapshot, strings.ToLower(ref))
+		if qerr != nil {
+			return nil, qerr
+		}
+		tables, qerr := scanEntities(rows)
+		if qerr != nil {
+			return nil, qerr
+		}
+		switch {
+		case len(tables) == 1:
+			e, err = &tables[0], nil
+		case len(tables) > 1:
+			return nil, &ErrAmbiguous{Ref: ref, Candidates: tables}
+		case err == nil:
+			return nil, fmt.Errorf("%s is a %s, not a table", e.ID, e.Kind)
+		default:
+			return nil, err
+		}
 	}
 	if e.Kind != "table" {
 		return nil, fmt.Errorf("%s is a %s, not a table", e.ID, e.Kind)

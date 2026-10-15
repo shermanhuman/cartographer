@@ -77,7 +77,7 @@ func (e *ErrAmbiguous) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%q matches %d entities; use an id:", e.Ref, len(e.Candidates))
 	for _, c := range e.Candidates {
-		fmt.Fprintf(&b, "\n  %s %s", strings.ToUpper(c.Kind[:2]), c.ID)
+		fmt.Fprintf(&b, "\n  %s %s", abbrev(c.Kind), c.ID)
 	}
 	return b.String()
 }

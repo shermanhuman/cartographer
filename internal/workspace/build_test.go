@@ -63,7 +63,7 @@ path = "../shop-app"
 plugins = ["fake"]
 [plugins.fake]
 version = "1"
-command = ["sh", "-c", "test -f lib/shop/orders.ex && test -n \"$SF\" && cat `+fixture+`/facts/shop-app.json", "--schema-facts", "{schema_facts}"]
+command = ["sh", "-c", "test -f \"$1/lib/shop/orders.ex\" && test -n \"$SF\" && test -f ./cartographer.toml && cat `+fixture+`/facts/shop-app.json", "plugin", "{root}"]
 env = { SF = "set" }
 [schema]
 prepare_repo = "shop-app"
