@@ -99,6 +99,19 @@ func Read(dir string) (*Bundle, error) {
 		m.Contexts.Depth = 2
 	}
 
+	repos := map[string]bool{}
+	for _, r := range m.Repos {
+		repos[r.Name] = true
+	}
+	// Ids are unique across the workspace: kind -> id -> facts file.
+	seen := map[string]map[string]string{"module": {}, "function": {}, "table": {}}
+	claim := func(kind, id, rel string) error {
+		if prev, ok := seen[kind][id]; ok {
+			return fmt.Errorf("bundle: duplicate %s id %q in %s and %s", kind, id, prev, rel)
+		}
+		seen[kind][id] = rel
+		return nil
+	}
 	for _, rel := range m.Facts {
 		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(rel)))
 		if err != nil {
@@ -111,6 +124,24 @@ func Read(dir string) (*Bundle, error) {
 		}
 		if err := d.Validate(); err != nil {
 			return nil, fmt.Errorf("bundle: %s: %w", rel, err)
+		}
+		if d.Repo != "" && !repos[d.Repo] {
+			return nil, fmt.Errorf("bundle: %s: repo %q is not in the manifest", rel, d.Repo)
+		}
+		for _, mo := range d.Modules {
+			if err := claim("module", mo.ID, rel); err != nil {
+				return nil, err
+			}
+		}
+		for _, fn := range d.Functions {
+			if err := claim("function", fn.ID, rel); err != nil {
+				return nil, err
+			}
+		}
+		for _, t := range d.Tables {
+			if err := claim("table", t.ID, rel); err != nil {
+				return nil, err
+			}
 		}
 		b.Facts = append(b.Facts, d)
 	}
@@ -150,6 +181,7 @@ func Read(dir string) (*Bundle, error) {
 
 	files, _ := filepath.Glob(filepath.Join(dir, "annotations", "*.json"))
 	sort.Strings(files)
+	annFile := map[string]string{}
 	for _, p := range files {
 		raw, err := os.ReadFile(p)
 		if err != nil {
@@ -169,6 +201,10 @@ func Read(dir string) (*Bundle, error) {
 			if a.ID == "" || a.Kind == "" {
 				return nil, fmt.Errorf("bundle: %s: annotations[%d] needs id and kind", filepath.Base(p), i)
 			}
+			if prev, ok := annFile[a.ID]; ok {
+				return nil, fmt.Errorf("bundle: duplicate annotation id %q in %s and %s", a.ID, prev, filepath.Base(p))
+			}
+			annFile[a.ID] = filepath.Base(p)
 			a.Raw = r
 			b.Annotations = append(b.Annotations, a)
 		}

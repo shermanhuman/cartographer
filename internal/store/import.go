@@ -103,8 +103,9 @@ func (im *importer) run() error {
 			return err
 		}
 	}
+	idx := im.targetIndex()
 	for _, d := range im.b.Facts {
-		if err := im.calls(d); err != nil {
+		if err := im.calls(d, idx); err != nil {
 			return err
 		}
 		if err := im.tableRefs(d); err != nil {
@@ -248,8 +249,7 @@ type targetKey struct {
 	arity              int
 }
 
-func (im *importer) calls(d *facts.Doc) error {
-	idx := im.targetIndex()
+func (im *importer) calls(d *facts.Doc, idx *targetIndex) error {
 	defPrecision := d.Producer.CallPrecision
 	if defPrecision == "" {
 		defPrecision = facts.Heuristic
@@ -372,8 +372,15 @@ func (im *importer) docs() error {
 	}
 	for rows.Next() {
 		var k string
-		rows.Scan(&k)
+		if err := rows.Scan(&k); err != nil {
+			rows.Close()
+			return err
+		}
 		paths[k] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
 	}
 	rows.Close()
 
@@ -468,14 +475,23 @@ type StepStatus struct {
 }
 
 // annotations computes Swimm-style freshness: a cited entity that is gone, or
-// whose fingerprint differs from the reviewed one, makes the step stale.
+// whose fingerprint differs from the reviewed one, makes the step stale. Once
+// a step has been reviewed, a cited function without a stamp (added later)
+// also needs review. Steps that cite nothing don't affect the status.
 func (im *importer) annotations() error {
 	for _, a := range im.b.Annotations {
 		var steps []StepStatus
 		overall := "reviewed"
 		check := func(id string, cites []string, reviewed map[string]string) StepStatus {
 			st := StepStatus{ID: id, Status: "reviewed"}
-			if len(reviewed) == 0 {
+			if len(cites) == 0 {
+				return st
+			}
+			stamped := false
+			for _, v := range reviewed {
+				stamped = stamped || v != ""
+			}
+			if !stamped {
 				st.Status = "unreviewed"
 			}
 			for _, c := range cites {
@@ -485,7 +501,10 @@ func (im *importer) annotations() error {
 				case !isFn && !isMod && !im.knownOther(c):
 					st.Status = "needs_review"
 					st.Reasons = append(st.Reasons, "missing: "+c)
-				case isFn && reviewed != nil && reviewed[c] != "" && reviewed[c] != f.Fingerprint:
+				case isFn && stamped && reviewed[c] == "":
+					st.Status = "needs_review"
+					st.Reasons = append(st.Reasons, "unreviewed: "+c)
+				case isFn && reviewed[c] != "" && reviewed[c] != f.Fingerprint:
 					st.Status = "needs_review"
 					st.Reasons = append(st.Reasons, "changed: "+c)
 				}

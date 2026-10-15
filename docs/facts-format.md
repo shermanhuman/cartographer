@@ -11,9 +11,14 @@ validator: `internal/facts`. Check a plugin's output with
 ## Rules
 
 - `facts_version` is `1`. Unknown fields are rejected.
-- Ids are opaque strings, unique within the document. Convention:
+- Ids are opaque strings. Module, function and table ids are unique across
+  the whole workspace (every document in a snapshot), not just within one
+  document; a duplicate fails the snapshot with both file names. Convention:
   `<repo>:<Module>` for modules and `<repo>:<Module>.<name>/<arity>` for
-  functions, `<schema>.<table>` for tables.
+  functions, `<schema>.<table>` for tables. Annotation ids are likewise unique
+  across all annotation files.
+- A repository document's `repo` must name a repository in the snapshot
+  manifest.
 - Paths are repository-relative with `/` separators. When `files` is present,
   every `file` must be listed in it.
 - `functions[].min_arity` is the smallest arity the definition accepts
@@ -51,4 +56,4 @@ lexical binding is not enough. See each plugin's README for its call kinds.
 
 A schema plugin omits `repo` and emits `tables` and `foreign_keys`.
 `table_refs` (in repository documents) are text matches and always
-`candidate`.
+`candidate`; each carries a 1-based `line`.

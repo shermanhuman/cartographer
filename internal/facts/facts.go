@@ -263,6 +263,9 @@ func (d *Doc) Validate() error {
 			add("%s.table: required", w)
 		}
 		checkFile(r.File, w+".file")
+		if r.Line <= 0 {
+			add("%s.line: must be > 0", w)
+		}
 		if r.Function != "" && !funcs[r.Function] {
 			add("%s.function: unknown function %q", w, r.Function)
 		}

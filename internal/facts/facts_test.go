@@ -70,3 +70,22 @@ func TestVersionAndPrecisionChecked(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestMinArityRangeAndTableRefLine(t *testing.T) {
+	for _, c := range []struct {
+		min, arity int
+		ok         bool
+	}{{0, 0, true}, {1, 2, true}, {2, 2, true}, {3, 2, false}, {-1, 2, false}} {
+		d := load(t, "shop-app.json")
+		d.Functions[0].MinArity, d.Functions[0].Arity = c.min, c.arity
+		err := d.Validate()
+		if bad := err != nil && strings.Contains(err.Error(), "$.functions[0].min_arity"); bad == c.ok {
+			t.Errorf("min_arity %d arity %d: got %v", c.min, c.arity, err)
+		}
+	}
+	d := load(t, "shop-app.json")
+	d.TableRefs[0].Line = 0
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "$.table_refs[0].line: must be > 0") {
+		t.Errorf("got %v", err)
+	}
+}

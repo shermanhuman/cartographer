@@ -70,7 +70,7 @@
     }},
     "table_refs": {"type": "array", "items": {
       "type": "object", "required": ["table", "file", "line"], "additionalProperties": false,
-      "properties": {"table": {"type": "string"}, "file": {"type": "string"}, "line": {"type": "integer"}, "function": {"type": "string"}, "text": {"type": "string"}}
+      "properties": {"table": {"type": "string"}, "file": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "function": {"type": "string"}, "text": {"type": "string"}}
     }},
     "notes": {"type": "array", "items": {
       "type": "object", "required": ["kind", "message"], "additionalProperties": false,

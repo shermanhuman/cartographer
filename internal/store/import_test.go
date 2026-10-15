@@ -3,8 +3,11 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/shermanhuman/cartographer/internal/bundle"
 )
 
 const mini = "../../testdata/workspace-mini/snapshot"
@@ -178,6 +181,102 @@ func TestAnnotationExtraFieldsPreserved(t *testing.T) {
 	for _, want := range []string{`"groups"`, `"outcome"`, `"An order row exists."`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("annotation body lost %s: %s", want, body)
+		}
+	}
+}
+
+// freshness imports the fixture with its annotations replaced by a and
+// returns the annotation's overall status and step statuses.
+func freshness(t *testing.T, a bundle.Annotation) (string, []StepStatus) {
+	t.Helper()
+	b, err := bundle.Read(mini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Annotations = []bundle.Annotation{a}
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := s.ImportBundle(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	var status, stepsJSON string
+	if err := s.DB.QueryRow(`SELECT status, steps FROM annotations WHERE id = ?`, a.ID).Scan(&status, &stepsJSON); err != nil {
+		t.Fatal(err)
+	}
+	var steps []StepStatus
+	json.Unmarshal([]byte(stepsJSON), &steps)
+	return status, steps
+}
+
+const (
+	ctrl   = "shop-app:ShopWeb.OrderController.create/2" // fingerprint h1
+	charge = "shop-app:Shop.Billing.charge/2"            // fingerprint h3
+)
+
+func TestAnnotationCiteAddedAfterReview(t *testing.T) {
+	for _, stamp := range []map[string]string{
+		{ctrl: "h1"},
+		{ctrl: "h1", charge: ""},
+	} {
+		status, steps := freshness(t, bundle.Annotation{Kind: "journey", ID: "j", Steps: []bundle.Step{
+			{ID: "s", Cites: []string{ctrl, charge}, Reviewed: stamp},
+		}})
+		if status != "needs_review" || !reflect.DeepEqual(steps[0].Reasons, []string{"unreviewed: " + charge}) {
+			t.Errorf("%v: status %q, step %+v", stamp, status, steps[0])
+		}
+	}
+	// only empty stamps: never reviewed
+	status, steps := freshness(t, bundle.Annotation{Kind: "journey", ID: "j", Steps: []bundle.Step{
+		{ID: "s", Cites: []string{ctrl}, Reviewed: map[string]string{ctrl: ""}},
+	}})
+	if status != "unreviewed" || steps[0].Status != "unreviewed" || len(steps[0].Reasons) != 0 {
+		t.Errorf("empty stamps: status %q, step %+v", status, steps[0])
+	}
+}
+
+func TestAnnotationUncitedStepDoesNotDragStatus(t *testing.T) {
+	status, steps := freshness(t, bundle.Annotation{Kind: "journey", ID: "j", Steps: []bundle.Step{
+		{ID: "cited", Cites: []string{ctrl, charge}, Reviewed: map[string]string{ctrl: "h1", charge: "h3"}},
+		{ID: "intro"},
+	}})
+	if status != "reviewed" || steps[1].Status != "reviewed" {
+		t.Errorf("status %q, steps %+v", status, steps)
+	}
+}
+
+func TestAnnotationMissingCite(t *testing.T) {
+	status, steps := freshness(t, bundle.Annotation{Kind: "note", ID: "n",
+		Cites:    []string{ctrl, "shop-app:Gone.fun/0", "public.orders"},
+		Reviewed: map[string]string{ctrl: "h1"},
+	})
+	if status != "needs_review" || !reflect.DeepEqual(steps[0].Reasons, []string{"missing: shop-app:Gone.fun/0"}) {
+		t.Errorf("status %q, step %+v", status, steps[0])
+	}
+}
+
+func TestContainsWord(t *testing.T) {
+	for _, c := range []struct {
+		s, name string
+		want    bool
+	}{
+		{"see Shop.Orders", "Shop.Orders", true},
+		{"Shop.Orders.", "Shop.Orders", true},
+		{"`Shop.Orders`,", "Shop.Orders", true},
+		{"Shop.Orders.create/2", "Shop.Orders", true},
+		{"Shop.OrdersTest", "Shop.Orders", false},
+		{"Shop.Orders.Line", "Shop.Orders", false},
+		{"MyShop.Orders", "Shop.Orders", false},
+		{"X.Shop.Orders", "Shop.Orders", false},
+		{"Shop.Orders_v2", "Shop.Orders", false},
+		{"Shop.OrdersTest and Shop.Orders", "Shop.Orders", true},
+		{"nothing here", "Shop.Orders", false},
+		{"", "Shop.Orders", false},
+	} {
+		if got := containsWord(c.s, c.name); got != c.want {
+			t.Errorf("containsWord(%q, %q) = %v, want %v", c.s, c.name, got, c.want)
 		}
 	}
 }

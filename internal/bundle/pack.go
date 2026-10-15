@@ -16,6 +16,8 @@ import (
 // MaxUnpacked caps the total size Unpack will write (snapshots are a few MB).
 const MaxUnpacked = 512 << 20
 
+var maxUnpacked int64 = MaxUnpacked // lowered in tests
+
 // Pack writes dir as a deterministic .tar.gz: sorted entries, zero times,
 // fixed ownership and modes, so identical snapshots pack to identical bytes.
 func Pack(dir string, w io.Writer) error {
@@ -24,9 +26,13 @@ func Pack(dir string, w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if d.Type().IsRegular() {
+		switch {
+		case d.IsDir():
+		case d.Type().IsRegular():
 			rel, _ := filepath.Rel(dir, p)
 			files = append(files, filepath.ToSlash(rel))
+		default:
+			return fmt.Errorf("bundle: %s is not a regular file", p)
 		}
 		return nil
 	})
@@ -64,6 +70,10 @@ func Unpack(r io.Reader, dst string) error {
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	root := filepath.Clean(dst)
+	if !strings.HasSuffix(root, string(filepath.Separator)) {
+		root += string(filepath.Separator)
+	}
 	var total int64
 	for {
 		h, err := tr.Next()
@@ -74,7 +84,7 @@ func Unpack(r io.Reader, dst string) error {
 			return err
 		}
 		name := path.Clean(h.Name)
-		if path.IsAbs(name) || name == ".." || strings.HasPrefix(name, "../") {
+		if strings.Contains(h.Name, `\`) || path.IsAbs(name) || name == ".." || strings.HasPrefix(name, "../") {
 			return fmt.Errorf("bundle: unsafe path %q", h.Name)
 		}
 		switch h.Typeflag {
@@ -85,10 +95,13 @@ func Unpack(r io.Reader, dst string) error {
 			return fmt.Errorf("bundle: unsupported entry %q (type %c)", h.Name, h.Typeflag)
 		}
 		total += h.Size
-		if total > MaxUnpacked {
-			return fmt.Errorf("bundle: archive exceeds %d bytes", MaxUnpacked)
+		if total > maxUnpacked {
+			return fmt.Errorf("bundle: archive exceeds %d bytes", maxUnpacked)
 		}
 		target := filepath.Join(dst, filepath.FromSlash(name))
+		if !strings.HasPrefix(target, root) {
+			return fmt.Errorf("bundle: unsafe path %q", h.Name)
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
