@@ -1,0 +1,10 @@
+{
+  "name": "cartographer",
+  "version": "0.1.0",
+  "description": "Query a multi-repo system map (callers, impact, schema, cross-repo links, Mermaid embeds) over MCP before grepping.",
+  "author": { "name": "Sherman Boyd" },
+  "homepage": "https://github.com/shermanhuman/cartographer",
+  "repository": "https://github.com/shermanhuman/cartographer",
+  "license": "MIT",
+  "keywords": ["code-map", "call-graph", "mcp", "architecture"]
+}

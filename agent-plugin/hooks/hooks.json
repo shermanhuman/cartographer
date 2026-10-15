@@ -1,0 +1,21 @@
+{
+  "description": "One nudge per session toward the system map before the first Grep in a mapped repository. Fails open.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh",
+            "args": [
+              "-c",
+              "if command -v cartographer >/dev/null 2>&1; then exec cartographer hook grep; elif command -v mise >/dev/null 2>&1; then exec mise exec github:shermanhuman/cartographer -- cartographer hook grep; fi; exit 0"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

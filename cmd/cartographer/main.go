@@ -15,6 +15,7 @@ import (
 
 	"github.com/shermanhuman/cartographer/internal/bundle"
 	"github.com/shermanhuman/cartographer/internal/facts"
+	"github.com/shermanhuman/cartographer/internal/hook"
 	"github.com/shermanhuman/cartographer/internal/mcpserver"
 	"github.com/shermanhuman/cartographer/internal/output"
 	"github.com/shermanhuman/cartographer/internal/query"
@@ -60,6 +61,7 @@ Building (in a workspace with cartographer.toml):
 
 Agents:
   mcp                         stdio MCP server exposing the queries as map_* tools
+  hook grep                   PreToolUse hook: one nudge per session in mapped repos
 
 Other:
   version
@@ -372,6 +374,22 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 			q, _, err := sess.Query(ctx)
 			return q, err
 		}})
+	case "hook":
+		// Fail open: a hook never errors or blocks the agent.
+		if len(pos) == 0 || pos[0] != "grep" {
+			return nil
+		}
+		s, err := openStore(&c)
+		if err != nil {
+			return nil
+		}
+		defer s.Close()
+		hook.Grep(ctx, os.Stdin, w, filepath.Dir(c.db), func(ctx context.Context, cwd string) bool {
+			sess := newSession(&c, s, io.Discard)
+			sess.Cwd, sess.AutoPull = cwd, false
+			return sess.Mapped(ctx)
+		})
+		return nil
 	case "mapped":
 		s, err := openStore(&c)
 		if err != nil {
