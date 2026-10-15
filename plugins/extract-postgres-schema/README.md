@@ -42,7 +42,8 @@ capture. stdout carries only the JSON document.
 ## Output
 
 - `tables`: tables, partitioned tables, views and materialized views.
-  `id` is `<schema>.<name>`.
+  `id` is `<schema>.<name>`, and `kind` says which of the four it is
+  (`table`, `partitioned_table`, `view` or `materialized_view`).
   - `columns` carries `name`, `type` (`format_type`), `nullable` and
     `default`.
   - `constraints` holds `primary_key`, `unique`, `foreign_key`, `check`,

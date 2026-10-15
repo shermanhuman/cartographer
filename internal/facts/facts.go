@@ -96,6 +96,7 @@ type Table struct {
 	ID          string       `json:"id"` // e.g. public.users
 	Schema      string       `json:"schema,omitempty"`
 	Name        string       `json:"name"`
+	Kind        string       `json:"kind,omitempty"` // table, partitioned_table, view, materialized_view
 	Columns     []Column     `json:"columns,omitempty"`
 	Constraints []Constraint `json:"constraints,omitempty"`
 	Indexes     []string     `json:"indexes,omitempty"`

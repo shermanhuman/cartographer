@@ -137,6 +137,13 @@ defmodule Cartographer.PgCaptureTest do
              "check"
            ]
 
+    # relkind survives as `kind`: the view is distinguishable from tables.
+    assert Map.new(doc.tables, &{&1.id, &1[:kind]}) == %{
+             "public.customers" => "table",
+             "public.orders" => "table",
+             "public.order_totals" => "view"
+           }
+
     customers = Enum.find(doc.tables, &(&1.id == "public.customers"))
     # NOT NULL catalog constraints (PostgreSQL 18) duplicate columns[].nullable.
     refute Enum.any?(customers.constraints, &(&1.name == "customers_email_not_null"))

@@ -32,7 +32,25 @@ defmodule Cartographer.ElixirFacts do
       Enum.reduce(sources, ElixirSource.new(), fn rel, acc ->
         case File.read(Path.join(root, rel)) do
           {:ok, text} ->
-            ElixirSource.parse(acc, text, rel, repo)
+            if String.valid?(text) do
+              ElixirSource.parse(acc, text, rel, repo)
+            else
+              # The tokenizer rejects invalid UTF-8 outright; parse the
+              # repaired text so the file still contributes its definitions.
+              acc
+              |> Map.update!(
+                :notes,
+                &[
+                  %{
+                    kind: "invalid_utf8",
+                    file: rel,
+                    message: "invalid UTF-8 replaced with U+FFFD"
+                  }
+                  | &1
+                ]
+              )
+              |> ElixirSource.parse(String.replace_invalid(text), rel, repo)
+            end
 
           {:error, reason} ->
             %{
@@ -94,7 +112,7 @@ defmodule Cartographer.ElixirFacts do
       |> Enum.sort_by(fn {k, _} ->
         {Enum.find_index(@key_order, &(&1 == k)) || length(@key_order), k}
       end)
-      |> Enum.map(fn {k, v} -> [JSON.encode!(k), ?:, encode_iodata(v)] end)
+      |> Enum.map(fn {k, v} -> [encode_iodata(k), ?:, encode_iodata(v)] end)
 
     [?{, Enum.intersperse(pairs, ?,), ?}]
   end
@@ -102,43 +120,96 @@ defmodule Cartographer.ElixirFacts do
   defp encode_iodata(list) when is_list(list),
     do: [?[, list |> Enum.map(&encode_iodata/1) |> Enum.intersperse(?,), ?]]
 
+  # Every string reaching JSON is valid UTF-8: file names, notes and snippets
+  # come from repository bytes, and one stray byte must not lose the document.
+  defp encode_iodata(text) when is_binary(text), do: JSON.encode!(String.replace_invalid(text))
   defp encode_iodata(other), do: JSON.encode!(other)
 
   # --- files -----------------------------------------------------------------
 
-  @doc "Regular files under `roots` with one of `extensions`, symlinks skipped."
+  @doc """
+  Regular files under `roots` with one of `extensions`. Directories are read
+  with `File.ls/1`, not globbed, so glob characters in a path are literal.
+  Symlinks (files or directories) are never followed: each one gets a
+  `symlink_skipped` note. Dot-files and dot-directories are skipped. A root
+  with no matching files gets an `empty_root` note.
+  """
   def list_files(root, roots, extensions) do
-    found =
-      for r <- roots,
-          dir = Path.join(root, r),
-          path <- if(File.regular?(dir), do: [dir], else: Path.wildcard(Path.join(dir, "**/*"))),
-          Path.extname(path) in extensions,
-          rel = Path.relative_to(path, root),
-          do: rel
+    {files, notes} =
+      Enum.reduce(roots, {[], []}, fn r, {files, notes} ->
+        rel = r |> Path.split() |> Enum.reject(&(&1 == ".")) |> join()
 
-    found
-    |> Enum.uniq()
-    |> Enum.sort()
-    |> Enum.reduce({[], []}, fn rel, {ok, notes} ->
-      case path_type(root, rel) do
-        :regular ->
-          {[rel | ok], notes}
+        {found, found_notes} =
+          case path_type(root, rel) do
+            :missing -> {[], []}
+            :symlink -> {[], [symlink_note(rel)]}
+            _ -> walk_files(root, rel, extensions)
+          end
 
-        :symlink ->
-          {ok,
-           [
-             %{kind: "symlink_skipped", file: rel, message: "symlinked source is not read"}
-             | notes
-           ]}
+        empty =
+          if found == [] and found_notes == [],
+            do: [
+              %{
+                kind: "empty_root",
+                message:
+                  "#{r} has no #{Enum.join(extensions, "/")} files" <>
+                    if(path_type(root, rel) == :missing, do: " (it does not exist)", else: "")
+              }
+            ],
+            else: []
 
-        _ ->
-          {ok, notes}
-      end
-    end)
-    |> then(fn {ok, notes} -> {Enum.reverse(ok), notes} end)
+        {found ++ files, empty ++ found_notes ++ notes}
+      end)
+
+    {files |> Enum.uniq() |> Enum.sort(), notes |> Enum.uniq() |> Enum.reverse()}
   end
 
-  # :symlink if any component from root to the file is a symlink.
+  defp join([]), do: ""
+  defp join(parts), do: Path.join(parts)
+
+  defp walk_files(root, rel, extensions) do
+    abs = if rel == "", do: root, else: Path.join(root, rel)
+
+    case File.lstat(abs) do
+      {:ok, %{type: :symlink}} ->
+        {[], [symlink_note(rel)]}
+
+      {:ok, %{type: :directory}} ->
+        case File.ls(abs) do
+          {:ok, names} ->
+            names
+            |> Enum.reject(&String.starts_with?(&1, "."))
+            |> Enum.sort()
+            |> Enum.reduce({[], []}, fn name, {files, notes} ->
+              {f, n} = walk_files(root, join([rel, name] |> Enum.reject(&(&1 == ""))), extensions)
+              {f ++ files, n ++ notes}
+            end)
+
+          {:error, reason} ->
+            {[],
+             [
+               %{
+                 kind: "read_error",
+                 file: rel,
+                 message: "cannot list directory: #{inspect(reason)}"
+               }
+             ]}
+        end
+
+      {:ok, %{type: :regular}} ->
+        if Path.extname(rel) in extensions, do: {[rel], []}, else: {[], []}
+
+      _ ->
+        {[], []}
+    end
+  end
+
+  defp symlink_note(rel),
+    do: %{kind: "symlink_skipped", file: rel, message: "symlink is not followed"}
+
+  # :symlink if any component from root to `rel` is a symlink.
+  defp path_type(_root, ""), do: :directory
+
   defp path_type(root, rel) do
     rel
     |> Path.split()
@@ -351,9 +422,8 @@ defmodule Cartographer.ElixirFacts do
 
     text_refs =
       for {file, text_lines} <- lines,
-          {text, line} <- Enum.with_index(text_lines, 1),
-          not String.starts_with?(String.trim_leading(text), ["#", "--"]),
-          word <- ~r/\b[a-z][a-z0-9_]*\b/ |> Regex.scan(text) |> List.flatten() |> Enum.uniq(),
+          {text, line} <- code_lines(file, text_lines),
+          word <- ref_words(file, text),
           id <- Map.get(by_name, word, []),
           do: %{table: id, file: file, line: line, text: snippet(text)}
 
@@ -398,8 +468,64 @@ defmodule Cartographer.ElixirFacts do
 
   defp read_lines(root, file) do
     case File.read(Path.join(root, file)) do
-      {:ok, text} -> String.split(text, "\n")
+      {:ok, text} -> text |> String.replace_invalid() |> String.split("\n")
       _ -> []
+    end
+  end
+
+  # Numbered lines that can hold a table reference: comment lines are
+  # skipped everywhere, and in Elixir files so are @moduledoc/@doc/@typedoc/
+  # @shortdoc attributes, including the whole of a heredoc.
+  @doc_attr ~r/^\s*@(?:moduledoc|doc|typedoc|shortdoc)\b/
+  @doc_heredoc ~r/^\s*@(?:moduledoc|doc|typedoc|shortdoc)\s+(?:~[sS])?("""|\'\'\')\s*$/
+
+  defp code_lines(file, lines) do
+    elixir = Path.extname(file) in [".ex", ".exs"]
+
+    lines
+    |> Enum.with_index(1)
+    |> Enum.reduce({[], nil}, fn {text, n}, {kept, closing} ->
+      trimmed = String.trim_leading(text)
+
+      cond do
+        closing != nil ->
+          {kept, if(String.starts_with?(trimmed, closing), do: nil, else: closing)}
+
+        String.starts_with?(trimmed, ["#", "--"]) ->
+          {kept, nil}
+
+        elixir and Regex.match?(@doc_attr, text) ->
+          case Regex.run(@doc_heredoc, text) do
+            [_, delimiter] -> {kept, delimiter}
+            nil -> {kept, nil}
+          end
+
+        true ->
+          {[{text, n} | kept], nil}
+      end
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+  end
+
+  # In SQL and shell files any word may name a table. In Elixir only forms
+  # that name one in code count: an atom (`:t`, `table(:t)`,
+  # `references(:t)`), a whole string (`"t"`, `schema "t"`,
+  # `from x in "t"`), or a word after a SQL keyword (`FROM t`, `JOIN t`,
+  # `INTO t`, `UPDATE t`, `TABLE t`, `REFERENCES t`) as in raw `execute` SQL.
+  @word ~r/\b[a-z][a-z0-9_]*\b/
+  @atom ~r/(?<![\w:]):([a-z][a-z0-9_]*)\b/
+  @string ~r/"(?:[a-z][a-z0-9_]*\.)?([a-z][a-z0-9_]*)"/
+  @sql ~r/\b(?i:from|join|into|update|table|references)\s+(?:"?[a-z][a-z0-9_]*"?\.)?"?([a-z][a-z0-9_]*)\b/
+
+  defp ref_words(file, text) do
+    if Path.extname(file) in [".ex", ".exs"] do
+      [@atom, @string, @sql]
+      |> Enum.flat_map(&Regex.scan(&1, text, capture: :all_but_first))
+      |> List.flatten()
+      |> Enum.uniq()
+    else
+      @word |> Regex.scan(text) |> List.flatten() |> Enum.uniq()
     end
   end
 

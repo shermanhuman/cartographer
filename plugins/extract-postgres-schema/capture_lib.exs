@@ -30,6 +30,14 @@ defmodule Cartographer.PgCapture do
     "t" => "trigger"
   }
 
+  # pg_class.relkind values captured by schema.sql.
+  @table_kinds %{
+    "r" => "table",
+    "p" => "partitioned_table",
+    "v" => "view",
+    "m" => "materialized_view"
+  }
+
   def pgoptions, do: @pgoptions
 
   @switches [
@@ -231,6 +239,7 @@ defmodule Cartographer.PgCapture do
           id: t["id"],
           schema: t["schema"],
           name: t["name"],
+          kind: @table_kinds[t["kind"]],
           columns:
             Enum.map(t["columns"] || [], fn c ->
               base = %{name: c["name"], type: c["type"], nullable: c["nullable"]}
@@ -245,6 +254,8 @@ defmodule Cartographer.PgCapture do
             |> Enum.sort_by(& &1.name),
           indexes: (t["indexes"] || []) |> Enum.map(& &1["name"]) |> Enum.sort()
         }
+        |> Enum.reject(fn {_, v} -> is_nil(v) end)
+        |> Map.new()
       end)
       |> Enum.sort_by(& &1.id)
 
