@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,10 @@ type BuildOptions struct {
 	Now time.Time
 	// Log receives progress lines; nil discards them.
 	Log io.Writer
+	// Fetch clones missing checkouts from their URL and fetches existing
+	// ones (and any Refs revisions) before building. A GH_TOKEN/GITHUB_TOKEN
+	// in the environment authenticates https URLs.
+	Fetch bool
 }
 
 // Build snapshots every repo with git archive, runs the plugins and writes a
@@ -92,6 +97,11 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 			ref = v
 		}
 		src := c.RepoPath(r)
+		if o.Fetch {
+			if err := fetchRepo(ctx, r, src, o.Refs[r.Name]); err != nil {
+				return nil, fmt.Errorf("build: %s: fetch: %w", r.Name, err)
+			}
+		}
 		rev, err := git(ctx, src, "rev-parse", "--verify", ref+"^{commit}")
 		if err != nil {
 			return nil, fmt.Errorf("build: %s: %w", r.Name, err)
@@ -379,4 +389,43 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, b, 0o644)
+}
+
+// fetchRepo clones r into dir when missing, otherwise fetches origin; an
+// extra revision (e.g. a pull request head) is fetched explicitly.
+func fetchRepo(ctx context.Context, r Repo, dir, extra string) error {
+	auth := gitAuth()
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		if r.URL == "" {
+			return fmt.Errorf("%s is missing and the repo has no url", dir)
+		}
+		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+			return err
+		}
+		cmd := exec.CommandContext(ctx, "git", append(auth, "clone", "--quiet", "--filter=blob:none", "--no-checkout", r.URL, dir)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git clone %s: %v: %s", r.URL, err, strings.TrimSpace(string(out)))
+		}
+	} else if _, err := git(ctx, dir, append(auth, "fetch", "--quiet", "origin")...); err != nil {
+		return err
+	}
+	if extra != "" {
+		if _, err := git(ctx, dir, append(auth, "fetch", "--quiet", "origin", extra)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// gitAuth returns -c options that send a GitHub token for https remotes.
+func gitAuth() []string {
+	tok := os.Getenv("GH_TOKEN")
+	if tok == "" {
+		tok = os.Getenv("GITHUB_TOKEN")
+	}
+	if tok == "" {
+		return nil
+	}
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + tok))
+	return []string{"-c", "http.https://github.com/.extraheader=AUTHORIZATION: basic " + basic}
 }

@@ -1,0 +1,62 @@
+# Reusable: build a workspace snapshot from the repos in cartographer.toml and
+# publish it as a release of the calling (workspace) repository.
+name: Build snapshot
+on:
+  workflow_call:
+    inputs:
+      cartographer-version:
+        type: string
+        default: latest
+      workspace-path:
+        description: Directory of cartographer.toml in the calling repository.
+        type: string
+        default: "."
+      postgres-image:
+        description: Database for schema `prepare` (only used on a schema cache miss).
+        type: string
+        default: postgres:18
+    secrets:
+      repo-token:
+        description: Token that can read every repository in the workspace (e.g. a GitHub App installation token). Defaults to github.token.
+        required: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PGHOST: 127.0.0.1
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      CARTOGRAPHER_NO_PULL: "1"
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: jdx/mise-action@v5.1.2
+        with:
+          working_directory: ${{ inputs.workspace-path }}
+      - uses: shermanhuman/cartographer/action@main
+        with:
+          version: ${{ inputs.cartographer-version }}
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/cartographer/schema
+          key: cartographer-schema-${{ github.run_id }}
+          restore-keys: cartographer-schema-
+      - name: Build
+        working-directory: ${{ inputs.workspace-path }}
+        env:
+          GH_TOKEN: ${{ secrets.repo-token || github.token }}
+        run: cartographer build --fetch --out "$RUNNER_TEMP/snapshot"
+      - name: Publish
+        working-directory: ${{ inputs.workspace-path }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cartographer publish "$RUNNER_TEMP/snapshot"

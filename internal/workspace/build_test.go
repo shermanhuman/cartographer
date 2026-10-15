@@ -186,3 +186,18 @@ func TestTemplateLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestBuildFetchClonesMissingCheckout(t *testing.T) {
+	ws, repo, _ := setup(t)
+	c, _ := Load(ws)
+	c.Schema = nil
+	c.Repos[0].URL = repo // a local path works as a clone URL
+	c.Repos[0].Path = filepath.Join(t.TempDir(), "clone", "shop-app")
+	m, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: t.TempDir(), Fetch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Repos[0].Revision != run(t, repo, "git", "rev-parse", "HEAD") {
+		t.Errorf("revision = %s", m.Repos[0].Revision)
+	}
+}

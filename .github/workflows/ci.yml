@@ -1,0 +1,28 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: jdx/mise-action@v5.1.2
+      - name: Format
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: Vet
+        run: go vet ./...
+      - name: Go tests
+        run: go test ./...
+      - name: Elixir plugin tests
+        run: |
+          elixir plugins/extract-elixir/test/extract_test.exs
+          elixir plugins/extract-postgres-schema/test/capture_test.exs
+      - name: JavaScript plugin tests
+        run: node --test plugins/extract-javascript/test/

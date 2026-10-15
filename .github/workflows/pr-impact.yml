@@ -1,0 +1,89 @@
+# Reusable, called from a product repository's pull_request workflow: build a
+# snapshot with this PR's head, diff it against the newest published snapshot
+# and keep one sticky comment on the PR up to date.
+name: cartographer impact
+on:
+  workflow_call:
+    inputs:
+      workspace:
+        description: Workspace repository (owner/name) holding cartographer.toml and published snapshots.
+        type: string
+        required: true
+      repo:
+        description: This repository's name in cartographer.toml.
+        type: string
+        required: true
+      workspace-path:
+        type: string
+        default: "."
+      cartographer-version:
+        type: string
+        default: latest
+      postgres-image:
+        type: string
+        default: postgres:18
+    secrets:
+      repo-token:
+        description: Token that can read the workspace repository and every repository it lists.
+        required: true
+jobs:
+  impact:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: cartographer-impact-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PGHOST: 127.0.0.1
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      CARTOGRAPHER_NO_PULL: "1"
+      GH_TOKEN: ${{ secrets.repo-token }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: ${{ inputs.workspace }}
+          token: ${{ secrets.repo-token }}
+          path: workspace
+      - uses: jdx/mise-action@v5.1.2
+        with:
+          working_directory: workspace/${{ inputs.workspace-path }}
+      - uses: shermanhuman/cartographer/action@main
+        with:
+          version: ${{ inputs.cartographer-version }}
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/cartographer/schema
+          key: cartographer-schema-${{ github.run_id }}
+          restore-keys: cartographer-schema-
+      - name: Base snapshot
+        id: base
+        run: |
+          cartographer pull "${{ inputs.workspace }}"
+          echo "id=$(cartographer snapshots | head -1 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Head snapshot
+        id: head
+        working-directory: workspace/${{ inputs.workspace-path }}
+        run: |
+          out=$(cartographer build --fetch --import --out "$RUNNER_TEMP/head" \
+            --ref "${{ inputs.repo }}=${{ github.event.pull_request.head.sha }}")
+          echo "$out"
+          echo "id=$(echo "$out" | sed -n 's/^imported //p')" >> "$GITHUB_OUTPUT"
+      - name: Diff
+        run: cartographer diff "${{ steps.base.outputs.id }}" "${{ steps.head.outputs.id }}" > "$RUNNER_TEMP/impact.md"
+      - uses: marocchino/sticky-pull-request-comment@v3.0.5
+        with:
+          header: cartographer
+          path: ${{ runner.temp }}/impact.md
+          GITHUB_TOKEN: ${{ github.token }}

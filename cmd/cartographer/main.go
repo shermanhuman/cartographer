@@ -51,7 +51,7 @@ Snapshots:
 
 Building (in a workspace with cartographer.toml):
   init [dir]                  write a cartographer.toml template
-  build [--out DIR] [--ref repo=sha]... [--import]
+  build [--out DIR] [--ref repo=sha]... [--import] [--fetch]
                               snapshot every repo and run its extractor plugins
   publish <snapshot-dir>      pack and publish as a GitHub release, prune old ones
   validate-facts <file>...    check extractor plugin output (facts v1)
@@ -93,6 +93,7 @@ type common struct {
 	out       string
 	plugins   string
 	doImport  bool
+	fetch     bool
 	refs      refFlags
 }
 
@@ -132,6 +133,7 @@ func flags(name string, c *common) *flag.FlagSet {
 	fs.StringVar(&c.out, "out", "", "snapshot output directory (build)")
 	fs.StringVar(&c.plugins, "plugins", os.Getenv("CARTOGRAPHER_PLUGINS"), "extractor plugins directory ({plugins})")
 	fs.BoolVar(&c.doImport, "import", false, "import the built snapshot into the local store")
+	fs.BoolVar(&c.fetch, "fetch", false, "clone or fetch repos before building (CI)")
 	fs.Var(&c.refs, "ref", "repo=revision to snapshot instead of the configured ref (repeatable)")
 	return fs
 }
@@ -237,7 +239,7 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 				return err
 			}
 		}
-		m, err := workspace.Build(ctx, cfg, workspace.BuildOptions{Out: out, PluginsDir: pluginsDir, Refs: c.refs, Log: os.Stderr})
+		m, err := workspace.Build(ctx, cfg, workspace.BuildOptions{Out: out, PluginsDir: pluginsDir, Refs: c.refs, Log: os.Stderr, Fetch: c.fetch})
 		if err != nil {
 			return err
 		}
