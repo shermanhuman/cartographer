@@ -153,3 +153,55 @@ func TestTableFallsBackToNameContains(t *testing.T) {
 		t.Errorf("want table candidates, got %v", err)
 	}
 }
+
+func TestNegativePagingIsClamped(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	out := render(t)(q.Calls(ctx, "Shop.Orders.total/1", 2, true, -1, -1))
+	has(t, out, "d1 FN shop-app:Shop.Billing.charge/2")
+	out = render(t)(q.Calls(ctx, "Shop.Orders.total/1", 2, true, 1, -5))
+	has(t, out, "d1 FN shop-app:Shop.Billing.charge/2", "more: offset=1")
+	out = render(t)(q.Find(ctx, "order total", -1, -1))
+	has(t, out, "FN shop-app:Shop.Orders.total/1")
+}
+
+func TestGlobCharactersAreLiteral(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	for _, ref := range []string{"*", "?", "[a-z]*", "*/1"} {
+		_, err := q.Resolve(ctx, ref)
+		var amb *ErrAmbiguous
+		if errors.As(err, &amb) {
+			t.Errorf("Resolve(%q) matched %d entities as a pattern", ref, len(amb.Candidates))
+		}
+	}
+	if got := globLiteral("a*b?c[d]"); got != "a[*]b[?]c[[]d]" {
+		t.Errorf("globLiteral = %q", got)
+	}
+}
+
+func TestAmbiguousSearchSaysWhenThereAreMore(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	_, err := q.Resolve(ctx, "shop")
+	var amb *ErrAmbiguous
+	if !errors.As(err, &amb) {
+		t.Fatalf("want ambiguous, got %v", err)
+	}
+	if !amb.More || len(amb.Candidates) != maxSearchCandidates || !strings.Contains(err.Error(), "more than 10 entities; narrow it with map_find") {
+		t.Errorf("more=%v n=%d: %v", amb.More, len(amb.Candidates), err)
+	}
+	_, err = q.Resolve(ctx, "create")
+	if !errors.As(err, &amb) || amb.More || strings.Contains(err.Error(), "more than") {
+		t.Errorf("a short candidate list is exact: %v", err)
+	}
+}
+
+func TestAnnotationCitationsMatchExactly(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	out := render(t)(q.Show(ctx, "Shop.Billing.charge/2"))
+	has(t, out, `ANN ann:checkout  "Checkout"`)
+	// "_" is a LIKE wildcard; the id must match literally.
+	d := &output.Doc{}
+	q.docsAbout(ctx, d, "shop_app:Shop.Billing.charge/2")
+	if strings.Contains(strings.Join(d.Body, "\n"), "ann:checkout") {
+		t.Errorf("wildcard id matched: %v", d.Body)
+	}
+}

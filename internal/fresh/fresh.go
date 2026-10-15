@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -57,56 +58,126 @@ func NormalizeURL(u string) string {
 	return strings.Replace(u, ":", "/", 1)
 }
 
+// Checkout is the git repository containing a directory.
+type Checkout struct {
+	Root   string // top-level directory, "" outside git
+	Origin string // origin remote URL, "" if none
+}
+
+// Find returns the repository containing dir (two git execs at most).
+func Find(ctx context.Context, dir string) Checkout {
+	root := Root(ctx, dir)
+	if root == "" {
+		return Checkout{}
+	}
+	origin, _ := git(ctx, root, "remote", "get-url", "origin")
+	return Checkout{Root: root, Origin: origin}
+}
+
+// Match names the repo this checkout holds: by origin URL, else by
+// directory name. "" when it holds none of them.
+func (c Checkout) Match(repos []Repo) string {
+	if c.Root == "" {
+		return ""
+	}
+	if c.Origin != "" {
+		want := NormalizeURL(c.Origin)
+		for _, r := range repos {
+			if r.URL != "" && NormalizeURL(r.URL) == want {
+				return r.Name
+			}
+		}
+	}
+	base := filepath.Base(c.Root)
+	for _, r := range repos {
+		if r.Name == base {
+			return r.Name
+		}
+	}
+	return ""
+}
+
 // Locate finds local checkouts for repos: explicit paths first, then the
 // repository containing cwd and its siblings, matched by origin URL or name.
 func Locate(ctx context.Context, repos []Repo, cwd string, explicit map[string]string) map[string]string {
+	return LocateFrom(ctx, repos, Find(ctx, cwd), explicit)
+}
+
+// LocateFrom is Locate starting from an already found checkout. Siblings are
+// scanned only while some repo is still unmatched, those named like a repo
+// first, so a workspace of sibling clones costs one git exec per repo.
+func LocateFrom(ctx context.Context, repos []Repo, cur Checkout, explicit map[string]string) map[string]string {
 	found := map[string]string{}
 	for _, r := range repos {
 		if p, ok := explicit[r.Name]; ok {
 			found[r.Name] = p
 		}
 	}
-	root := Root(ctx, cwd)
-	if root == "" {
+	if cur.Root == "" {
 		return found
 	}
-	candidates := []string{root}
-	if entries, err := os.ReadDir(filepath.Dir(root)); err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				candidates = append(candidates, filepath.Join(filepath.Dir(root), e.Name()))
+	claim := func(c Checkout) {
+		if name := c.Match(repos); name != "" {
+			if _, done := found[name]; !done {
+				found[name] = c.Root
 			}
 		}
 	}
-	byURL := map[string]string{}
+	claim(cur)
+	if len(found) >= len(repos) {
+		return found
+	}
+	parent := filepath.Dir(cur.Root)
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return found
+	}
+	named := map[string]bool{}
 	for _, r := range repos {
+		named[r.Name] = true
 		if r.URL != "" {
-			byURL[NormalizeURL(r.URL)] = r.Name
+			named[path.Base(NormalizeURL(r.URL))] = true
 		}
 	}
-	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, ".git")); err != nil {
+	var first, rest []string
+	for _, e := range entries {
+		dir := filepath.Join(parent, e.Name())
+		if !e.IsDir() || dir == cur.Root {
 			continue
 		}
-		origin, _ := git(ctx, c, "remote", "get-url", "origin")
-		name := byURL[NormalizeURL(origin)]
-		if name == "" {
-			for _, r := range repos {
-				if r.Name == filepath.Base(c) {
-					name = r.Name
-				}
-			}
+		if named[strings.ToLower(e.Name())] || named[e.Name()] {
+			first = append(first, dir)
+		} else {
+			rest = append(rest, dir)
 		}
-		if name != "" {
-			if _, done := found[name]; !done {
-				found[name] = c
-			}
+	}
+	for _, dir := range append(first, rest...) {
+		if len(found) >= len(repos) {
+			break
 		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+			continue
+		}
+		origin, _ := git(ctx, dir, "remote", "get-url", "origin")
+		claim(Checkout{Root: dir, Origin: origin})
 	}
 	return found
 }
 
-// Check computes freshness for each repo found locally.
+// ValidRevision reports whether rev is a full hex object id (SHA-1 or SHA-256).
+func ValidRevision(rev string) bool {
+	if len(rev) != 40 && len(rev) != 64 {
+		return false
+	}
+	for _, c := range rev {
+		if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// Check computes freshness for each repo found locally (three git execs per repo).
 func Check(ctx context.Context, repos []Repo, paths map[string]string) *Report {
 	rep := &Report{}
 	for _, r := range repos {
@@ -117,15 +188,17 @@ func Check(ctx context.Context, repos []Repo, paths map[string]string) *Report {
 			st.Note = "no local checkout found"
 		case r.Revision == "":
 			st.Note = "snapshot has no revision"
+		case !ValidRevision(r.Revision):
+			st.Note = "snapshot revision is not a commit id"
 		default:
-			if _, err := git(ctx, st.Path, "cat-file", "-e", r.Revision+"^{commit}"); err != nil {
+			// rev-list fails when the revision isn't in the local clone.
+			n, err := git(ctx, st.Path, "rev-list", "--count", "--end-of-options", r.Revision+"..HEAD")
+			if err != nil {
 				st.Note = "snapshot revision not in local clone (git fetch)"
 				break
 			}
-			if n, err := git(ctx, st.Path, "rev-list", "--count", r.Revision+"..HEAD"); err == nil {
-				fmt.Sscanf(n, "%d", &st.Behind)
-			}
-			if out, err := git(ctx, st.Path, "diff", "--name-only", r.Revision); err == nil {
+			fmt.Sscanf(n, "%d", &st.Behind)
+			if out, err := git(ctx, st.Path, "diff", "--name-only", "--end-of-options", r.Revision, "--"); err == nil {
 				for _, f := range strings.Split(out, "\n") {
 					if f != "" {
 						st.Changed[f] = true

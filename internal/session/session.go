@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/shermanhuman/cartographer/internal/fresh"
 	"github.com/shermanhuman/cartographer/internal/query"
@@ -18,6 +20,18 @@ import (
 	"github.com/shermanhuman/cartographer/internal/userconfig"
 )
 
+// CacheTTL is how long a session reuses its snapshot choice and freshness
+// report for the same directory. MCP tool calls arrive in bursts; this keeps
+// each burst to one round of git execs.
+var CacheTTL = 10 * time.Second
+
+// PullTimeout bounds the automatic pull on the query path, so an offline or
+// slow network delays a query by at most this much. `cartographer pull` is
+// not bounded.
+var PullTimeout = 5 * time.Second
+
+// Session is safe for concurrent use (the MCP server runs tool calls in
+// parallel) once its exported fields are set.
 type Session struct {
 	Store    *store.Store
 	DataDir  string
@@ -27,7 +41,21 @@ type Session struct {
 	Log      io.Writer // warnings (pull failures); nil discards
 	GitHub   *snapshot.GitHub
 
+	ghMu   sync.Mutex // guards GitHub's lazy creation
+	pullMu sync.Mutex // one auto-pull at a time; guards warned
 	warned bool
+
+	mu   sync.Mutex // guards memo; held while computing it so bursts share one computation
+	memo *memo
+}
+
+// memo caches what one directory resolves to.
+type memo struct {
+	at      time.Time
+	cwd     string
+	co      fresh.Checkout
+	chosen  string                   // snapshot chosen by cwd ("" not yet)
+	reports map[string]*fresh.Report // snapshot id -> freshness
 }
 
 // DataDir is $CARTOGRAPHER_DATA, else $XDG_DATA_HOME/cartographer or
@@ -52,21 +80,29 @@ func (s *Session) logf(format string, a ...any) {
 
 // Puller returns a puller for this session's store.
 func (s *Session) Puller() *snapshot.Puller {
-	gh := s.GitHub
-	if gh == nil {
-		gh = snapshot.NewGitHub()
-		s.GitHub = gh
+	s.ghMu.Lock()
+	if s.GitHub == nil {
+		s.GitHub = snapshot.NewGitHub()
 	}
+	gh := s.GitHub
+	s.ghMu.Unlock()
 	return &snapshot.Puller{Store: s.Store, GitHub: gh, DataDir: s.DataDir}
 }
 
 // PullDue pulls every configured workspace whose last check is older than
-// snapshot.AutoInterval. Failures are reported once and never fatal.
+// snapshot.AutoInterval, within PullTimeout. Failures are reported once and
+// never fatal. A call made while another is pulling returns at once.
 func (s *Session) PullDue(ctx context.Context) {
+	if !s.pullMu.TryLock() {
+		return
+	}
+	defer s.pullMu.Unlock()
 	cfg, err := userconfig.Load()
 	if err != nil || len(cfg.Workspaces) == 0 {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, PullTimeout)
+	defer cancel()
 	p := s.Puller()
 	for _, src := range cfg.Workspaces {
 		if !p.Due(src) {
@@ -74,13 +110,51 @@ func (s *Session) PullDue(ctx context.Context) {
 		}
 		if res, err := p.Pull(ctx, src); err != nil {
 			if !s.warned {
-				s.logf("cartographer: auto-pull %s failed: %v", src, err)
+				s.logf("cartographer: auto-pull %s failed (using the snapshots already pulled; run `cartographer pull` to retry): %v", src, err)
 				s.warned = true
 			}
 		} else if res.Imported {
 			s.logf("cartographer: pulled %s from %s", res.Snapshot, src)
+			s.forget()
 		}
 	}
+}
+
+// forget drops the cached choice and freshness (a new snapshot arrived).
+func (s *Session) forget() {
+	s.mu.Lock()
+	s.memo = nil
+	s.mu.Unlock()
+}
+
+// current returns the memo for s.Cwd, refreshing it after CacheTTL.
+// The caller holds s.mu.
+func (s *Session) current(ctx context.Context) *memo {
+	if m := s.memo; m != nil && m.cwd == s.Cwd && time.Since(m.at) < CacheTTL {
+		return m
+	}
+	s.memo = &memo{at: time.Now(), cwd: s.Cwd, co: fresh.Find(ctx, s.Cwd), reports: map[string]*fresh.Report{}}
+	return s.memo
+}
+
+// resolve returns the snapshot to query and its freshness, with one
+// repository discovery per cache period.
+func (s *Session) resolve(ctx context.Context) (string, *fresh.Report, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.current(ctx)
+	id := s.Snapshot
+	if id == "" {
+		if m.chosen == "" {
+			var err error
+			if m.chosen, err = s.chooseFrom(ctx, m.co); err != nil {
+				return "", nil, err
+			}
+		}
+		id = m.chosen
+	}
+	rep, err := s.freshFrom(ctx, m, id)
+	return id, rep, err
 }
 
 // Query returns a query context with freshness applied.
@@ -88,18 +162,11 @@ func (s *Session) Query(ctx context.Context) (*query.Q, *fresh.Report, error) {
 	if s.AutoPull {
 		s.PullDue(ctx)
 	}
-	id := s.Snapshot
-	if id == "" {
-		var err error
-		if id, err = s.choose(ctx); err != nil {
-			return nil, nil, err
-		}
-	}
-	q, err := query.New(ctx, s.Store, id)
+	id, rep, err := s.resolve(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	rep, err := s.Fresh(ctx, id)
+	q, err := query.New(ctx, s.Store, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -108,8 +175,18 @@ func (s *Session) Query(ctx context.Context) (*query.Q, *fresh.Report, error) {
 	return q, rep, nil
 }
 
-// Fresh checks a snapshot against local checkouts.
+// Fresh checks a snapshot against local checkouts (cached for CacheTTL).
 func (s *Session) Fresh(ctx context.Context, id string) (*fresh.Report, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.freshFrom(ctx, s.current(ctx), id)
+}
+
+// freshFrom computes (or reuses) id's report. The caller holds s.mu.
+func (s *Session) freshFrom(ctx context.Context, m *memo, id string) (*fresh.Report, error) {
+	if rep, ok := m.reports[id]; ok {
+		return rep, nil
+	}
 	repos, err := s.repos(ctx, id)
 	if err != nil {
 		return nil, err
@@ -119,7 +196,9 @@ func (s *Session) Fresh(ctx context.Context, id string) (*fresh.Report, error) {
 	if cfg != nil {
 		explicit = cfg.Checkouts
 	}
-	return fresh.Check(ctx, repos, fresh.Locate(ctx, repos, s.Cwd, explicit)), nil
+	rep := fresh.Check(ctx, repos, fresh.LocateFrom(ctx, repos, m.co, explicit))
+	m.reports[id] = rep
+	return rep, nil
 }
 
 func (s *Session) repos(ctx context.Context, id string) ([]fresh.Repo, error) {
@@ -145,6 +224,10 @@ func (e *ErrNotMapped) Error() string {
 // include the one at cwd. Outside any git repository it uses the only
 // workspace, if there is exactly one. It never guesses across projects.
 func (s *Session) choose(ctx context.Context) (string, error) {
+	return s.chooseFrom(ctx, fresh.Find(ctx, s.Cwd))
+}
+
+func (s *Session) chooseFrom(ctx context.Context, co fresh.Checkout) (string, error) {
 	all, err := s.Store.Snapshots(ctx)
 	if err != nil {
 		return "", err
@@ -160,8 +243,7 @@ func (s *Session) choose(ctx context.Context) (string, error) {
 			names = append(names, si.Workspace)
 		}
 	}
-	root := fresh.Root(ctx, s.Cwd)
-	if root == "" {
+	if co.Root == "" {
 		if len(names) == 1 {
 			return latest[names[0]], nil
 		}
@@ -172,38 +254,39 @@ func (s *Session) choose(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		for _, p := range fresh.Locate(ctx, repos, s.Cwd, nil) {
-			if p == root {
-				return latest[ws], nil
-			}
+		if co.Match(repos) != "" {
+			return latest[ws], nil
 		}
 	}
 	return "", &ErrNotMapped{Workspaces: names}
 }
 
-// Choose is the snapshot queries from cwd would use (see choose).
+// Choose is the snapshot queries from cwd would use (see choose), cached
+// for CacheTTL.
 func (s *Session) Choose(ctx context.Context) (string, error) {
 	if s.Snapshot != "" {
 		return s.Snapshot, nil
 	}
-	return s.choose(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.current(ctx)
+	if m.chosen == "" {
+		id, err := s.chooseFrom(ctx, m.co)
+		if err != nil {
+			return "", err
+		}
+		m.chosen = id
+	}
+	return m.chosen, nil
 }
 
-// Mapped reports whether cwd is inside a repository covered by any snapshot.
+// Mapped reports whether cwd is inside a repository covered by any snapshot
+// (two git execs).
 func (s *Session) Mapped(ctx context.Context) bool {
-	id, err := s.choose(ctx)
-	if err != nil {
+	co := fresh.Find(ctx, s.Cwd)
+	if co.Root == "" {
 		return false
 	}
-	repos, err := s.repos(ctx, id)
-	if err != nil {
-		return false
-	}
-	root := fresh.Root(ctx, s.Cwd)
-	for _, p := range fresh.Locate(ctx, repos, s.Cwd, nil) {
-		if p == root {
-			return true
-		}
-	}
-	return false
+	_, err := s.chooseFrom(ctx, co)
+	return err == nil
 }

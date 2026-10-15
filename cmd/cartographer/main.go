@@ -34,7 +34,8 @@ var version = "dev"
 
 const usage = `cartographer — multi-repository system map
 
-Queries (token-budgeted, ranked; --format json for structured output):
+Queries (token-budgeted, ranked; --format json prints the rendered lines as
+{"header": [...], "body": [...], "footer": [...]} arrays, unbudgeted):
   status                      snapshot, repos, coverage, annotation review state
   find <words>                search functions, modules, tables, files, docs
   show <ref>                  explain one entity and its neighbours
@@ -187,6 +188,25 @@ func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 	return pos, nil
 }
 
+// commandFirst moves common flags given before the command
+// (`cartographer --db X find y`) to after it.
+func commandFirst(args []string) ([]string, error) {
+	if !strings.HasPrefix(args[0], "-") {
+		return args, nil
+	}
+	fs := flags("cartographer", &common{})
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return nil, fmt.Errorf("%v; put the command first: cartographer <command> [flags]", err)
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return nil, errors.New("no command; put the command first: cartographer <command> [flags]")
+	}
+	leading := args[:len(args)-len(rest)]
+	return append(append([]string{rest[0]}, leading...), rest[1:]...), nil
+}
+
 func openStore(c *common) (*store.Store, error) {
 	if err := os.MkdirAll(filepath.Dir(c.db), 0o755); err != nil {
 		return nil, err
@@ -198,6 +218,10 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprint(w, usage)
 		return nil
+	}
+	args, err := commandFirst(args)
+	if err != nil {
+		return err
 	}
 	cmd, args := args[0], args[1:]
 	var c common
@@ -399,7 +423,8 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 			return err
 		}
 		defer s.Close()
-		sess := newSession(&c, s, io.Discard)
+		// stdout carries the MCP protocol; warnings go to stderr.
+		sess := newSession(&c, s, os.Stderr)
 		return mcpserver.Serve(ctx, mcpserver.Options{Version: version, Prepare: func(ctx context.Context) (*query.Q, error) {
 			q, _, err := sess.Query(ctx)
 			return q, err

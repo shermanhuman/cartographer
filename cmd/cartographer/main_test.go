@@ -143,3 +143,30 @@ func TestExportFlagsValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestFlagsBeforeTheCommand(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "carto.db")
+	fixture, _ := filepath.Abs("../../testdata/workspace-mini/snapshot")
+	t.Chdir(t.TempDir())
+	cli(t, db, "import", fixture)
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"--db", db, "--no-pull", "find", "billing", "--limit", "1"}, &out); err != nil || !strings.Contains(out.String(), "MOD shop-app:Shop.Billing") {
+		t.Errorf("leading flags: %v\n%s", err, out.String())
+	}
+	for _, args := range [][]string{{"--db", db}, {"--bogus", "find", "x"}} {
+		err := run(context.Background(), args, &out)
+		if err == nil || !strings.Contains(err.Error(), "put the command first") {
+			t.Errorf("%v: %v", args, err)
+		}
+	}
+}
+
+func TestNegativeOffsetCLI(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "carto.db")
+	fixture, _ := filepath.Abs("../../testdata/workspace-mini/snapshot")
+	t.Chdir(t.TempDir())
+	cli(t, db, "import", fixture)
+	if out := cli(t, db, "callers", "Shop.Orders.total/1", "--offset", "-3", "--no-pull"); !strings.Contains(out, "Shop.Billing.charge/2") {
+		t.Error(out)
+	}
+}
