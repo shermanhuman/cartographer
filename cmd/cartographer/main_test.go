@@ -21,7 +21,8 @@ func cli(t *testing.T, db string, args ...string) string {
 
 func TestCLIEndToEnd(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "carto.db")
-	fixture := "../../testdata/workspace-mini/snapshot"
+	fixture, _ := filepath.Abs("../../testdata/workspace-mini/snapshot")
+	t.Chdir(t.TempDir()) // outside any git repository: the only workspace applies
 	if out := cli(t, db, "import", fixture); !strings.Contains(out, "imported snapshot-20261015T120000Z") {
 		t.Fatal(out)
 	}
@@ -126,7 +127,9 @@ command = ["cat", "`+fixture+`"]
 
 func TestExportFlagsValidated(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "carto.db")
-	cli(t, db, "import", "../../testdata/workspace-mini/snapshot")
+	fixture, _ := filepath.Abs("../../testdata/workspace-mini/snapshot")
+	t.Chdir(t.TempDir())
+	cli(t, db, "import", fixture)
 	for _, args := range [][]string{
 		{"export", "--around", "Shop.Orders.total/1", "-o", "x.pdf"},
 		{"export", "--pdf", "--svg", "--around", "x", "-o", "x"},

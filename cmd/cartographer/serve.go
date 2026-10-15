@@ -43,7 +43,7 @@ func serve(ctx context.Context, w io.Writer, s *store.Store, c *common) error {
 		}
 		return map[string]any{"summary": rep.Summary(), "stale": rep.Summary() != "", "repos": rep.Lines()}, nil
 	}
-	return server.Serve(ctx, ln, server.New(server.Options{Store: s, Version: version, Status: status}))
+	return server.Serve(ctx, ln, server.New(server.Options{Store: s, Version: version, Status: status, Default: sess.Choose}))
 }
 
 func openBrowser(url string) {

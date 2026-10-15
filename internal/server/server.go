@@ -35,6 +35,9 @@ type Options struct {
 	Status func(ctx context.Context, snapshot string) (any, error)
 	// Now stamps generated_at; tests pin it.
 	Now func() time.Time
+	// Default picks the snapshot when the request names none (e.g. the map
+	// of the repository serve was started in). nil means the newest.
+	Default func(ctx context.Context) (string, error)
 }
 
 // IsLoopback reports whether host (a name or IP, without port) is the
@@ -160,6 +163,11 @@ func (a *api) snapshotQ(r *http.Request) (*query.Q, int, error) {
 		}
 		if n == 0 {
 			return nil, http.StatusNotFound, fmt.Errorf("no snapshot %q", id)
+		}
+	}
+	if id == "" && a.o.Default != nil {
+		if d, err := a.o.Default(r.Context()); err == nil {
+			id = d
 		}
 	}
 	q, err := query.New(r.Context(), a.o.Store, id)

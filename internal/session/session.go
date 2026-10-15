@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/shermanhuman/cartographer/internal/fresh"
 	"github.com/shermanhuman/cartographer/internal/query"
@@ -133,8 +134,16 @@ func (s *Session) repos(ctx context.Context, id string) ([]fresh.Repo, error) {
 	return out, nil
 }
 
-// choose picks the newest snapshot of the workspace that contains the
-// repository at cwd, falling back to the newest snapshot overall.
+// ErrNotMapped means the current repository isn't covered by any imported map.
+type ErrNotMapped struct{ Workspaces []string }
+
+func (e *ErrNotMapped) Error() string {
+	return fmt.Sprintf("this repository isn't covered by any pulled map (have: %s); pull its workspace with `cartographer pull <owner/name>` or pass --snapshot", strings.Join(e.Workspaces, ", "))
+}
+
+// choose picks the newest snapshot of the workspace whose repositories
+// include the one at cwd. Outside any git repository it uses the only
+// workspace, if there is exactly one. It never guesses across projects.
 func (s *Session) choose(ctx context.Context) (string, error) {
 	all, err := s.Store.Snapshots(ctx)
 	if err != nil {
@@ -143,27 +152,41 @@ func (s *Session) choose(ctx context.Context) (string, error) {
 	if len(all) == 0 {
 		return "", store.ErrNoSnapshot
 	}
+	latest := map[string]string{} // workspace -> newest snapshot (all is newest first)
+	var names []string
+	for _, si := range all {
+		if _, ok := latest[si.Workspace]; !ok {
+			latest[si.Workspace] = si.ID
+			names = append(names, si.Workspace)
+		}
+	}
 	root := fresh.Root(ctx, s.Cwd)
 	if root == "" {
-		return all[0].ID, nil
-	}
-	seen := map[string]bool{}
-	for _, si := range all { // newest first
-		if seen[si.Workspace] {
-			continue
+		if len(names) == 1 {
+			return latest[names[0]], nil
 		}
-		seen[si.Workspace] = true
-		repos, err := s.repos(ctx, si.ID)
+		return "", &ErrNotMapped{Workspaces: names}
+	}
+	for _, ws := range names {
+		repos, err := s.repos(ctx, latest[ws])
 		if err != nil {
 			return "", err
 		}
 		for _, p := range fresh.Locate(ctx, repos, s.Cwd, nil) {
 			if p == root {
-				return si.ID, nil
+				return latest[ws], nil
 			}
 		}
 	}
-	return all[0].ID, nil
+	return "", &ErrNotMapped{Workspaces: names}
+}
+
+// Choose is the snapshot queries from cwd would use (see choose).
+func (s *Session) Choose(ctx context.Context) (string, error) {
+	if s.Snapshot != "" {
+		return s.Snapshot, nil
+	}
+	return s.choose(ctx)
 }
 
 // Mapped reports whether cwd is inside a repository covered by any snapshot.
