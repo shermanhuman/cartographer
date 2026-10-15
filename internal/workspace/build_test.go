@@ -2,8 +2,8 @@ package workspace
 
 import (
 	"context"
-	"fmt"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"

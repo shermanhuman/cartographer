@@ -55,7 +55,7 @@ type Session struct {
 	// the pull runs in the foreground within PullTimeout.
 	Background bool
 	Log        io.Writer // warnings (pull failures); nil discards
-	GitHub   *snapshot.GitHub
+	GitHub     *snapshot.GitHub
 
 	ghMu   sync.Mutex // guards GitHub's lazy creation
 	pullMu sync.Mutex // one auto-pull at a time; guards warned
