@@ -86,8 +86,10 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	c.dir = filepath.Dir(abs)
-	if c.Keep == 0 {
+	if !md.IsDefined("keep") {
 		c.Keep = 30
+	} else if c.Keep < 1 {
+		return nil, fmt.Errorf("workspace: %s: keep must be at least 1, got %d", path, c.Keep)
 	}
 	if c.Contexts.Depth == 0 {
 		c.Contexts.Depth = 2
@@ -122,6 +124,9 @@ func Load(path string) (*Config, error) {
 		}
 		if c.Schema.PrepareRepo != "" && !seen[c.Schema.PrepareRepo] {
 			return nil, fmt.Errorf("workspace: schema.prepare_repo %q is not a repo", c.Schema.PrepareRepo)
+		}
+		if c.Schema.Prepare != "" && c.Schema.PrepareRepo == "" {
+			return nil, fmt.Errorf("workspace: schema.prepare requires schema.prepare_repo (the repo it runs in)")
 		}
 	}
 	return &c, nil

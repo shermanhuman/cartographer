@@ -15,7 +15,9 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +30,9 @@ type BuildOptions struct {
 	Out string
 	// PluginsDir replaces {plugins} in plugin commands.
 	PluginsDir string
+	// PluginsDigest identifies the plugin code for the schema cache key;
+	// empty means a digest of PluginsDir's files.
+	PluginsDigest string
 	// CacheDir holds cached schema facts (default user cache dir).
 	CacheDir string
 	// Refs overrides repo refs: name -> revision (e.g. a PR head).
@@ -38,7 +43,9 @@ type BuildOptions struct {
 	Log io.Writer
 	// Fetch clones missing checkouts from their URL and fetches existing
 	// ones (and any Refs revisions) before building. A GH_TOKEN/GITHUB_TOKEN
-	// in the environment authenticates https URLs.
+	// in the environment authenticates https://github.com URLs; it is passed
+	// to git through its environment only (never argv), and is removed from
+	// the environment of plugins and the schema prepare command.
 	Fetch bool
 }
 
@@ -102,7 +109,7 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 				return nil, fmt.Errorf("build: %s: fetch: %w", r.Name, err)
 			}
 		}
-		rev, err := git(ctx, src, "rev-parse", "--verify", ref+"^{commit}")
+		rev, err := git(ctx, src, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
 		if err != nil {
 			return nil, fmt.Errorf("build: %s: %w", r.Name, err)
 		}
@@ -125,14 +132,23 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 				prep = co
 			}
 		}
-		key, err := schemaKey(ctx, c, prep.revision, prep.repo)
+		pdigest := o.PluginsDigest
+		if pdigest == "" && o.PluginsDir != "" {
+			if pdigest, err = dirDigest(o.PluginsDir); err != nil {
+				return nil, fmt.Errorf("build: plugins digest: %w", err)
+			}
+		}
+		key, err := schemaKey(ctx, c, prep.revision, prep.repo, pdigest)
 		if err != nil {
 			return nil, err
 		}
 		cached := filepath.Join(o.CacheDir, "schema", key+".json")
-		if _, err := os.Stat(cached); err == nil {
+		if err := validFacts(cached); err == nil {
 			logf("schema: cached %s", key[:12])
 		} else {
+			if !errors.Is(err, os.ErrNotExist) {
+				logf("schema: cached %s is unusable (%v); rebuilding", key[:12], err)
+			}
 			logf("schema: building (cache key %s)", key[:12])
 			env := mapEnv(c.Schema.Env)
 			if c.Schema.Prepare != "" {
@@ -186,7 +202,10 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 		}
 	}
 
-	raw, _ := json.MarshalIndent(m, "", "  ")
+	raw, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return nil, err
+	}
 	if err := os.WriteFile(filepath.Join(o.Out, "manifest.json"), append(raw, '\n'), 0o644); err != nil {
 		return nil, err
 	}
@@ -206,19 +225,24 @@ func DefaultCacheDir() string {
 	return filepath.Join(home, ".cache", "cartographer")
 }
 
+// git runs git in dir. Credentials reach git only through its environment
+// (gitEnv), and error text carries the arguments and stderr, redacted.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = gitEnv()
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
+		return "", errors.New(redact(fmt.Sprintf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))))
 	}
 	return out.String(), nil
 }
 
 // archive extracts the tracked files of rev into dst and returns their paths.
 func archive(ctx context.Context, src, rev, dst string) ([]string, error) {
+	// A blobless clone fetches blobs lazily here, so this needs auth too.
 	cmd := exec.CommandContext(ctx, "git", "-C", src, "archive", "--format=tar", rev)
+	cmd.Env = gitEnv()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -246,33 +270,42 @@ func archive(ctx context.Context, src, rev, dst string) ([]string, error) {
 		target := filepath.Join(dst, filepath.FromSlash(name))
 		switch h.Typeflag {
 		case tar.TypeDir:
-			os.MkdirAll(target, 0o755)
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				cmd.Wait()
+				return nil, err
+			}
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				cmd.Wait()
 				return nil, err
 			}
 			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(h.Mode)&0o755|0o600)
 			if err != nil {
+				cmd.Wait()
 				return nil, err
 			}
 			_, err = io.Copy(f, tr)
-			f.Close()
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
 			if err != nil {
+				cmd.Wait()
 				return nil, err
 			}
 			files = append(files, name)
 		}
 	}
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("%v: %s", err, errb.String())
+		return nil, errors.New(redact(fmt.Sprintf("%v: %s", err, strings.TrimSpace(errb.String()))))
 	}
 	sort.Strings(files)
 	return files, nil
 }
 
-func schemaKey(ctx context.Context, c *Config, rev string, r Repo) (string, error) {
+func schemaKey(ctx context.Context, c *Config, rev string, r Repo, pluginsDigest string) (string, error) {
 	h := sha256.New()
-	fmt.Fprintf(h, "schema-version=%s\ncommand=%q\nprepare=%q\n", c.Schema.Version, c.Schema.Command, c.Schema.Prepare)
+	fmt.Fprintf(h, "schema-version=%s\ncommand=%q\nprepare=%q\nprepare-repo=%q\nenv=%q\nplugins=%s\n",
+		c.Schema.Version, c.Schema.Command, c.Schema.Prepare, c.Schema.PrepareRepo, mapEnv(c.Schema.Env), pluginsDigest)
 	if r.Name != "" && len(c.Schema.CacheKey) > 0 {
 		out, err := git(ctx, c.RepoPath(r), append([]string{"ls-tree", "-r", rev, "--"}, c.Schema.CacheKey...)...)
 		if err != nil {
@@ -327,7 +360,7 @@ func runCmd(ctx context.Context, dir string, env, argv []string, stdout io.Write
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(childEnv(os.Environ()), env...)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	if stdout != nil {
@@ -359,10 +392,73 @@ func runPlugin(ctx context.Context, dir string, env, argv []string, out, repo st
 	if repo != "" && d.Repo != repo {
 		return fmt.Errorf("facts repo is %q, want %q", d.Repo, repo)
 	}
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+	return writeAtomic(out, buf.Bytes())
+}
+
+// writeAtomic writes b to a temporary file beside path and renames it into
+// place, so readers (and a later cache lookup) never see a partial file.
+func writeAtomic(path string, b []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(out, buf.Bytes(), 0o644)
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp, 0o644)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
+}
+
+// validFacts reports whether path holds a valid facts document.
+func validFacts(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	d, err := facts.Decode(f)
+	if err != nil {
+		return err
+	}
+	return d.Validate()
+}
+
+// dirDigest hashes the relative paths and contents of every file under dir.
+func dirDigest(dir string) (string, error) {
+	h := sha256.New()
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00", filepath.ToSlash(rel), len(b))
+		h.Write(b)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16], nil
 }
 
 func isDoc(file string, patterns []string) bool {
@@ -394,38 +490,106 @@ func copyFile(src, dst string) error {
 // fetchRepo clones r into dir when missing, otherwise fetches origin; an
 // extra revision (e.g. a pull request head) is fetched explicitly.
 func fetchRepo(ctx context.Context, r Repo, dir, extra string) error {
-	auth := gitAuth()
+	if strings.HasPrefix(extra, "-") {
+		return fmt.Errorf("invalid revision %q", extra)
+	}
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		if r.URL == "" {
 			return fmt.Errorf("%s is missing and the repo has no url", dir)
 		}
-		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		parent := filepath.Dir(dir)
+		if err := os.MkdirAll(parent, 0o755); err != nil {
 			return err
 		}
-		cmd := exec.CommandContext(ctx, "git", append(auth, "clone", "--quiet", "--filter=blob:none", "--no-checkout", r.URL, dir)...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("git clone %s: %v: %s", r.URL, err, strings.TrimSpace(string(out)))
+		if _, err := git(ctx, parent, "clone", "--quiet", "--filter=blob:none", "--no-checkout", "--", r.URL, dir); err != nil {
+			return err
 		}
-	} else if _, err := git(ctx, dir, append(auth, "fetch", "--quiet", "origin")...); err != nil {
+	} else if _, err := git(ctx, dir, "fetch", "--quiet", "--", "origin"); err != nil {
 		return err
 	}
 	if extra != "" {
-		if _, err := git(ctx, dir, append(auth, "fetch", "--quiet", "origin", extra)...); err != nil {
+		if _, err := git(ctx, dir, "fetch", "--quiet", "--", "origin", extra); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// gitAuth returns -c options that send a GitHub token for https remotes.
-func gitAuth() []string {
-	tok := os.Getenv("GH_TOKEN")
-	if tok == "" {
-		tok = os.Getenv("GITHUB_TOKEN")
+// tokenEnv are the credential variables that only git subprocesses receive.
+var tokenEnv = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
+
+func githubToken() string {
+	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
 	}
+	return ""
+}
+
+const extraHeaderKey = "http.https://github.com/.extraheader"
+
+// gitEnv is the environment for git subprocesses: the process environment
+// plus, when a GitHub token is set, an extraheader config entry passed as
+// GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n so it never appears on argv. Every git
+// process (including lazy blob fetches of a partial clone) inherits it.
+func gitEnv() []string {
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	tok := githubToken()
 	if tok == "" {
-		return nil
+		return env
+	}
+	n := 0
+	if v, err := strconv.Atoi(os.Getenv("GIT_CONFIG_COUNT")); err == nil && v > 0 {
+		n = v
 	}
 	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + tok))
-	return []string{"-c", "http.https://github.com/.extraheader=AUTHORIZATION: basic " + basic}
+	return append(env,
+		"GIT_CONFIG_COUNT="+strconv.Itoa(n+1),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", n, extraHeaderKey),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=AUTHORIZATION: basic %s", n, basic),
+	)
+}
+
+// childEnv drops credentials and git config injection from env, for plugins
+// and the schema prepare command (which may run a pull request's code).
+func childEnv(env []string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		drop := slices.Contains(tokenEnv, k) || k == "GIT_CONFIG_COUNT" || k == "GIT_CONFIG_PARAMETERS" ||
+			strings.HasPrefix(k, "GIT_CONFIG_KEY_") || strings.HasPrefix(k, "GIT_CONFIG_VALUE_")
+		if !drop {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// redact removes credentials from text destined for logs and errors: the
+// token itself, its base64 form, and anything that looks like an
+// extraheader or Authorization value.
+func redact(s string) string {
+	if tok := githubToken(); tok != "" {
+		basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + tok))
+		s = strings.ReplaceAll(s, basic, "[redacted]")
+		s = strings.ReplaceAll(s, tok, "[redacted]")
+	}
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if strings.Contains(strings.ToLower(l), "extraheader") || strings.Contains(strings.ToLower(l), "authorization:") {
+			lines[i] = redactLine(l)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func redactLine(l string) string {
+	low := strings.ToLower(l)
+	for _, kw := range []string{"extraheader", "authorization:"} {
+		if i := strings.Index(low, kw); i >= 0 {
+			return l[:i+len(kw)] + " [redacted]"
+		}
+	}
+	return l
 }

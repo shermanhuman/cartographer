@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/shermanhuman/cartographer/internal/bundle"
 	"github.com/shermanhuman/cartographer/internal/store"
@@ -173,5 +174,102 @@ func TestPullErrors(t *testing.T) {
 	gh.Publish(ctx, "o/x", "snapshot-20261016T000000Z", "", packFixture(t, "snapshot-20261015T000000Z"))
 	if _, err := p.Pull(ctx, "o/x"); err == nil || !strings.Contains(err.Error(), "holds snapshot") {
 		t.Errorf("mismatch: %v", err)
+	}
+}
+
+func TestHangingServerTimesOut(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	gh := &GitHub{API: srv.URL, Token: "t", Timeout: 100 * time.Millisecond}
+	start := time.Now()
+	if _, err := gh.Snapshots(context.Background(), "o/map"); err == nil {
+		t.Fatal("hanging server should time out")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("timeout took %v", d)
+	}
+}
+
+func TestFailedPullBacksOff(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", 503)
+	}))
+	defer srv.Close()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	p := &Puller{Store: s, GitHub: &GitHub{API: srv.URL, Token: "t"}, DataDir: t.TempDir()}
+	if !p.Due("o/map") {
+		t.Fatal("first check should be due")
+	}
+	if _, err := p.Pull(context.Background(), "o/map"); err == nil {
+		t.Fatal("pull from a failing server should fail")
+	}
+	if p.Due("o/map") {
+		t.Error("a failed attempt must be stamped so the next call doesn't retry")
+	}
+	// After FailBackoff (not the full AutoInterval) it is due again.
+	old := time.Now().Add(-FailBackoff - time.Minute)
+	os.Chtimes(p.stampPath("o/map"), old, old)
+	if !p.Due("o/map") {
+		t.Error("failed source should be due after FailBackoff")
+	}
+}
+
+func TestPruneRejectsKeepBelowOne(t *testing.T) {
+	f := newFake(t)
+	for _, keep := range []int{0, -1} {
+		if _, err := f.client().Prune(context.Background(), "o/map", keep); err == nil {
+			t.Errorf("keep=%d should fail", keep)
+		}
+	}
+}
+
+func TestConcurrentPulls(t *testing.T) {
+	ctx := context.Background()
+	f := newFake(t)
+	gh := f.client()
+	id := "snapshot-20261015T120000Z"
+	if _, err := gh.Publish(ctx, "o/map", id, "", packFixture(t, id)); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	data := t.TempDir()
+	// A stale partial from another process must survive pruning.
+	stale := filepath.Join(data, "snapshots", "snapshot-x"+partialMark+"123")
+	os.MkdirAll(stale, 0o755)
+	var wg sync.WaitGroup
+	errs := make([]error, 4)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p := &Puller{Store: s, GitHub: gh, DataDir: data}
+			_, errs[i] = p.Pull(ctx, "o/map")
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("pull %d: %v", i, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(data, "snapshots", id, "manifest.json")); err != nil {
+		t.Error("unpacked snapshot missing")
+	}
+	entries, _ := os.ReadDir(filepath.Join(data, "snapshots"))
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if strings.Join(names, ",") != id+",snapshot-x"+partialMark+"123" {
+		t.Errorf("snapshot dirs = %v", names)
 	}
 }

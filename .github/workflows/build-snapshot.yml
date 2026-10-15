@@ -44,30 +44,41 @@ jobs:
       PGPASSWORD: postgres
       CARTOGRAPHER_NO_PULL: "1"
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: app
         if: env.HAS_APP == 'true'
-        uses: actions/create-github-app-token@v3.3.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.app-id }}
           private-key: ${{ secrets.app-private-key }}
           owner: ${{ github.repository_owner }}
-      - uses: jdx/mise-action@v5.1.2
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           working_directory: ${{ inputs.workspace-path }}
-      - uses: shermanhuman/cartographer/action@main
+      # The setup action follows the moving `v0` tag, which release.yml points
+      # at each v0.x.y release. Pin this reusable workflow to a release tag
+      # (…/build-snapshot.yml@v0.x.y) and set cartographer-version to match.
+      - uses: shermanhuman/cartographer/action@v0
         with:
           version: ${{ inputs.cartographer-version }}
-      - uses: actions/cache@v6.1.0
+      # Schema cache: restore the newest entry for this workspace config; save
+      # a new entry only when the cached files changed (key = their hash).
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/cartographer/schema
-          key: cartographer-schema-${{ github.run_id }}
-          restore-keys: cartographer-schema-
+          path: _cartographer-cache/cartographer/schema
+          key: cartographer-schema-${{ hashFiles(format('{0}/cartographer.toml', inputs.workspace-path)) }}-
+          restore-keys: cartographer-schema-${{ hashFiles(format('{0}/cartographer.toml', inputs.workspace-path)) }}-
       - name: Build
         working-directory: ${{ inputs.workspace-path }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.repo-token || github.token }}
+          XDG_CACHE_HOME: ${{ github.workspace }}/_cartographer-cache
         run: cartographer build --fetch --out "$RUNNER_TEMP/snapshot"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: success() && hashFiles('_cartographer-cache/cartographer/schema/*.json') != ''
+        with:
+          path: _cartographer-cache/cartographer/schema
+          key: cartographer-schema-${{ hashFiles(format('{0}/cartographer.toml', inputs.workspace-path)) }}-${{ hashFiles('_cartographer-cache/cartographer/schema/*.json') }}
       - name: Publish
         working-directory: ${{ inputs.workspace-path }}
         env:
