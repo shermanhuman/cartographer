@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,11 +13,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/shermanhuman/cartographer/internal/bundle"
 	"github.com/shermanhuman/cartographer/internal/facts"
 	"github.com/shermanhuman/cartographer/internal/mcpserver"
 	"github.com/shermanhuman/cartographer/internal/output"
 	"github.com/shermanhuman/cartographer/internal/query"
+	"github.com/shermanhuman/cartographer/internal/session"
+	"github.com/shermanhuman/cartographer/internal/snapshot"
 	"github.com/shermanhuman/cartographer/internal/store"
+	"github.com/shermanhuman/cartographer/internal/userconfig"
+	"github.com/shermanhuman/cartographer/internal/workspace"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -36,8 +42,17 @@ Queries (token-budgeted, ranked; --format json for structured output):
   context <name>              a module cluster: modules, tables, docs
 
 Snapshots:
+  pull [owner/name]           fetch the newest published snapshot (adds the source)
+  workspace add <owner/name>  pull snapshots from this repository's releases
   import <dir>                import a snapshot directory
   snapshots                   list imported snapshots
+  mapped                      exit 0 if the current directory is a mapped repo
+
+Building (in a workspace with cartographer.toml):
+  init [dir]                  write a cartographer.toml template
+  build [--out DIR] [--ref repo=sha]... [--import]
+                              snapshot every repo and run its extractor plugins
+  publish <snapshot-dir>      pack and publish as a GitHub release, prune old ones
   validate-facts <file>...    check extractor plugin output (facts v1)
 
 Agents:
@@ -47,37 +62,58 @@ Other:
   version
 
 Common flags: --db PATH (or $CARTOGRAPHER_DB), --snapshot ID, --budget TOKENS,
---limit N, --offset N, --format text|json.
+--limit N, --offset N, --format text|json, --no-pull, --workspace DIR.
+Queries pull newer snapshots at most hourly and mark lines in files changed
+since the snapshot with ⚠.
 A <ref> is an id, a label like Shop.Orders.create/2, or a unique search term.
 `
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
+		if errors.Is(err, errNotMapped) {
+			os.Exit(1)
+		}
 		fmt.Fprintln(os.Stderr, "cartographer:", err)
 		os.Exit(1)
 	}
 }
 
 type common struct {
-	db       string
-	snapshot string
-	budget   int
-	limit    int
-	offset   int
-	depth    int
-	format   string
+	db        string
+	snapshot  string
+	budget    int
+	limit     int
+	offset    int
+	depth     int
+	format    string
+	noPull    bool
+	workspace string
+	out       string
+	plugins   string
+	doImport  bool
+	refs      refFlags
+}
+
+type refFlags map[string]string
+
+func (r *refFlags) String() string { return fmt.Sprint(map[string]string(*r)) }
+func (r *refFlags) Set(v string) error {
+	name, rev, ok := strings.Cut(v, "=")
+	if !ok || name == "" || rev == "" {
+		return fmt.Errorf("--ref wants repo=revision, got %q", v)
+	}
+	if *r == nil {
+		*r = refFlags{}
+	}
+	(*r)[name] = rev
+	return nil
 }
 
 func defaultDB() string {
 	if p := os.Getenv("CARTOGRAPHER_DB"); p != "" {
 		return p
 	}
-	dir := os.Getenv("XDG_DATA_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "share")
-	}
-	return filepath.Join(dir, "cartographer", "carto.db")
+	return filepath.Join(session.DataDir(), "carto.db")
 }
 
 func flags(name string, c *common) *flag.FlagSet {
@@ -89,6 +125,12 @@ func flags(name string, c *common) *flag.FlagSet {
 	fs.IntVar(&c.offset, "offset", 0, "skip results")
 	fs.IntVar(&c.depth, "depth", 0, "traversal depth")
 	fs.StringVar(&c.format, "format", "text", "text or json")
+	fs.BoolVar(&c.noPull, "no-pull", os.Getenv("CARTOGRAPHER_NO_PULL") != "", "don't check for newer snapshots")
+	fs.StringVar(&c.workspace, "workspace", ".", "workspace directory (build/publish)")
+	fs.StringVar(&c.out, "out", "", "snapshot output directory (build)")
+	fs.StringVar(&c.plugins, "plugins", os.Getenv("CARTOGRAPHER_PLUGINS"), "extractor plugins directory ({plugins})")
+	fs.BoolVar(&c.doImport, "import", false, "import the built snapshot into the local store")
+	fs.Var(&c.refs, "ref", "repo=revision to snapshot instead of the configured ref (repeatable)")
 	return fs
 }
 
@@ -161,13 +203,143 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		}
 		fmt.Fprintln(w, "imported", id)
 		return nil
+	case "init":
+		dir := "."
+		if len(pos) > 0 {
+			dir = pos[0]
+		}
+		target := filepath.Join(dir, workspace.FileName)
+		if _, err := os.Stat(target); err == nil {
+			return fmt.Errorf("%s already exists", target)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "annotations"), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, []byte(workspace.Template), 0o644); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "wrote %s; edit repos and plugins, then run `cartographer build --import`\n", target)
+		return nil
+	case "build":
+		cfg, err := workspace.Load(c.workspace)
+		if err != nil {
+			return err
+		}
+		out := c.out
+		if out == "" {
+			out = filepath.Join(cfg.Dir(), ".cartographer", "snapshots", fmt.Sprintf("build-%d", os.Getpid()))
+		}
+		m, err := workspace.Build(ctx, cfg, workspace.BuildOptions{Out: out, PluginsDir: c.plugins, Refs: c.refs, Log: os.Stderr})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "built %s in %s\n", m.ID, out)
+		if c.doImport {
+			s, err := openStore(&c)
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			if _, err := s.Import(ctx, out); err != nil {
+				return err
+			}
+			fmt.Fprintln(w, "imported", m.ID)
+		}
+		return nil
+	case "publish":
+		if err := need(1, "a snapshot directory"); err != nil {
+			return err
+		}
+		cfg, err := workspace.Load(c.workspace)
+		if err != nil {
+			return err
+		}
+		if cfg.Publish == "" {
+			return errors.New("publish: set `publish = \"owner/name\"` in cartographer.toml")
+		}
+		b, err := bundle.Read(pos[0])
+		if err != nil {
+			return err
+		}
+		var buf bytes.Buffer
+		if err := bundle.Pack(pos[0], &buf); err != nil {
+			return err
+		}
+		gh := snapshot.NewGitHub()
+		if _, err := gh.Publish(ctx, cfg.Publish, b.Manifest.ID, releaseNotes(b), buf.Bytes()); err != nil {
+			return err
+		}
+		n, err := gh.Prune(ctx, cfg.Publish, cfg.Keep)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "published %s to %s (%d bytes); pruned %d old snapshot(s)\n", b.Manifest.ID, cfg.Publish, buf.Len(), n)
+		return nil
+	case "workspace":
+		if len(pos) < 2 || pos[0] != "add" {
+			return errors.New("usage: cartographer workspace add <owner/name>")
+		}
+		if err := userconfig.AddWorkspace(pos[1]); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "added %s to %s\n", pos[1], userconfig.Path())
+		return nil
+	case "pull":
+		if len(pos) > 0 {
+			if err := userconfig.AddWorkspace(pos[0]); err != nil {
+				return err
+			}
+		}
+		cfg, err := userconfig.Load()
+		if err != nil {
+			return err
+		}
+		if len(cfg.Workspaces) == 0 {
+			return errors.New("no workspaces configured: cartographer pull <owner/name>")
+		}
+		s, err := openStore(&c)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		sess := &session.Session{Store: s, DataDir: filepath.Dir(c.db)}
+		var failed error
+		for _, src := range cfg.Workspaces {
+			res, err := sess.Puller().Pull(ctx, src)
+			if err != nil {
+				fmt.Fprintf(w, "%s: %v\n", src, err)
+				failed = errors.New("some pulls failed")
+				continue
+			}
+			state := "up to date"
+			if res.Imported {
+				state = "imported"
+			}
+			fmt.Fprintf(w, "%s: %s %s\n", src, res.Snapshot, state)
+		}
+		return failed
 	case "mcp":
 		s, err := openStore(&c)
 		if err != nil {
 			return err
 		}
 		defer s.Close()
-		return mcpserver.Serve(ctx, mcpserver.StoreOptions(version, s))
+		sess := newSession(&c, s, io.Discard)
+		return mcpserver.Serve(ctx, mcpserver.Options{Version: version, Prepare: func(ctx context.Context) (*query.Q, error) {
+			q, _, err := sess.Query(ctx)
+			return q, err
+		}})
+	case "mapped":
+		s, err := openStore(&c)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		if !newSession(&c, s, io.Discard).Mapped(ctx) {
+			return errNotMapped
+		}
+		fmt.Fprintln(w, "mapped")
+		return nil
 	case "snapshots":
 		s, err := openStore(&c)
 		if err != nil {
@@ -189,9 +361,10 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		return err
 	}
 	defer s.Close()
-	q, err := query.New(ctx, s, c.snapshot)
+	sess := newSession(&c, s, os.Stderr)
+	q, rep, err := sess.Query(ctx)
 	if errors.Is(err, store.ErrNoSnapshot) {
-		return errors.New("no snapshot yet: run `cartographer pull` or `cartographer import <dir>`")
+		return errors.New("no snapshot yet: run `cartographer pull <owner/name>` or `cartographer import <dir>`")
 	}
 	if err != nil {
 		return err
@@ -200,7 +373,28 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if cmd == "status" {
+		for _, l := range rep.Lines() {
+			d.L("%s", l)
+		}
+	}
 	return write(w, d, c.format, c.budget)
+}
+
+var errNotMapped = errors.New("not in a mapped repository")
+
+func newSession(c *common, s *store.Store, log io.Writer) *session.Session {
+	cwd, _ := os.Getwd()
+	return &session.Session{Store: s, DataDir: filepath.Dir(c.db), Cwd: cwd, Snapshot: c.snapshot, AutoPull: !c.noPull, Log: log}
+}
+
+func releaseNotes(b *bundle.Bundle) string {
+	var lines []string
+	lines = append(lines, "cartographer snapshot of workspace `"+b.Manifest.Workspace+"`.", "", "| repo | revision |", "|---|---|")
+	for _, r := range b.Manifest.Repos {
+		lines = append(lines, fmt.Sprintf("| %s | %s |", r.Name, r.Revision))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Opts are the per-query options shared by the CLI and MCP.

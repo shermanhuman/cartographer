@@ -113,3 +113,24 @@ func (s *Store) Prune(ctx context.Context, keep int) error {
 	}
 	return nil
 }
+
+// RepoInfo is a repository recorded in a snapshot.
+type RepoInfo struct{ Name, URL, Revision string }
+
+// Repos lists the repositories in a snapshot.
+func (s *Store) Repos(ctx context.Context, snapshot string) ([]RepoInfo, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT name, url, revision FROM repos WHERE snapshot_id = ? ORDER BY name`, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RepoInfo
+	for rows.Next() {
+		var r RepoInfo
+		if err := rows.Scan(&r.Name, &r.URL, &r.Revision); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
