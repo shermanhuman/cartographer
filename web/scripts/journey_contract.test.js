@@ -1,66 +1,78 @@
+// Journeys and investigations are generic annotations. The model tests run
+// on the fixture's annotation file; the contract test needs CARTOGRAPHER_URL.
+// The admin-specific checks (journeys.json vs journey-data.js, domains,
+// test mappings, the three hard-coded investigations) were dropped with that data.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {journeys, domains, resolveJourney, resolveStep} from '../journey-model.js';
-import {investigations, investigationState, investigationHTML} from '../investigations.js';
-const data = name => JSON.parse(fs.readFileSync(new URL(`../data/${name}`, import.meta.url)));
-const catalog=new Map(data('catalog.json').map(e=>[e.id,e]));
-const overview=data('overview.json');
-const freshness=data('freshness.json');
-const reviewRequired=s=>assert.notEqual(freshness.steps[s]?.status,'reviewed',s+' must disclose missing evidence');
+import {journeys, setJourneys, resolveJourney, resolveStep} from '../journey-model.js';
+import {investigations, setInvestigations, investigationState, investigationHTML} from '../investigations.js';
+const fixture = new URL('../../testdata/workspace-mini/snapshot/annotations/journeys.json', import.meta.url);
+const annotations = JSON.parse(fs.readFileSync(fixture)).annotations;
+const base = process.env.CARTOGRAPHER_URL;
+const skip = base ? false : 'set CARTOGRAPHER_URL to a running `cartographer serve` (go test ./internal/server does)';
+const get = async path => {const r = await fetch(new URL(path, base)); assert.ok(r.ok, `${path}: ${r.status}`); return r.json()};
+const investigation = {kind: 'investigation', id: 'slow-checkout', title: 'Checkout is slow', summary: 'Source-only finding',
+  steps: [{id: 'a', title: 'Where does it start?', body: 'At the controller.', cites: ['shop-app:ShopWeb.OrderController.create/2']},
+          {id: 'b', title: 'What is unknown?', body: 'No measurement.', cites: []}]};
 
-test('reviewed steps resolve to real code, schema, tests and pinned source locations',()=>{
-  assert.deepEqual(JSON.parse(JSON.stringify(journeys)),JSON.parse(fs.readFileSync(new URL('../model/journeys.json',import.meta.url))).journeys);
-  const files=data('files.json').repositories.find(r=>r.id==='breakdown-admin').files;
-  for(const [jid,j] of Object.entries(journeys))for(const s of j.steps){
-    assert.ok(s.sources.length, s.title+' has no evidence');
-    for(const id of [...s.code,...s.data.map(r=>r.entity),...s.sources])if(!catalog.has(id))reviewRequired(jid+'/'+s.id);
-    for(const id of s.sources){if(!catalog.has(id))continue;const e=catalog.get(id),shard=data(e.shard),d=e.kind==='function'?shard.functions[id]:shard;const url=d.url||d.sources?.[0]?.url;assert.ok(url.includes(overview.manifest.sources['breakdown-admin']), id+' source revision');}
-    for(const id of s.changes)assert.ok(overview.changes.some(c=>c.id===id),id);
-    for(const ref of s.tests)if(!files.some(f=>f.path===ref.file))reviewRequired(jid+'/'+s.id);
+test('journeys load from annotations; reserved view names and other kinds are ignored', () => {
+  setJourneys([...annotations, {kind: 'journey', id: 'tables', title: 'clash', steps: []}, investigation]);
+  assert.deepEqual(Object.keys(journeys), ['checkout']);
+  const j = journeys.checkout;
+  assert.equal(j.steps.length, 2);
+  assert.deepEqual(j.steps[0].code, ['shop-app:ShopWeb.OrderController.create/2', 'shop-app:Shop.Orders.create/2']);
+  assert.equal(j.steps[1].status, 'unreviewed');
+  setJourneys([{kind: 'journey', id: 'note', title: 'One step', cites: ['x'], status: 'reviewed'}]);
+  assert.equal(journeys.note.steps[0].id, 'note');
+  assert.equal(journeys.checkout, undefined, 'setJourneys replaces the previous set');
+  setJourneys(annotations);
+});
+
+test('deep links retain a valid journey and recover stale step IDs', () => {
+  setJourneys(annotations);
+  assert.equal(resolveJourney('checkout', ''), 'checkout');
+  assert.equal(resolveJourney('tables', 'checkout'), 'checkout');
+  assert.equal(resolveJourney('entity', 'checkout'), 'checkout');
+  assert.equal(resolveJourney('tables', 'deleted-journey'), '');
+  assert.equal(resolveStep('checkout', 'charge').id, 'charge');
+  assert.equal(resolveStep('checkout', 'deleted-step').id, 'place');
+  assert.equal(resolveStep('deleted-journey', 'place'), undefined);
+});
+
+test('investigation checkpoints open their first cited entity and clamp indexes', () => {
+  setInvestigations([...annotations, investigation]);
+  assert.deepEqual(Object.keys(investigations), ['slow-checkout']);
+  assert.deepEqual(investigationState('slow-checkout', 0), {view: 'entity', entity: 'shop-app:ShopWeb.OrderController.create/2', focus: 'shop-app:ShopWeb.OrderController.create/2', investigation: 'slow-checkout', checkpoint: 0});
+  assert.deepEqual(investigationState('slow-checkout', 99), {view: 'home', entity: '', focus: '', investigation: 'slow-checkout', checkpoint: 1});
+  assert.equal(investigationState('slow-checkout', NaN).checkpoint, 0);
+  assert.equal(investigationState('unknown'), null);
+  assert.ok(!('answer' in investigationState('slow-checkout', 0)));
+  assert.match(investigationHTML({view: 'home'}), /Checkout is slow/);
+  assert.match(investigationHTML({investigation: 'slow-checkout', checkpoint: 1}), /What is unknown\?/);
+});
+
+test('prototype names in fragment inputs are treated as unknown', () => {
+  setJourneys(annotations); setInvestigations([investigation]);
+  for (const key of ['constructor', '__proto__', 'toString']) {
+    assert.equal(resolveJourney(key, key), '');
+    assert.equal(resolveStep(key, 'place'), undefined);
+    assert.equal(investigationState(key), null);
+    assert.equal(investigationHTML({investigation: key}), '');
   }
-  for(const name of Object.keys(domains))if(!catalog.has(`public.${name}`))assert.equal(freshness.status,'attention');else assert.equal(catalog.get(`public.${name}`).kind,'table');
 });
 
-test('every handoff has resolvable endpoints and source evidence',()=>{
-  for(const [jid,j] of Object.entries(journeys)){
-    assert.equal(new Set(j.steps.map(s=>s.id)).size,j.steps.length);
-    for(const s of j.steps)assert.ok(j.groups.some(g=>g.id===s.group));
-    for(const e of j.edges){assert.ok(j.steps.some(s=>s.id===e.from));assert.ok(j.steps.some(s=>s.id===e.to));if(!catalog.has(e.source)){reviewRequired(jid+'/'+e.from);reviewRequired(jid+'/'+e.to);}assert.ok(e.type);}
-  }
-  const j=journeys.sync;
-  assert.equal(j.steps.find(s=>s.id==='codes').group,j.steps.find(s=>s.id==='concepts').group);
-  assert.ok(!j.edges.some(e=>e.from==='codes'&&e.to==='concepts'));
-  assert.ok(!j.edges.some(e=>e.from==='concepts'&&e.to==='codes'));
-  assert.equal(j.steps.find(s=>s.id==='rebuild').group,'maintenance');
-});
-
-test('deep links retain a valid journey through code/schema drill-down and recover stale step IDs',()=>{
-  assert.equal(resolveJourney('sync',''),'sync');
-  assert.equal(resolveJourney('tables','sync'),'sync');
-  assert.equal(resolveJourney('entity','search'),'search');
-  assert.equal(resolveJourney('verify','sync'),'verify');
-  assert.equal(resolveJourney('tables','deleted-journey'),'');
-  assert.equal(resolveStep('sync','concepts').id,'concepts');
-  assert.equal(resolveStep('sync','deleted-step').id,'source');
-  assert.equal(resolveStep('deleted-journey','source'),undefined);
-});
-
-test('investigation checkpoints resolve to existing steps and distinguish observed from source-only findings',()=>{
-  assert.equal(Object.keys(investigations).length,3);
-  for(const investigation of Object.values(investigations)){
-    assert.ok(investigation.basis);
-    for(const check of investigation.checks){
-      assert.ok(journeys[check.view]?.steps.some(s=>s.id===check.step));
-      assert.ok(['architecture','failure','coverage','performance','changes'].includes(check.lens));
+test('served journey steps cite real entities or disclose that review is needed', {skip}, async () => {
+  const [catalog, served] = await Promise.all([get('api/catalog'), get('api/annotations')]);
+  const ids = new Set(catalog.map(e => e.id));
+  setJourneys(served);
+  assert.ok(Object.keys(journeys).length > 0);
+  for (const j of Object.values(journeys)) {
+    assert.equal(new Set(j.steps.map(s => s.id)).size, j.steps.length);
+    for (const s of j.steps) {
+      assert.ok(['reviewed', 'needs_review', 'unreviewed'].includes(s.status), s.status);
+      if (s.cites.some(id => !ids.has(id))) assert.notEqual(s.status, 'reviewed', `${j.id}/${s.id} cites a missing entity`);
+      if (s.status === 'needs_review') assert.ok(s.reasons.length, `${j.id}/${s.id} must say why`);
     }
   }
-  assert.ok(investigations['false-pass'].checks.some(c=>c.step==='compare'));
-  assert.match(investigations['missed-edit'].basis,/not a newly observed incident/);
-  assert.deepEqual(investigationState('false-pass',99),{view:'verify',step:'compare',lens:'changes',context:'verify',investigation:'false-pass',checkpoint:3});
-  assert.equal(investigationState('unknown'),null);
-  assert.equal(investigationState('slow-search',NaN).checkpoint,0);
-  assert.ok(!('answer' in investigationState('false-pass',0)));
 });
-
-test('prototype names in fragment inputs are treated as unknown',()=>{for(const key of ['constructor','__proto__','toString']){assert.equal(resolveJourney(key,key),'');assert.equal(resolveStep(key,'source'),undefined);assert.equal(investigationState(key),null);assert.equal(investigationHTML({investigation:key}), '');}});

@@ -16,6 +16,8 @@ import (
 	"github.com/shermanhuman/cartographer/internal/mcpserver"
 	"github.com/shermanhuman/cartographer/internal/output"
 	"github.com/shermanhuman/cartographer/internal/query"
+	"github.com/shermanhuman/cartographer/internal/render"
+	"github.com/shermanhuman/cartographer/internal/server"
 	"github.com/shermanhuman/cartographer/internal/store"
 )
 
@@ -34,6 +36,17 @@ Queries (token-budgeted, ranked; --format json for structured output):
   path <a> <b>                shortest call chain
   table <name>                columns, keys and code that mentions a table
   context <name>              a module cluster: modules, tables, docs
+
+Sharing (GitHub Markdown, PDF, SVG):
+  mermaid <ref> [--depth N] [--max N]  Mermaid call graph (≤40 nodes)
+  embed <ref>                 issue-ready Markdown: summary, diagram, pinned links
+  diff <base> <head>          PR impact comment comparing two snapshots
+  export --pdf|--svg [--page|--snippet] -o FILE
+         (--around <ref> [--depth N] | --context <name> | --table <name> | --annotation <id>)
+                              print view through headless Chrome (optional)
+
+UI:
+  serve [--port 7878] [--open]  browse the map at http://127.0.0.1:7878 (loopback only)
 
 Snapshots:
   import <dir>                import a snapshot directory
@@ -66,6 +79,12 @@ type common struct {
 	offset   int
 	depth    int
 	format   string
+
+	max                                     int
+	port                                    int
+	open                                    bool
+	pdf, svg, page, snippet                 bool
+	around, context, table, annotation, out string
 }
 
 func defaultDB() string {
@@ -89,6 +108,18 @@ func flags(name string, c *common) *flag.FlagSet {
 	fs.IntVar(&c.offset, "offset", 0, "skip results")
 	fs.IntVar(&c.depth, "depth", 0, "traversal depth")
 	fs.StringVar(&c.format, "format", "text", "text or json")
+	fs.IntVar(&c.max, "max", 0, "max diagram nodes (mermaid; default 40)")
+	fs.IntVar(&c.port, "port", server.DefaultPort, "serve: port on 127.0.0.1")
+	fs.BoolVar(&c.open, "open", false, "serve: open the browser")
+	fs.BoolVar(&c.pdf, "pdf", false, "export: write a PDF")
+	fs.BoolVar(&c.svg, "svg", false, "export: write the graph as SVG")
+	fs.BoolVar(&c.page, "page", false, "export: whole page (default)")
+	fs.BoolVar(&c.snippet, "snippet", false, "export: only the graph and details panel")
+	fs.StringVar(&c.around, "around", "", "export: entity to center on")
+	fs.StringVar(&c.context, "context", "", "export: context to show")
+	fs.StringVar(&c.table, "table", "", "export: table to show")
+	fs.StringVar(&c.annotation, "annotation", "", "export: annotation (journey, investigation, note) to show")
+	fs.StringVar(&c.out, "o", "", "export: output file")
 	return fs
 }
 
@@ -167,7 +198,31 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 			return err
 		}
 		defer s.Close()
-		return mcpserver.Serve(ctx, mcpserver.StoreOptions(version, s))
+		o := mcpserver.StoreOptions(version, s)
+		o.Extra = mcpserver.EmbedTool
+		return mcpserver.Serve(ctx, o)
+	case "serve":
+		s, err := openStore(&c)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		return serve(ctx, w, s, &c)
+	case "diff":
+		if err := need(2, "base and head snapshot ids"); err != nil {
+			return err
+		}
+		s, err := openStore(&c)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		out, err := render.Diff(ctx, s, pos[0], pos[1])
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(w, out)
+		return err
 	case "snapshots":
 		s, err := openStore(&c)
 		if err != nil {
@@ -195,6 +250,25 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 	}
 	if err != nil {
 		return err
+	}
+	switch cmd {
+	case "mermaid", "embed":
+		if err := need(1, "a ref"); err != nil {
+			return err
+		}
+		var out string
+		if cmd == "mermaid" {
+			out, err = render.Mermaid(ctx, q, pos[0], c.depth, c.max)
+		} else {
+			out, err = render.Embed(ctx, q, pos[0])
+		}
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(w, out)
+		return err
+	case "export":
+		return exportCmd(ctx, w, s, q, &c)
 	}
 	d, err := Dispatch(ctx, q, cmd, pos, Opts{Depth: c.depth, Limit: c.limit, Offset: c.offset})
 	if err != nil {
