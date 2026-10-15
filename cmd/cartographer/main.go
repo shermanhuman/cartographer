@@ -23,6 +23,7 @@ import (
 	"github.com/shermanhuman/cartographer/internal/store"
 	"github.com/shermanhuman/cartographer/internal/userconfig"
 	"github.com/shermanhuman/cartographer/internal/workspace"
+	"github.com/shermanhuman/cartographer/plugins"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -54,6 +55,7 @@ Building (in a workspace with cartographer.toml):
                               snapshot every repo and run its extractor plugins
   publish <snapshot-dir>      pack and publish as a GitHub release, prune old ones
   validate-facts <file>...    check extractor plugin output (facts v1)
+  plugins-dir                 print the directory of the bundled extractor plugins
 
 Agents:
   mcp                         stdio MCP server exposing the queries as map_* tools
@@ -229,7 +231,13 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		if out == "" {
 			out = filepath.Join(cfg.Dir(), ".cartographer", "snapshots", fmt.Sprintf("build-%d", os.Getpid()))
 		}
-		m, err := workspace.Build(ctx, cfg, workspace.BuildOptions{Out: out, PluginsDir: c.plugins, Refs: c.refs, Log: os.Stderr})
+		pluginsDir := c.plugins
+		if pluginsDir == "" {
+			if pluginsDir, err = plugins.Extract(workspace.DefaultCacheDir()); err != nil {
+				return err
+			}
+		}
+		m, err := workspace.Build(ctx, cfg, workspace.BuildOptions{Out: out, PluginsDir: pluginsDir, Refs: c.refs, Log: os.Stderr})
 		if err != nil {
 			return err
 		}
@@ -274,6 +282,13 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(w, "published %s to %s (%d bytes); pruned %d old snapshot(s)\n", b.Manifest.ID, cfg.Publish, buf.Len(), n)
+		return nil
+	case "plugins-dir":
+		dir, err := plugins.Extract(workspace.DefaultCacheDir())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(w, dir)
 		return nil
 	case "workspace":
 		if len(pos) < 2 || pos[0] != "add" {

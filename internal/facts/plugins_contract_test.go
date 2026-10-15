@@ -94,9 +94,6 @@ func TestElixirPluginContract(t *testing.T) {
 }
 
 func TestJavaScriptPluginContract(t *testing.T) {
-	if _, err := os.Stat(filepath.Join(repoRoot, "plugins/extract-javascript/node_modules/acorn")); err != nil {
-		t.Skip("acorn not installed; run `mise exec -- npm ci --ignore-scripts --prefix plugins/extract-javascript`")
-	}
 	d := runPlugin(t, "node", "plugins/extract-javascript/extract.mjs",
 		"--repo", "shop", "--root", "plugins/extract-javascript/test/fixture")
 

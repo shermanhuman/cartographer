@@ -140,6 +140,8 @@ func (c *Config) RepoPath(r Repo) string {
 
 // Template is written by `cartographer init`.
 const Template = `# cartographer workspace: the repositories one system map covers.
+# Plugins run in this directory, so pin their runtimes here (e.g. a mise.toml
+# with erlang/elixir/node). {plugins} is the bundled plugin directory.
 name = "my-project"
 # GitHub repository whose releases hold published snapshots (owner/name).
 publish = "my-org/my-project-map"
@@ -157,7 +159,11 @@ plugins = ["elixir"]
 
 [plugins.elixir]
 version = "0.1.0"
-command = ["elixir", "{plugins}/extract-elixir/extract.exs", "--repo", "{repo}", "--root", "{root}", "--revision", "{revision}", "--schema-facts", "{schema_facts}"]
+command = ["elixir", "{plugins}/extract-elixir/extract.exs", "--repo", "{repo}", "--root", "{root}", "--revision", "{revision}", "--source-roots", "lib,test", "--schema-facts", "{schema_facts}"]
+
+# [plugins.javascript]
+# version = "0.1.0"
+# command = ["node", "{plugins}/extract-javascript/extract.mjs", "--repo", "{repo}", "--root", "{root}", "--revision", "{revision}"]
 
 # Optional: database schema from migrations run against a disposable database.
 # [schema]

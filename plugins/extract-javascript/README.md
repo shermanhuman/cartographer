@@ -2,10 +2,9 @@
 
 Writes one [facts v1](../../docs/facts-format.md) document that inventories
 a repository's JavaScript to stdout. [Acorn](https://github.com/acornjs/acorn)
-(pinned in `package.json`) parses the code; project code is never run.
+(8.15.0, vendored in `vendor/acorn.mjs`, MIT) parses the code; project code is never run.
 
 ```bash
-mise exec -- npm ci --ignore-scripts --prefix plugins/extract-javascript
 mise exec -- node plugins/extract-javascript/extract.mjs \
   --repo shop-app --root /path/to/snapshot [--revision "$SHA"] [--source-roots assets/js]
 ```

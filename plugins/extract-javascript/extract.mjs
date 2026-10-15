@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {parse} from 'acorn';
+import {parse} from './vendor/acorn.mjs'; // acorn 8.15.0, MIT (vendor/ACORN-LICENSE)
 
 export const VERSION = '0.1.0';
 const EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
