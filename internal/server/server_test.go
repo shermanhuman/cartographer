@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,9 +13,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/shermanhuman/cartographer/internal/query"
 	"github.com/shermanhuman/cartographer/internal/store"
 )
 
@@ -427,5 +430,185 @@ func TestJSContracts(t *testing.T) {
 	}
 	if m := regexp.MustCompile(`skipped (\d+)`).FindStringSubmatch(string(out)); m == nil || m[1] != "0" {
 		t.Errorf("UI contract tests were skipped despite CARTOGRAPHER_URL:\n%s", out)
+	}
+}
+
+// fixtureWith copies the fixture snapshot and adds files (relative path →
+// content), returning the copy's directory.
+func fixtureWith(t *testing.T, extra map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	err := filepath.WalkDir(fixture, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(fixture, p)
+		if d.IsDir() {
+			return os.MkdirAll(filepath.Join(dir, rel), 0o755)
+		}
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, rel), raw, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel, content := range extra {
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// Authored fields beyond the generic shape reach the UI unchanged.
+func TestAnnotationsPassAuthoredFields(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	dir := fixtureWith(t, map[string]string{"annotations/tables.json": `{"annotations": [
+	  {"kind": "table-note", "id": "table:orders", "title": "orders", "summary": "One order per checkout.",
+	   "cites": ["public.orders"], "role": "Source of truth", "rule": "Never delete an order."},
+	  {"kind": "overview", "id": "system", "title": "At a glance", "summary": "Start here.", "body": "Two repositories.",
+	   "services": [{"id": "s:shop", "repo": "shop-app", "summary": "The storefront."}]}
+	]}`})
+	if _, err := s.Import(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(Options{Store: s}))
+	t.Cleanup(srv.Close)
+	anns := byID(getJSON[[]obj](t, srv, "/api/annotations"))
+	j := anns["checkout"]
+	if g := list(j["groups"]); len(g) != 1 || asObj(g[0])["label"] != "1 · Buy" {
+		t.Errorf("journey groups not passed through: %v", j["groups"])
+	}
+	place := asObj(list(j["steps"])[0])
+	if place["group"] != "buy" || place["outcome"] != "An order row exists." || place["status"] != "needs_review" {
+		t.Errorf("step fields not passed through: %v", place)
+	}
+	note := anns["table:orders"]
+	if note["role"] != "Source of truth" || note["rule"] != "Never delete an order." || list(note["cites"])[0] != "public.orders" {
+		t.Errorf("table note: %v", note)
+	}
+	ov := anns["system"]
+	if ov["body"] != "Two repositories." || asObj(list(ov["services"])[0])["summary"] != "The storefront." {
+		t.Errorf("overview: %v", ov)
+	}
+	// The entity view of an annotation carries the same fields.
+	if e := getJSON[obj](t, srv, "/api/entity/ann:table:orders"); e["rule"] != "Never delete an order." {
+		t.Errorf("annotation entity: %v", e)
+	}
+	// The table cites list the note, matched exactly.
+	tbl := getJSON[obj](t, srv, "/api/entity/public.orders")
+	found := false
+	for _, a := range list(tbl["annotations"]) {
+		found = found || asObj(a)["annotation"] == "table:orders"
+	}
+	if !found {
+		t.Errorf("public.orders annotations: %v", tbl["annotations"])
+	}
+}
+
+// annotationsCiting matches the quoted id exactly: "_" is not a wildcard.
+func TestAnnotationsCitingExact(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	ctx := context.Background()
+	if _, err := s.Import(ctx, fixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO annotations (snapshot_id, id, kind, title, body, status) VALUES (?, 'n1', 'note', 'n', '{"cites": ["public.orderXitems"]}', 'unreviewed'), (?, 'n2', 'note', 'n', '{"cites": ["public.order_items"]}', 'unreviewed')`, snap, snap); err != nil {
+		t.Fatal(err)
+	}
+	q := &query.Q{S: s, Snapshot: snap}
+	got, err := annotationsCiting(ctx, q, "public.order_items")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0]["annotation"] != "n2" {
+		t.Errorf("annotationsCiting(public.order_items) = %v, want only n2", got)
+	}
+}
+
+// The default snapshot is computed once per set of snapshots, not per
+// request, and /api/status reports it.
+func TestDefaultSnapshotMemoized(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	ctx := context.Background()
+	if _, err := s.Import(ctx, fixture); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	srv := httptest.NewServer(New(Options{Store: s, Default: func(context.Context) (string, error) {
+		calls.Add(1)
+		return snap, nil
+	}}))
+	t.Cleanup(srv.Close)
+	for range 3 {
+		if st := getJSON[obj](t, srv, "/api/status"); st["snapshot"] != snap || st["default_snapshot"] != snap {
+			t.Fatalf("status: %v", st)
+		}
+	}
+	getJSON[[]obj](t, srv, "/api/annotations")
+	if n := calls.Load(); n != 1 {
+		t.Errorf("Default ran %d times for 4 requests, want 1", n)
+	}
+	// A newly imported snapshot invalidates the cached answer.
+	if _, err := s.Import(ctx, fixtureWith(t, map[string]string{"manifest.json": newerManifest(t)})); err != nil {
+		t.Fatal(err)
+	}
+	st := getJSON[obj](t, srv, "/api/status?snapshot=snapshot-20261016T120000Z")
+	if st["snapshot"] != "snapshot-20261016T120000Z" || st["default_snapshot"] != snap {
+		t.Errorf("status with an explicit snapshot: %v", st)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("Default ran %d times after an import, want 2", n)
+	}
+}
+
+func newerManifest(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(fixture, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["id"], m["created_at"] = "snapshot-20261016T120000Z", "2026-10-16T12:00:00Z"
+	out, _ := json.Marshal(m)
+	return string(out)
+}
+
+func TestNoDirectoryListing(t *testing.T) {
+	srv := newServer(t, true)
+	for _, p := range []string{"/assets/", "/assets", "/scripts/"} {
+		get(t, srv, p, 404)
+	}
+	get(t, srv, "/", 200)
+	get(t, srv, "/assets/elixir.svg", 200)
+}
+
+func TestServerErrorsAreLogged(t *testing.T) {
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	rec := httptest.NewRecorder()
+	writeError(rec, http.StatusInternalServerError, "database is locked")
+	writeError(httptest.NewRecorder(), http.StatusNotFound, "no entity")
+	if !strings.Contains(buf.String(), "500: database is locked") || strings.Contains(buf.String(), "no entity") {
+		t.Errorf("log: %q", buf.String())
 	}
 }

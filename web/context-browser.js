@@ -1,6 +1,6 @@
 // Contexts: module clusters by namespace, with the tables their code
 // mentions and the docs that mention their modules.
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+import {esc} from './util.js';
 export function createContextBrowser({host,contexts,byId,selectContext,openEntity}){
   let query='',current='';
   const map=new Map(contexts.map(c=>[c.id,c]));

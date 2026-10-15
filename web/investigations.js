@@ -1,21 +1,29 @@
 // Investigations come from /api/annotations (kind "investigation"): each
-// step is a checkpoint question (title) and answer (body); a checkpoint opens
-// the first entity it cites.
+// checkpoint is a question and answer. Authors write them as steps (title,
+// body, cites; a checkpoint opens the first entity it cites) or as checks
+// (question, answer, and the journey view and step a checkpoint opens).
+import {esc, text, array, objects} from './util.js';
+import {journeys} from './journey-model.js';
 export const investigations = Object.create(null);
 export function setInvestigations(list) {
   for (const key of Object.keys(investigations)) delete investigations[key];
   for (const a of list || []) {
     if (a?.kind !== 'investigation' || !a.id) continue;
-    const steps = a.steps?.length ? a.steps : [{id: a.id, title: a.title, body: a.body, cites: a.cites, status: a.status}];
-    investigations[a.id] = {title: a.title || a.id, basis: a.summary || '', finding: a.body || '', status: a.status || 'unreviewed', checks: steps.map(s => ({id: s.id, question: s.title || s.id, answer: s.body || '', cites: s.cites || [], status: s.status || 'unreviewed'}))};
+    const checks = objects(a.checks);
+    const steps = a.steps?.length ? a.steps : checks.length ? [] : [{id: a.id, title: a.title, body: a.body, cites: a.cites, status: a.status}];
+    investigations[a.id] = {title: a.title || a.id, basis: text(a.basis) || a.summary || '', finding: a.body || a.summary || '', status: a.status || 'unreviewed', checks: [
+      ...steps.map(s => ({id: s.id, question: s.title || s.id, answer: s.body || '', cites: s.cites || [], status: s.status || 'unreviewed'})),
+      ...checks.map((c, i) => ({id: String(i), question: text(c.question) || text(c.title), answer: text(c.answer) || text(c.body), cites: array(c.cites).filter(x => typeof x === 'string'), view: text(c.view), step: text(c.step), status: a.status || 'unreviewed'})),
+    ]};
   }
 }
-const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clamp=(index,item)=>Number.isFinite(index)?Math.max(0,Math.min(Math.trunc(index),item.checks.length-1)):0;
 export function investigationState(id,index=0){
   const item=Object.hasOwn(investigations,id)?investigations[id]:null;if(!item||!item.checks.length)return null;
   index=clamp(index,item);
-  const target=item.checks[index].cites[0]||'';
+  const check=item.checks[index];
+  if(check.view&&Object.hasOwn(journeys,check.view))return {view:check.view,context:check.view,step:check.step||'',entity:'',focus:'',investigation:id,checkpoint:index};
+  const target=check.cites[0]||'';
   return target?{view:'entity',entity:target,focus:target,investigation:id,checkpoint:index}:{view:'home',entity:'',focus:'',investigation:id,checkpoint:index};
 }
 export function investigationHTML(state){

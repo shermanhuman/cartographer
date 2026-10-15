@@ -1,11 +1,12 @@
 // Journeys and investigations are generic annotations. The model tests run
 // on the fixture's annotation file; the contract test needs CARTOGRAPHER_URL.
-// The admin-specific checks (journeys.json vs journey-data.js, domains,
+// The admin-specific checks (journeys.json vs journey-data.js,
 // test mappings, the three hard-coded investigations) were dropped with that data.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {journeys, setJourneys, resolveJourney, resolveStep} from '../journey-model.js';
+import {journeys, domains, setJourneys, setDomains, resolveJourney, resolveStep} from '../journey-model.js';
+import {esc} from '../util.js';
 import {investigations, setInvestigations, investigationState, investigationHTML} from '../investigations.js';
 const fixture = new URL('../../testdata/workspace-mini/snapshot/annotations/journeys.json', import.meta.url);
 const annotations = JSON.parse(fs.readFileSync(fixture)).annotations;
@@ -27,6 +28,60 @@ test('journeys load from annotations; reserved view names and other kinds are ig
   assert.equal(journeys.note.steps[0].id, 'note');
   assert.equal(journeys.checkout, undefined, 'setJourneys replaces the previous set');
   setJourneys(annotations);
+});
+
+test('authored journey fields reach the model: groups, edges and step details', () => {
+  const authored = {kind: 'journey', id: 'sync', title: 'Sync', scope: 'One path only.',
+    groups: [{id: 'write', label: '1 · Write', note: 'Source first'}, {id: 'nothing', label: 'Empty'}],
+    edges: [{from: 'a', to: 'b', type: 'enqueue', label: 'marks work'}, {from: 'a', to: 'gone', label: 'dangling'}],
+    steps: [
+      {id: 'a', title: 'Save', cites: ['public.orders'], group: 'write', owner: 'Adapter', mode: 'Source writes', boundary: 'No transaction',
+       outcome: 'Rows commit', unknown: 'Other writers', risks: [{title: 'Crash', body: 'Marker lost'}, 'Plain risk'],
+       data: [{verb: 'writes', entity: 'public.orders', meaning: 'Upsert'}, {verb: 'x'}, 'bad'], tests: [{file: 't.exs', line: 4, label: 'Retry'}]},
+      {id: 'b', title: 'Queue', status: 'reviewed'}]};
+  setJourneys([authored]);
+  const j = journeys.sync;
+  assert.deepEqual(j.groups, [{id: 'write', label: '1 · Write', note: 'Source first'}, {id: 'nothing', label: 'Empty', note: ''}]);
+  assert.deepEqual(j.edges, [{from: 'a', to: 'b', type: 'enqueue', label: 'marks work'}], 'edges to unknown steps are dropped');
+  assert.equal(j.about, 'One path only.');
+  const [a, b] = j.steps;
+  assert.equal(a.group, 'write'); assert.equal(a.owner, 'Adapter'); assert.equal(a.mode, 'Source writes');
+  assert.equal(a.boundary, 'No transaction'); assert.equal(a.outcome, 'Rows commit'); assert.equal(a.unknown, 'Other writers');
+  assert.deepEqual(a.risks, [{title: 'Crash', body: 'Marker lost'}, {title: 'Plain risk', body: ''}]);
+  assert.deepEqual(a.data, [{verb: 'writes', entity: 'public.orders', meaning: 'Upsert'}]);
+  assert.deepEqual(a.tests, [{label: 'Retry', file: 't.exs', line: 4}]);
+  assert.deepEqual([b.group, b.risks, b.data, b.tests, b.status], ['', [], [], [], 'reviewed']);
+  setJourneys(annotations);
+  assert.equal(journeys.checkout.steps[0].group, 'buy');
+  assert.equal(journeys.checkout.steps[0].outcome, 'An order row exists.');
+  assert.deepEqual(journeys.checkout.groups.map(g => g.id), ['buy']);
+});
+
+test('table notes give tables their meaning, keyed by the cited table', () => {
+  setDomains([{kind: 'table-note', id: 'table:orders', title: 'orders', summary: 'One per checkout', cites: ['public.orders'], role: 'Source', rule: 'Never delete', status: 'needs_review', reasons: ['missing: public.orders']},
+    {kind: 'table-note', id: 'dup', cites: ['public.orders'], role: 'Second'}, {kind: 'table-note', id: 'none'}, {kind: 'journey', id: 'j', cites: ['public.users']}]);
+  assert.deepEqual(Object.keys(domains), ['public.orders']);
+  assert.deepEqual(domains['public.orders'], {id: 'table:orders', title: 'orders', role: 'Source', rule: 'Never delete', meaning: 'One per checkout', body: '', status: 'needs_review', reasons: ['missing: public.orders']});
+  setDomains([]);
+  assert.deepEqual(Object.keys(domains), []);
+});
+
+test('investigations authored as checks open their journey step', () => {
+  setJourneys([{kind: 'journey', id: 'sync', title: 'Sync', steps: [{id: 'source', title: 'Save'}, {id: 'queue', title: 'Queue'}]}]);
+  setInvestigations([{kind: 'investigation', id: 'missed', title: 'Edit missing', summary: 'Short', basis: 'Source-confirmed',
+    checks: [{view: 'sync', step: 'queue', question: 'Was it marked?', answer: 'Not always.'}, {view: 'nowhere', question: 'Q2', answer: 'A2'}]}]);
+  const i = investigations.missed;
+  assert.equal(i.basis, 'Source-confirmed');
+  assert.deepEqual(i.checks.map(c => c.question), ['Was it marked?', 'Q2']);
+  assert.deepEqual(investigationState('missed', 0), {view: 'sync', context: 'sync', step: 'queue', entity: '', focus: '', investigation: 'missed', checkpoint: 0});
+  assert.equal(investigationState('missed', 1).view, 'home', 'an unknown journey falls back to home');
+  assert.match(investigationHTML({investigation: 'missed', checkpoint: 0}), /Not always\./);
+  setJourneys(annotations);
+});
+
+test('esc escapes every HTML-significant character', () => {
+  assert.equal(esc(`<a href="x" title='y'>&</a>`), '&lt;a href=&quot;x&quot; title=&#39;y&#39;&gt;&amp;&lt;/a&gt;');
+  assert.equal(esc(null), ''); assert.equal(esc(0), '0');
 });
 
 test('deep links retain a valid journey and recover stale step IDs', () => {

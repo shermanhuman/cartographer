@@ -15,13 +15,13 @@ import (
 type EmbedIn struct {
 	Ref   string `json:"ref" jsonschema:"id, label (Mod.fun/2, public.users) or search words"`
 	Kind  string `json:"kind,omitempty" jsonschema:"markdown (default: issue-ready summary + diagram + pinned source links) or mermaid (diagram only)"`
-	Depth int    `json:"depth,omitempty" jsonschema:"caller/callee levels in the diagram, default 1"`
-	Max   int    `json:"max,omitempty" jsonschema:"max diagram nodes, default 40"`
+	Depth int    `json:"depth,omitempty" jsonschema:"caller/callee levels in the diagram, 1-5, default 1"`
+	Max   int    `json:"max,omitempty" jsonschema:"max diagram nodes, 1-200, default 40"`
 }
 
 // EmbedTool registers map_embed; pass it as Options.Extra.
 func EmbedTool(s *mcp.Server, prepare func(ctx context.Context) (*query.Q, error)) {
-	mcp.AddTool(s, &mcp.Tool{Name: "map_embed", Description: "Ready-to-post GitHub Markdown for an issue or PR comment: summary table, Mermaid call graph (≤40 nodes) and source links pinned to the snapshot revisions. kind=mermaid returns only the diagram."},
+	mcp.AddTool(s, &mcp.Tool{Name: "map_embed", Description: "Ready-to-post GitHub Markdown for an issue or PR comment: summary table, Mermaid call graph (40 nodes by default, at most 200; output stays under 60,000 characters) and source links pinned to the snapshot revisions. kind=mermaid returns only the diagram."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in EmbedIn) (*mcp.CallToolResult, any, error) {
 			q, err := prepare(ctx)
 			if err != nil {

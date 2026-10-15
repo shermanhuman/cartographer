@@ -1,7 +1,7 @@
 // Print and export helpers: a standalone SVG of the live graph (edges from
 // the live <svg> with computed styles inlined, nodes redrawn as SVG) and the
 // provenance footer every export carries.
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+import {esc} from './util.js';
 const trunc=(s,n)=>{s=String(s??'');return s.length>n?s.slice(0,n-1)+'…':s};
 const STYLE=['fill','stroke','stroke-width','stroke-dasharray','stroke-linejoin','stroke-linecap','paint-order','font-size','font-family','font-weight','opacity'];
 const FONT='-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif';
