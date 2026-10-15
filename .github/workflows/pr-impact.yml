@@ -23,9 +23,14 @@ on:
         type: string
         default: postgres:18
     secrets:
+      app-id:
+        description: GitHub App id; with app-private-key, mints a token that can read the workspace repository and every repository it lists.
+        required: false
+      app-private-key:
+        required: false
       repo-token:
-        description: Token that can read the workspace repository and every repository it lists.
-        required: true
+        description: Alternative to the App.
+        required: false
 jobs:
   impact:
     if: github.event.pull_request.draft == false
@@ -45,16 +50,25 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
     env:
+      HAS_APP: ${{ secrets.app-id != '' }}
       PGHOST: 127.0.0.1
       PGUSER: postgres
       PGPASSWORD: postgres
       CARTOGRAPHER_NO_PULL: "1"
-      GH_TOKEN: ${{ secrets.repo-token }}
     steps:
+      - id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+      - name: Token
+        run: echo "GH_TOKEN=${{ steps.app.outputs.token || secrets.repo-token }}" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7.0.1
         with:
           repository: ${{ inputs.workspace }}
-          token: ${{ secrets.repo-token }}
+          token: ${{ steps.app.outputs.token || secrets.repo-token }}
           path: workspace
       - uses: jdx/mise-action@v5.1.2
         with:

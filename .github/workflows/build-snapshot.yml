@@ -16,8 +16,13 @@ on:
         type: string
         default: postgres:18
     secrets:
+      app-id:
+        description: GitHub App id; with app-private-key, mints a token that can read every repository in the workspace.
+        required: false
+      app-private-key:
+        required: false
       repo-token:
-        description: Token that can read every repository in the workspace (e.g. a GitHub App installation token). Defaults to github.token.
+        description: "Alternative to the App: a token that can read every repository in the workspace. Defaults to github.token."
         required: false
 jobs:
   build:
@@ -33,12 +38,20 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
     env:
+      HAS_APP: ${{ secrets.app-id != '' }}
       PGHOST: 127.0.0.1
       PGUSER: postgres
       PGPASSWORD: postgres
       CARTOGRAPHER_NO_PULL: "1"
     steps:
       - uses: actions/checkout@v7.0.1
+      - id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
       - uses: jdx/mise-action@v5.1.2
         with:
           working_directory: ${{ inputs.workspace-path }}
@@ -53,7 +66,7 @@ jobs:
       - name: Build
         working-directory: ${{ inputs.workspace-path }}
         env:
-          GH_TOKEN: ${{ secrets.repo-token || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.repo-token || github.token }}
         run: cartographer build --fetch --out "$RUNNER_TEMP/snapshot"
       - name: Publish
         working-directory: ${{ inputs.workspace-path }}
