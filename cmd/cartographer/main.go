@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/shermanhuman/cartographer/internal/facts"
+	"github.com/shermanhuman/cartographer/internal/mcpserver"
 	"github.com/shermanhuman/cartographer/internal/output"
 	"github.com/shermanhuman/cartographer/internal/query"
 	"github.com/shermanhuman/cartographer/internal/store"
@@ -38,6 +39,9 @@ Snapshots:
   import <dir>                import a snapshot directory
   snapshots                   list imported snapshots
   validate-facts <file>...    check extractor plugin output (facts v1)
+
+Agents:
+  mcp                         stdio MCP server exposing the queries as map_* tools
 
 Other:
   version
@@ -157,6 +161,13 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		}
 		fmt.Fprintln(w, "imported", id)
 		return nil
+	case "mcp":
+		s, err := openStore(&c)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		return mcpserver.Serve(ctx, mcpserver.StoreOptions(version, s))
 	case "snapshots":
 		s, err := openStore(&c)
 		if err != nil {
