@@ -8,6 +8,7 @@ Use it before grep or reading files when the question is about structure:
 - a table's columns, keys and the code that mentions it → map_table
 - a subsystem's modules, tables, docs → map_context
 - freshness of the map → map_status
+- post it to an issue or PR → map_embed (Markdown + Mermaid, pinned links)
 
 Refs may be ids (repo:Mod.fun/2), labels (Mod.fun/2, Mod.fun, public.users) or words. On a miss, map_find returns the map's own vocabulary: retry with those words, don't invent synonyms.
 

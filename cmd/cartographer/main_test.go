@@ -31,6 +31,9 @@ func TestCLIEndToEnd(t *testing.T) {
 		"find billing":                          "MOD shop-app:Shop.Billing",
 		"table orders --format json":            `"TBL public.orders"`,
 		"status":                                "7 functions",
+		"mermaid Shop.Orders.total/1 --max 2":   "+1 more → cartographer impact shop-app:Shop.Orders.total/1",
+		"embed public.orders":                   "```mermaid\ngraph LR",
+		"diff snapshot-20261015T120000Z snapshot-20261015T120000Z": "## cartographer impact",
 	} {
 		if out := cli(t, db, strings.Fields(args)...); !strings.Contains(out, want) {
 			t.Errorf("%s: missing %q in\n%s", args, want, out)
@@ -118,5 +121,22 @@ command = ["cat", "`+fixture+`"]
 	var buf bytes.Buffer
 	if err := run(context.Background(), []string{"mapped", "--db", db, "--no-pull"}, &buf); err != errNotMapped {
 		t.Errorf("outside a repo: %v", err)
+	}
+}
+
+func TestExportFlagsValidated(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "carto.db")
+	cli(t, db, "import", "../../testdata/workspace-mini/snapshot")
+	for _, args := range [][]string{
+		{"export", "--around", "Shop.Orders.total/1", "-o", "x.pdf"},
+		{"export", "--pdf", "--svg", "--around", "x", "-o", "x"},
+		{"export", "--pdf", "--around", "Shop.Orders.total/1"},
+		{"export", "--pdf", "-o", filepath.Join(t.TempDir(), "x.pdf")},
+		{"serve", "--port", "-1"},
+	} {
+		var out bytes.Buffer
+		if err := run(context.Background(), append(args, "--db", db), &out); err == nil {
+			t.Errorf("%v: want an error", args)
+		}
 	}
 }

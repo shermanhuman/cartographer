@@ -1,0 +1,4 @@
+Technology SVGs were rendered locally from @likec4/icons 1.46.4, MIT licensed.
+https://github.com/likec4/likec4/tree/v1.46.4/packages/icons
+Copyright (c) 2023-2025 Denis Davydkov. See ICON-LICENSE.txt.
+Product names and marks belong to their respective owners.

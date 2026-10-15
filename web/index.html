@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>System Map · cartographer</title><link rel="icon" href="assets/github.svg"><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="browser.css"><link rel="stylesheet" href="journey.css"><link rel="stylesheet" href="export.css"></head>
+<body>
+<aside class="sidebar">
+  <a class="brand" href="#view=home"><span class="brand-mark">c<span>·</span></span><span>cartographer<small>SYSTEM MAP</small></span></a>
+  <div class="workspace-label">WORKSPACE <span id="workspace-name"></span></div>
+  <nav aria-label="System map navigation">
+    <button class="nav-item active" data-view="home"><span>⌘</span>System overview</button>
+    <div id="journey-nav" hidden><div class="nav-caption">JOURNEYS</div></div>
+    <div class="nav-caption">EXPLORE</div>
+    <button class="nav-item" data-view="modules"><span>▧</span>Code explorer</button>
+    <button class="nav-item" data-view="tables"><span>▤</span>Data structure</button>
+    <button class="nav-item" data-view="contexts"><span>◫</span>Contexts</button>
+  </nav>
+  <div class="sidebar-bottom"><div class="snapshot-dot"></div><strong>Imported snapshot</strong><p id="sidebar-snapshot">Local store · served on 127.0.0.1 only</p><button class="text-link" id="provenance">View sources & limitations ↗</button></div>
+</aside>
+<div class="app">
+  <header class="topbar"><div class="product-name"><span id="workspace-title">Workspace</span> <span>/</span> <strong>System Map</strong></div><button id="search-open" class="search-launch"><span>⌕</span> Find a function, table, or module <kbd>⌘ K</kbd></button><label class="snapshot-picker"><span>Snapshot</span><select id="snapshot-picker" aria-label="Snapshot"></select></label></header>
+  <div class="freshness"><span class="snapshot-dot"></span><strong id="freshness-title">Imported snapshot</strong><span class="freshness-detail">Loading provenance…</span><button id="source-button">Sources & freshness ↗</button></div>
+  <main>
+    <div class="page-heading"><div><div id="breadcrumbs" class="breadcrumbs"></div><h1 id="title">The system, at a glance</h1><p id="subtitle">Loading the map…</p></div><div class="heading-actions"><button id="copy-link" class="secondary">Copy link ↗</button><button id="copy-embed" class="secondary" title="Copy GitHub Markdown (summary, Mermaid diagram, pinned links) for the selected entity">Copy embed</button><span class="export-group"><select id="export-mode" aria-label="PDF scope"><option value="page">Page</option><option value="snippet">Snippet</option></select><button id="save-pdf" class="secondary">Save as PDF</button></span><button id="download-svg" class="secondary">Download SVG</button></div></div>
+    <div id="context-strip" class="context-strip" hidden></div>
+    <section id="journeys" class="journeys" aria-label="Suggested exploration"></section>
+    <div id="investigation-host"></div>
+    <div class="toolbar"><div id="toolbar-note" class="toolbar-note"></div><div class="toolbar-right"><span id="entity-count"></span><button id="list-toggle" class="secondary">List view</button></div></div>
+    <div class="workbench">
+      <section class="map-panel" aria-label="Interactive architecture map">
+        <div class="map-caption"><span id="map-scope">SYSTEM OVERVIEW</span><span id="map-type">REPOSITORIES</span></div>
+        <div id="canvas" class="canvas"><div id="stage" class="stage"></div></div>
+        <div id="print-graph" class="print-graph"></div>
+        <div id="list-view" class="list-view" hidden></div>
+        <div id="journey-host" hidden></div>
+        <div id="file-browser-host" class="browser-host" hidden></div>
+        <div id="schema-browser-host" class="browser-host" hidden></div>
+        <div id="context-browser-host" class="browser-host" hidden></div>
+        <div class="map-controls"><button id="zoom-out" aria-label="Zoom out">−</button><span id="zoom-level">100%</span><button id="zoom-in" aria-label="Zoom in">+</button><span class="divider"></span><button id="fit" aria-label="Fit map">Fit</button></div>
+        <button id="minimap" class="minimap" aria-label="Fit whole map"></button>
+        <div class="legend" aria-label="Edge precision"><span><i class="legend-line precise"></i>precise</span><span><i class="legend-line heuristic"></i>heuristic</span><span><i class="legend-line candidate"></i>candidate</span><span>Click to inspect · double-click to open · drag background to pan</span></div>
+      </section>
+      <aside class="inspector" aria-label="Selected entity details"><div id="inspector-header"></div><div id="inspector-tabs" class="inspector-tabs"></div><div id="inspector-content" class="inspector-content"></div></aside>
+    </div>
+    <div class="below-map"><div id="map-note" class="map-note"></div><div id="pagination"></div></div>
+  </main>
+  <footer><span>Generated structure. Reviewed context. Explicit unknowns.</span><span id="footer-counts"></span></footer>
+  <div id="export-footer" class="export-footer"></div>
+</div>
+<dialog id="search-dialog"><form method="dialog" class="search-form"><span>⌕</span><input id="global-search" type="search" placeholder="Try a module, function or table name…" aria-label="Search all map entities" autocomplete="off"><button aria-label="Close search">Esc</button></form><div class="search-filters"><button data-search-kind="all" class="selected">All</button><button data-search-kind="module">Modules</button><button data-search-kind="function">Functions</button><button data-search-kind="table">Tables</button><button data-search-kind="context">Contexts</button></div><div id="search-results" role="region" aria-live="polite"></div><div class="search-footer">Search spans every repository in the selected snapshot.</div></dialog>
+<dialog id="sources-dialog"><div class="dialog-head"><h2>Sources & freshness</h2><button id="close-sources" aria-label="Close sources">✕</button></div><div id="sources-content"></div></dialog>
+<div id="toast" class="toast" role="status"></div>
+<script type="module" src="app.js"></script>
+</body></html>

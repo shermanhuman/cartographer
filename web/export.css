@@ -1,0 +1,43 @@
+/* cartographer additions: snapshot picker, precision legend, export actions and the print view. */
+.snapshot-picker{display:flex;align-items:center;gap:6px;font-size:10px;color:#71808c;white-space:nowrap}.snapshot-picker select{max-width:240px;border:1px solid var(--line);border-radius:5px;background:#fafbfb;padding:6px 8px;font-size:10px;color:var(--ink)}
+.heading-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center}.export-group{display:inline-flex}.export-group select{border:1px solid #dbe3e0;border-right:0;border-radius:5px 0 0 5px;background:#fff;font-size:10px;padding:6px 4px;color:#61726b}.export-group .secondary{border-radius:0 5px 5px 0}
+.toolbar-note{font-size:9px;color:#8a9695}
+.edges path.p-heuristic{stroke-dasharray:6 4}.edges path.p-candidate{stroke-dasharray:2 4;stroke:#c3b48f}
+.legend-line.heuristic{border-top-style:dashed}.legend-line.candidate{border-top:2px dotted #c3b48f}
+.step-number{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#e6f0ea;color:#4c7a62;font-size:10px;font-weight:600;flex-shrink:0}
+.inspector .text-link.inline{color:var(--green);font-size:10px}
+.journey-review-warning .text-link,.investigation-panel .text-link{color:#7a6533}
+.relationship-row{text-decoration:none;color:inherit}
+.export-footer,.print-graph{display:none}
+@media(max-width:1250px){.heading-actions .secondary,.export-group select{font-size:9px;padding:6px 7px}.snapshot-picker>span{display:none}}
+@media(max-width:650px){.page-heading{flex-direction:column;align-items:flex-start}.heading-actions{justify-content:flex-start}.snapshot-picker{display:none}}
+
+@media print{
+  @page{size:A4 landscape;margin:10mm}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{background:#fff;font-size:11px}
+  .sidebar,.topbar,.toolbar,.map-controls,.minimap,.heading-actions,.toast,footer,dialog,#pagination,.inspector-tabs,.inspector-tools,.canvas,.list-view{display:none!important}
+  .app{margin-left:0}
+  main{padding:0}
+  .freshness{padding:6px 0;background:none;border:0}
+  .freshness button{display:none}
+  .page-heading{margin-bottom:10px}
+  h1{font-size:20px}
+  .workbench{grid-template-columns:minmax(0,1fr) 250px;gap:10px;align-items:start}
+  .print-graph svg,.map-node,.inspector-link,.relationship-row,.flow-step{break-inside:avoid}
+  .workbench.browsing,.workbench.journey-mode{grid-template-columns:minmax(0,1fr) 220px}
+  .map-panel,.inspector{height:auto!important;max-height:none!important;min-height:0;overflow:visible;border-color:#d0d8d4}
+  .map-caption,.legend{position:static;padding:8px 12px}
+  .legend span:last-child{display:none}
+  .print-graph{display:block;padding:0 8px 8px}.print-graph:empty{display:none}
+  .print-graph svg{display:block;width:100%;height:auto;max-height:150mm}
+  .browser-host,#journey-host{position:static;inset:auto}
+  .file-browser,.journey-workspace{height:auto;max-height:none}
+  .file-tree-pane,.file-detail-pane,.journey-rail,.journey-detail,.repository-tree,.inspector-content{overflow:visible!important;max-height:none!important;height:auto!important}
+  .inspector-content{padding:10px 12px}
+  .journeys,.investigation-cards{break-inside:avoid}
+  .export-footer{display:block;margin:10px 0 0;padding-top:6px;border-top:1px solid #d0d8d4;font-size:8px;color:#55626b}
+  body[data-print="snippet"] .freshness,body[data-print="snippet"] .page-heading,body[data-print="snippet"] #context-strip,body[data-print="snippet"] #journeys,body[data-print="snippet"] #investigation-host,body[data-print="snippet"] .below-map{display:none!important}
+  body[data-print="snippet"] .workbench{margin-top:0}
+  a{color:inherit;text-decoration:none}
+}

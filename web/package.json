@@ -1,0 +1,8 @@
+{
+  "name": "cartographer-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test scripts/*.test.js"
+  }
+}
