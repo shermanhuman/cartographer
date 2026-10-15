@@ -145,6 +145,18 @@ function kindOf(node, parent) {
   return 'function';
 }
 
+// A token's value as text. Regex tokens carry {pattern, flags, value} and
+// BigInt literals a bigint, so neither may go through plain interpolation
+// ("[object Object]", or 1n printing like 1).
+function tokenText(t) {
+  const v = t.value;
+  if (v == null) return '';
+  if (t.type.label === 'regexp') return `/${v.pattern}/${v.flags}`;
+  if (typeof v === 'bigint') return `${v}n`;
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
 // sha256 over the function's token stream: whitespace, comments and quote
 // style do not change it.
 function fingerprint(tokens, node) {
@@ -153,7 +165,7 @@ function fingerprint(tokens, node) {
   while (lo < hi) { const mid = (lo + hi) >> 1; if (tokens[mid].start < node.start) lo = mid + 1; else hi = mid; }
   for (let k = lo; k < tokens.length && tokens[k].end <= node.end; k++) {
     const t = tokens[k];
-    hash.update(`${t.type.label}\u0000${t.value ?? ''}\u0001`);
+    hash.update(`${t.type.label}\u0000${tokenText(t)}\u0001`);
   }
   return hash.digest('hex');
 }

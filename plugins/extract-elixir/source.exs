@@ -7,6 +7,13 @@ defmodule Cartographer.ElixirSource do
   lexical aliases and imports in scope), Ecto `schema "table"` declarations
   and notes. Call attribution that needs every definition in the repository
   (local vs imported vs Kernel) happens later in `Cartographer.ElixirFacts`.
+
+  Parsing never creates atoms for names found in the source: a static atoms
+  encoder returns the existing atom when there is one and `%{__atom__: name}`
+  otherwise, so a large or hostile repository cannot exhaust the atom table.
+  Everything downstream reads names through `str/1` and renders AST with
+  `print/1` and `normalize/1`, which treat both forms alike, so output does
+  not depend on which atoms happen to exist.
   """
 
   @defs [:def, :defp, :defmacro, :defmacrop, :defdelegate, :defguard, :defguardp]
@@ -48,10 +55,46 @@ defmodule Cartographer.ElixirSource do
   ]
   @special_forms Kernel.SpecialForms.__info__(:macros)
 
+  # Stop parsing when the VM's atom table is this full. The encoder keeps
+  # parsing from interning source names, so this is a backstop only.
+  @atom_budget div(:erlang.system_info(:atom_limit) * 9, 10)
+
+  # A name from the source: an existing atom or an encoded one.
+  defguardp ident?(x) when is_atom(x) or (is_map(x) and is_map_key(x, :__atom__))
+
+  @doc "The text of a name that is an atom or an encoded `%{__atom__: name}`."
+  def str(%{__atom__: name}), do: name
+  def str(atom) when is_atom(atom), do: Atom.to_string(atom)
+
+  @doc false
+  def encode_atom(name, _meta) do
+    {:ok, String.to_existing_atom(name)}
+  rescue
+    ArgumentError -> {:ok, %{__atom__: name}}
+  end
+
   def new, do: %{modules: [], clauses: [], calls: [], schemas: [], notes: []}
 
-  @doc "Parses `source` (the contents of `relative`) and adds its facts to `acc`."
-  def parse(acc, source, relative, repo) do
+  @doc """
+  Parses `source` (the contents of `relative`) and adds its facts to `acc`.
+  `opts[:atom_budget]` overrides the atom-table backstop (tests).
+  """
+  def parse(acc, source, relative, repo, opts \\ []) do
+    budget = Keyword.get(opts, :atom_budget, @atom_budget)
+
+    if :erlang.system_info(:atom_count) > budget do
+      note(
+        acc,
+        "atom_budget",
+        relative,
+        "not parsed: the atom table is past its budget (#{budget} of #{:erlang.system_info(:atom_limit)})"
+      )
+    else
+      parse_source(acc, source, relative, repo)
+    end
+  end
+
+  defp parse_source(acc, source, relative, repo) do
     env = %{
       module: nil,
       aliases: %{},
@@ -67,7 +110,8 @@ defmodule Cartographer.ElixirSource do
           columns: true,
           token_metadata: true,
           emit_warnings: false,
-          file: relative
+          file: relative,
+          static_atoms_encoder: &__MODULE__.encode_atom/2
         )
       rescue
         e -> {:error, Exception.message(e)}
@@ -90,11 +134,15 @@ defmodule Cartographer.ElixirSource do
         other -> inspect(other)
       end
 
-    "line #{meta[:line] || "?"}: #{message}#{token}"
+    "line #{meta[:line] || "?"}: #{message}#{print_token(token)}"
   end
 
   defp parse_message(other) when is_binary(other), do: other
   defp parse_message(other), do: inspect(other)
+
+  defp print_token(token) when is_binary(token), do: token
+  defp print_token(token) when is_list(token), do: List.to_string(token)
+  defp print_token(token), do: print(token)
 
   defp note(acc, kind, file, message),
     do: %{acc | notes: [%{kind: kind, file: file, message: message} | acc.notes]}
@@ -104,8 +152,8 @@ defmodule Cartographer.ElixirSource do
     parts =
       Enum.map(parts, fn
         {:__MODULE__, _, _} -> env.module || "__MODULE__"
-        p when is_atom(p) -> p |> Atom.to_string() |> String.trim_leading("Elixir.")
-        p -> Macro.to_string(p)
+        p when ident?(p) -> p |> str() |> String.trim_leading("Elixir.")
+        p -> print(p)
       end)
 
     first = hd(parts)
@@ -116,20 +164,23 @@ defmodule Cartographer.ElixirSource do
 
   defp name({:__MODULE__, _, _}, env), do: env.module || "__MODULE__"
 
-  defp name(atom, _) when is_atom(atom) do
-    case Atom.to_string(atom) do
+  defp name(atom, _) when ident?(atom) do
+    case str(atom) do
       "Elixir." <> rest -> rest
       erlang -> ":" <> erlang
     end
   end
 
-  defp name(ast, _), do: Macro.to_string(ast)
+  defp name(ast, _), do: print(ast)
 
   defp literal_module?(mod),
-    do: match?({:__aliases__, _, _}, mod) or match?({:__MODULE__, _, _}, mod) or is_atom(mod)
+    do: match?({:__aliases__, _, _}, mod) or match?({:__MODULE__, _, _}, mod) or ident?(mod)
+
+  defp part(p) when ident?(p), do: str(p)
+  defp part(p), do: print(p)
 
   defp line(meta), do: Keyword.get(meta, :line, 1)
-  defp id(env, fun, arity), do: "#{env.repo}:#{env.module}.#{fun}/#{arity}"
+  defp id(env, fun, arity), do: "#{env.repo}:#{env.module}.#{str(fun)}/#{arity}"
 
   # Sequential module forms establish lexical aliases/imports. Generic AST
   # descent must not discard this environment between sibling expressions.
@@ -151,13 +202,13 @@ defmodule Cartographer.ElixirSource do
     module =
       case mod do
         {:__aliases__, _, [Elixir | rest]} ->
-          Enum.join(rest, ".")
+          Enum.map_join(rest, ".", &part/1)
 
         {:__aliases__, _, [{:__MODULE__, _, _} | rest]} ->
-          Enum.join(Enum.reject([env.module | rest], &is_nil/1), ".")
+          Enum.join(Enum.reject([env.module | Enum.map(rest, &part/1)], &is_nil/1), ".")
 
         {:__aliases__, _, parts} ->
-          Enum.join(Enum.reject([env.module | parts], &is_nil/1), ".")
+          Enum.join(Enum.reject([env.module | Enum.map(parts, &part/1)], &is_nil/1), ".")
 
         other ->
           name(other, env)
@@ -167,8 +218,8 @@ defmodule Cartographer.ElixirSource do
     outer =
       case mod do
         {:__aliases__, _, [first | _]}
-        when is_atom(first) and first != Elixir and env.module != nil ->
-          short = Atom.to_string(first)
+        when ident?(first) and first != Elixir and env.module != nil ->
+          short = str(first)
           %{env | aliases: Map.put(env.aliases, short, env.module <> "." <> short)}
 
         _ ->
@@ -184,6 +235,63 @@ defmodule Cartographer.ElixirSource do
 
     {_, acc} = walk(body, next, acc)
     {outer, acc}
+  end
+
+  # defprotocol expands to defmodule: same naming and alias rules.
+  defp walk({:defprotocol, meta, [mod, body]}, env, acc),
+    do: walk({:defmodule, meta, [mod, body]}, env, acc)
+
+  # defimpl P, for: T defines the module P.T (not nested in the enclosing
+  # module); `for: [A, B]` defines one module each, and a defimpl without
+  # `for:` inside a module implements the protocol for that module. Its
+  # functions belong to the impl module, never to the host.
+  defp walk({:defimpl, meta, [protocol | rest]}, env, acc) do
+    opts = Enum.flat_map(rest, &if(Keyword.keyword?(&1), do: &1, else: []))
+    proto = name(protocol, env)
+
+    targets =
+      case Keyword.fetch(opts, :for) do
+        {:ok, list} when is_list(list) -> list
+        {:ok, one} -> [one]
+        :error when env.module != nil -> [{:__MODULE__, [], nil}]
+        :error -> []
+      end
+
+    acc =
+      if targets == [],
+        do:
+          note(
+            acc,
+            "dynamic_definition",
+            env.file,
+            "line #{line(meta)}: defimpl #{proto} without for: outside a module is not inventoried"
+          ),
+        else: acc
+
+    acc =
+      Enum.reduce(targets, acc, fn target, acc ->
+        if literal_module?(target) and literal_module?(protocol) do
+          module =
+            String.trim_leading(proto, ":") <> "." <> String.trim_leading(name(target, env), ":")
+
+          acc = %{
+            acc
+            | modules: [%{name: module, file: env.file, line: line(meta)} | acc.modules]
+          }
+
+          {_, acc} = walk([do: opts[:do]], %{env | module: module, caller: nil}, acc)
+          acc
+        else
+          note(
+            acc,
+            "dynamic_definition",
+            env.file,
+            "line #{line(meta)}: defimpl #{proto} for #{print(target)} is not inventoried"
+          )
+        end
+      end)
+
+    {env, acc}
   end
 
   defp walk({:alias, _, [{{:., _, [prefix, :{}]}, _, items}]}, env, acc) do
@@ -228,7 +336,7 @@ defmodule Cartographer.ElixirSource do
 
     case head do
       {fun, _, args}
-      when is_atom(fun) and (is_list(args) or is_nil(args)) and env.module != nil ->
+      when ident?(fun) and (is_list(args) or is_nil(args)) and env.module != nil ->
         args = args || []
         arity = length(args)
         defaults = Enum.count(args, &match?({:\\, _, _}, &1))
@@ -237,7 +345,7 @@ defmodule Cartographer.ElixirSource do
         c = %{
           id: fid,
           module: env.module,
-          name: to_string(fun),
+          name: str(fun),
           arity: arity,
           min_arity: arity - defaults,
           kind: to_string(kind),
@@ -267,13 +375,13 @@ defmodule Cartographer.ElixirSource do
 
         {env, acc}
 
-      {fun, _, args} when is_atom(fun) and (is_list(args) or is_nil(args)) ->
+      {fun, _, args} when ident?(fun) and (is_list(args) or is_nil(args)) ->
         {env,
          note(
            acc,
            "dynamic_definition",
            env.file,
-           "line #{line(meta)}: #{kind} #{fun} outside a module is not inventoried"
+           "line #{line(meta)}: #{kind} #{str(fun)} outside a module is not inventoried"
          )}
 
       _ ->
@@ -282,7 +390,7 @@ defmodule Cartographer.ElixirSource do
            acc,
            "dynamic_definition",
            env.file,
-           "line #{line(meta)}: unresolved generated definition: " <> Macro.to_string(head)
+           "line #{line(meta)}: unresolved generated definition: " <> print(head)
          )}
     end
   end
@@ -308,7 +416,7 @@ defmodule Cartographer.ElixirSource do
       {{:., dotmeta, [mod, fun]}, meta, args} when is_list(args) ->
         walk({{:., dotmeta, [mod, fun]}, meta, [{:__pipe_arg__, [], nil} | args]}, env, acc)
 
-      {fun, meta, args} when is_atom(fun) and is_list(args) ->
+      {fun, meta, args} when ident?(fun) and is_list(args) ->
         walk({fun, meta, [{:__pipe_arg__, [], nil} | args]}, env, acc)
 
       _ ->
@@ -317,17 +425,17 @@ defmodule Cartographer.ElixirSource do
   end
 
   defp walk({:&, _, [{:/, _, [{{:., _, [mod, fun]}, meta, _}, arity]}]}, env, acc)
-       when is_atom(fun) and is_integer(arity) do
+       when ident?(fun) and is_integer(arity) do
     kind = if literal_module?(mod), do: "capture", else: "dynamic"
     module = if literal_module?(mod), do: name(mod, env), else: nil
     {env, call(acc, env, module, fun, arity, meta, kind)}
   end
 
   defp walk({:&, _, [{:/, _, [{fun, meta, _}, arity]}]}, env, acc)
-       when is_atom(fun) and is_integer(arity),
+       when ident?(fun) and is_integer(arity),
        do: {env, call(acc, env, nil, fun, arity, meta, "capture")}
 
-  defp walk({{:., _, [mod, fun]}, meta, args}, env, acc) when is_atom(fun) and is_list(args) do
+  defp walk({{:., _, [mod, fun]}, meta, args}, env, acc) when ident?(fun) and is_list(args) do
     literal = literal_module?(mod)
 
     acc =
@@ -368,12 +476,12 @@ defmodule Cartographer.ElixirSource do
     {env, acc}
   end
 
-  defp walk({fun, meta, args}, env, acc) when is_atom(fun) and is_list(args) do
+  defp walk({fun, meta, args}, env, acc) when ident?(fun) and is_list(args) do
     arity = length(args)
 
     acc =
       if env.caller && fun not in @special && {fun, arity} not in @special_forms &&
-           not Macro.operator?(fun, arity),
+           not (is_atom(fun) and Macro.operator?(fun, arity)),
          do: call(acc, env, nil, fun, arity, meta, "local_or_import"),
          else: acc
 
@@ -390,7 +498,7 @@ defmodule Cartographer.ElixirSource do
   # apply(Mod, :fun, [a, b]) with literal parts names its target; anything
   # else is a dynamic call the core never resolves.
   defp apply_call(acc, env, [mod, fun, args], meta)
-       when is_atom(fun) and is_list(args) do
+       when ident?(fun) and is_list(args) do
     if literal_module?(mod),
       do: call(acc, env, name(mod, env), fun, length(args), meta, "apply"),
       else: call(acc, env, nil, :apply, 3, meta, "dynamic")
@@ -406,7 +514,7 @@ defmodule Cartographer.ElixirSource do
       from: env.caller,
       caller_module: env.module,
       module: mod,
-      name: to_string(fun),
+      name: str(fun),
       arity: arity,
       line: line(meta),
       kind: kind,
@@ -435,8 +543,8 @@ defmodule Cartographer.ElixirSource do
   end
 
   defp fun_set(tag, list) do
-    if Enum.all?(list, &match?({n, a} when is_atom(n) and is_integer(a), &1)),
-      do: {tag, MapSet.new(list, fn {n, a} -> {Atom.to_string(n), a} end)},
+    if Enum.all?(list, &match?({n, a} when ident?(n) and is_integer(a), &1)),
+      do: {tag, MapSet.new(list, fn {n, a} -> {str(n), a} end)},
       else: :unknown
   end
 
@@ -470,21 +578,51 @@ defmodule Cartographer.ElixirSource do
   end
 
   @doc """
-  Normalized source of one clause: metadata (lines, columns, newlines,
-  delimiters) is stripped and the AST is printed, so whitespace and comment
-  edits do not change it.
+  Normalized form of one clause for fingerprints: a structural rendering of
+  the AST with all metadata (lines, columns, newlines, delimiters) dropped,
+  so whitespace and comment edits do not change it. Atoms and encoded names
+  render alike, so it does not depend on which atoms exist.
   """
-  def normalize(ast) do
-    stripped =
-      Macro.prewalk(ast, fn
-        {a, meta, b} when is_list(meta) -> {a, [], b}
-        node -> node
-      end)
+  def normalize(ast), do: ast |> serialize() |> IO.iodata_to_binary()
 
-    try do
-      Macro.to_string(stripped)
-    rescue
-      _ -> inspect(stripped, limit: :infinity, printable_limit: :infinity)
+  defp serialize({a, meta, b}) when is_list(meta), do: ["(", serialize(a), " ", serialize(b), ")"]
+  defp serialize({a, b}), do: ["{", serialize(a), " ", serialize(b), "}"]
+  defp serialize(list) when is_list(list), do: ["[", serialize_list(list), "]"]
+  defp serialize(name) when ident?(name), do: [":", inspect(str(name))]
+  defp serialize(other), do: inspect(other, limit: :infinity, printable_limit: :infinity)
+
+  defp serialize_list([]), do: []
+  defp serialize_list([last]), do: serialize(last)
+  defp serialize_list([h | t]) when is_list(t), do: [serialize(h), " " | serialize_list(t)]
+  defp serialize_list([h | t]), do: [serialize(h), " | ", serialize(t)]
+
+  @doc """
+  Readable, deterministic rendering of AST for module names and notes. It
+  never needs atoms, so it works on encoded names (unlike Macro.to_string/1).
+  """
+  def print({:__aliases__, _, parts}) when is_list(parts), do: Enum.map_join(parts, ".", &part/1)
+
+  def print({{:., _, [left, right]}, _, args}) when ident?(right) and is_list(args),
+    do: print(left) <> "." <> str(right) <> print_args(args)
+
+  def print({name, _, ctx}) when ident?(name) and is_atom(ctx), do: str(name)
+
+  def print({name, _, args}) when ident?(name) and is_list(args),
+    do: str(name) <> print_args(args)
+
+  def print({fun, _, args}) when is_list(args), do: print(fun) <> print_args(args)
+  def print({a, b}), do: "{" <> print(a) <> ", " <> print(b) <> "}"
+  def print(list) when is_list(list), do: "[" <> Enum.map_join(list, ", ", &print/1) <> "]"
+
+  def print(name) when ident?(name) do
+    case str(name) do
+      "Elixir." <> rest -> rest
+      text when text in ["nil", "true", "false"] -> text
+      text -> ":" <> text
     end
   end
+
+  def print(other), do: inspect(other)
+
+  defp print_args(args), do: "(" <> Enum.map_join(args, ", ", &print/1) <> ")"
 end

@@ -27,8 +27,9 @@ Exit status 2 means bad arguments.
     Anonymous functions are `anonymous@<line>:<column>`.
   - `kind` is `function`, `arrow` or `method`. `arity` counts the parameters;
     `min_arity` leaves out defaults and rest parameters.
-  - `fingerprint` is the sha256 of the function's token stream, so
-    whitespace and comment edits don't change it.
+  - `fingerprint` is the sha256 of the function's token stream (each
+    token's type and value; regex literals as `/pattern/flags`, BigInts with
+    their `n`), so whitespace and comment edits don't change it.
 - `calls`: `js_local` is a bare identifier call; its `target.module` is the
   file path. `js_dynamic` is a member or computed call; `target.module` is the
   receiver identifier when there is one. Both are name-only evidence: the core

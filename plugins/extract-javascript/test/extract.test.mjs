@@ -57,6 +57,20 @@ test('fingerprints ignore whitespace and comments but follow the body', () => {
   } finally { fs.rmSync(root, {recursive: true}); }
 });
 
+test('fingerprints follow regex and BigInt literals', () => {
+  const root = tmp();
+  try {
+    fs.mkdirSync(path.join(root, 'assets/js'), {recursive: true});
+    // Same function name in every file, so only the literal differs.
+    const bodies = ['/ab+c/g.test(s)', '/ab+d/g.test(s)', '/ab+c/i.test(s)', '1n', '1'];
+    bodies.forEach((body, i) => fs.writeFileSync(path.join(root, `assets/js/f${i}.js`), `function f(s) { return ${body}; }`));
+    const doc = extract({repo: 'x', root});
+    const prints = doc.functions.map(f => f.fingerprint);
+    assert.equal(prints.length, bodies.length);
+    assert.equal(new Set(prints).size, bodies.length);
+  } finally { fs.rmSync(root, {recursive: true}); }
+});
+
 test('syntax failures are notes, not silent omissions or crashes', () => {
   const root = tmp();
   try {

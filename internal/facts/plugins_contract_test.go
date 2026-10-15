@@ -118,6 +118,13 @@ func TestPostgresSchemaSampleContract(t *testing.T) {
 	if len(d.Tables) == 0 || len(d.ForeignKeys) == 0 {
 		t.Fatalf("empty sections: %d tables, %d foreign_keys", len(d.Tables), len(d.ForeignKeys))
 	}
+	kinds := map[string]string{}
+	for _, tb := range d.Tables {
+		kinds[tb.ID] = tb.Kind
+	}
+	if kinds["public.orders"] != "table" || kinds["public.order_totals"] != "view" {
+		t.Errorf("table kinds = %v; want orders=table, order_totals=view", kinds)
+	}
 }
 
 // TestValidateFactsFiles validates real plugin output during development:

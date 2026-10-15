@@ -52,3 +52,9 @@ lexical binding is not enough. See each plugin's README for its call kinds.
 A schema plugin omits `repo` and emits `tables` and `foreign_keys`.
 `table_refs` (in repository documents) are text matches and always
 `candidate`.
+
+### Table kind
+
+A table may carry an optional `kind`: `table`, `partitioned_table`, `view`
+or `materialized_view`. It is omitted when the plugin cannot tell. Readers
+treat a missing `kind` as `table`.

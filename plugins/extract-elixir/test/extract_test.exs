@@ -38,6 +38,13 @@ defmodule Cartographer.ElixirExtractTest do
     root
   end
 
+  defp atom_exists?(name) do
+    _ = String.to_existing_atom(name)
+    true
+  rescue
+    ArgumentError -> false
+  end
+
   defp extract(source) do
     ElixirFacts.build(repo: "fixture", root: tmp_root(%{"lib/scope.ex" => source}))
   end
@@ -175,6 +182,35 @@ defmodule Cartographer.ElixirExtractTest do
       refute Enum.any?(doc.table_refs, &(&1.file == "lib/shop/order.ex" and &1.line == 11))
     end
 
+    test "table_refs in Elixir skip docs and prose, keeping atoms, strings and SQL" do
+      root =
+        tmp_root(%{
+          "lib/a.ex" => ~S'''
+          defmodule A do
+            @moduledoc """
+            Reads orders and customers.
+            """
+            @doc "Lists orders."
+            def list(orders), do: orders
+            def q, do: from(o in "orders")
+            def t, do: :customers
+            def sql, do: "SELECT * FROM customers JOIN orders ON true"
+          end
+          ''',
+          "scripts/x.sh" => "psql -c 'select 1' orders\n"
+        })
+
+      doc = ElixirFacts.build(repo: "fixture", root: root, schema_facts: @schema)
+
+      assert Enum.map(doc.table_refs, &{&1.file, &1.line, &1.table}) == [
+               {"lib/a.ex", 7, "public.orders"},
+               {"lib/a.ex", 8, "public.customers"},
+               {"lib/a.ex", 9, "public.customers"},
+               {"lib/a.ex", 9, "public.orders"},
+               {"scripts/x.sh", 1, "public.orders"}
+             ]
+    end
+
     test "CLI output is deterministic JSON" do
       args = [
         Path.join(@plugin, "extract.exs"),
@@ -289,6 +325,79 @@ defmodule Cartographer.ElixirExtractTest do
       doc = ElixirFacts.build(repo: "fixture", root: root)
       assert Enum.map(doc.modules, & &1.name) == ["Real"]
       assert [%{kind: "symlink_skipped", file: "lib/link.ex"}] = doc.notes
+    end
+
+    test "invalid UTF-8 in a source or ref file is repaired, not fatal" do
+      root =
+        tmp_root(%{
+          "lib/latin1.ex" => "defmodule Latin1 do\n  def name, do: \"caf\xe9\"\nend\n",
+          "priv/repo/migrations/1_orders.exs" =>
+            "defmodule M do\n  def change, do: create table(:orders) # caf\xe9\nend\n",
+          "scripts/load.sql" => "insert into orders values ('caf\xe9');\n"
+        })
+
+      doc = ElixirFacts.build(repo: "fixture", root: root, schema_facts: @schema)
+      json = ElixirFacts.encode(doc)
+      assert String.valid?(json)
+      decoded = JSON.decode!(json)
+      assert Enum.map(decoded["functions"], & &1["id"]) == ["fixture:Latin1.name/0"]
+
+      assert [%{"kind" => "invalid_utf8", "file" => "lib/latin1.ex"}] =
+               Enum.filter(decoded["notes"], &(&1["kind"] == "invalid_utf8"))
+
+      texts = Map.new(decoded["table_refs"], &{&1["file"], &1["text"]})
+      assert texts["scripts/load.sql"] == "insert into orders values ('caf\uFFFD');"
+      assert texts["priv/repo/migrations/1_orders.exs"] =~ "\uFFFD"
+    end
+
+    test "unknown names in source do not grow the atom table" do
+      tag = System.unique_integer([:positive])
+      names = for i <- 1..1000, do: "zz_#{tag}_#{i}"
+      # Sigil names are uppercase letters only.
+      sigil = fn i -> for <<d <- "#{tag}#{i}">>, into: "ZZ", do: <<d - ?0 + ?A>> end
+
+      source =
+        "defmodule ZzMod#{tag} do\n" <>
+          Enum.map_join(Enum.with_index(names), "\n", fn {n, i} ->
+            "  def #{n}(#{n}_arg, #{n}_kw: 1), do: Zz#{tag}#{i}.#{n}(:#{n}, ~#{sigil.(i)}\"x\", \"#{n}\": 1)"
+          end) <> "\nend\n"
+
+      before = :erlang.system_info(:atom_count)
+      doc = ElixirFacts.build(repo: "fixture", root: tmp_root(%{"lib/many.ex" => source}))
+      assert doc.notes == []
+      assert length(doc.functions) == 1000
+      assert :erlang.system_info(:atom_count) - before < 200
+      refute Enum.any?(names, &atom_exists?/1)
+    end
+
+    test "the atom budget backstop skips a file with a note" do
+      acc =
+        Cartographer.ElixirSource.parse(
+          Cartographer.ElixirSource.new(),
+          "defmodule A do\nend",
+          "lib/a.ex",
+          "x", atom_budget: 0)
+
+      assert [%{kind: "atom_budget", file: "lib/a.ex"}] = acc.notes
+      assert acc.modules == []
+    end
+
+    test "glob characters in the root are literal and an empty root is noted" do
+      parent = tmp_root(%{})
+      root = Path.join(parent, "pro[j]{a,b}*?")
+      File.mkdir_p!(Path.join(root, "lib"))
+      File.write!(Path.join(root, "lib/a.ex"), "defmodule A do\n  def x, do: 1\nend\n")
+      doc = ElixirFacts.build(repo: "fixture", root: root, source_roots: ["lib", "missing"])
+      assert Enum.map(doc.functions, & &1.id) == ["fixture:A.x/0"]
+      assert [%{kind: "empty_root", message: "missing has no .ex/.exs files" <> _}] = doc.notes
+    end
+
+    test "symlinked directories are noted once and never followed" do
+      root = tmp_root(%{"lib/a.ex" => "defmodule A do\nend\n"})
+      File.ln_s!(Path.join(root, "lib"), Path.join(root, "lib/loop"))
+      doc = ElixirFacts.build(repo: "fixture", root: root, source_roots: ["lib"])
+      assert Enum.map(doc.modules, & &1.name) == ["A"]
+      assert [%{kind: "symlink_skipped", file: "lib/loop"}] = doc.notes
     end
 
     test "the plugin hardcodes no repository names or hosts" do
@@ -429,6 +538,51 @@ defmodule Cartographer.ElixirExtractTest do
 
       assert Enum.map(from(doc, "ClauseCaller.run/1", "go"), & &1.target.module) ==
                ["ClauseB", "ClauseA", "ClauseB", "ClauseA", "ClauseA"]
+    end
+
+    test "defprotocol and defimpl define their own modules" do
+      doc =
+        extract(~S'''
+        defprotocol Shape do
+          def area(shape)
+        end
+        defmodule Circle do
+          defstruct [:r]
+          def area(%Circle{r: r}), do: 3 * r * r
+          defimpl Shape do
+            def area(c), do: Circle.area(c)
+          end
+        end
+        defimpl Shape, for: [Square, Rect] do
+          def area(_), do: 0
+        end
+        defimpl String.Chars, for: Circle do
+          def to_string(c), do: "circle #{c.r}"
+        end
+        ''')
+
+      assert doc.notes == []
+
+      assert Enum.map(doc.modules, & &1.name) ==
+               ~w(Circle Shape Shape.Circle Shape.Rect Shape.Square String.Chars.Circle)
+
+      # The nested defimpl does not merge into its host.
+      assert %{clauses: [6], module: "fixture:Circle"} =
+               Enum.find(doc.functions, &(&1.id == "fixture:Circle.area/1"))
+
+      assert %{clauses: [2]} = Enum.find(doc.functions, &(&1.id == "fixture:Shape.area/1"))
+
+      assert [%{target: %{module: "Circle", name: "area"}, kind: "remote"}] =
+               from(doc, "Shape.Circle.area/1", "area")
+
+      assert Enum.map(doc.functions, & &1.id) |> Enum.sort() == [
+               "fixture:Circle.area/1",
+               "fixture:Shape.Circle.area/1",
+               "fixture:Shape.Rect.area/1",
+               "fixture:Shape.Square.area/1",
+               "fixture:Shape.area/1",
+               "fixture:String.Chars.Circle.to_string/1"
+             ]
     end
 
     test "import only/except filters decide attribution; locals win" do

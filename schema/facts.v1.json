@@ -52,7 +52,7 @@
     "tables": {"type": "array", "items": {
       "type": "object", "required": ["id", "name"], "additionalProperties": false,
       "properties": {
-        "id": {"type": "string"}, "schema": {"type": "string"}, "name": {"type": "string"},
+        "id": {"type": "string"}, "schema": {"type": "string"}, "name": {"type": "string"}, "kind": {"type": "string"},
         "columns": {"type": "array", "items": {"type": "object", "required": ["name", "type", "nullable"], "additionalProperties": false,
           "properties": {"name": {"type": "string"}, "type": {"type": "string"}, "nullable": {"type": "boolean"}, "default": {"type": "string"}}}},
         "constraints": {"type": "array", "items": {"type": "object", "required": ["name", "kind"], "additionalProperties": false,
