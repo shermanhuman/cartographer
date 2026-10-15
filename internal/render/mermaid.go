@@ -15,6 +15,24 @@ import (
 // DefaultMaxNodes caps Mermaid diagrams; GitHub renders larger graphs poorly.
 const DefaultMaxNodes = 40
 
+// Bounds for caller-supplied diagram options (CLI, HTTP and MCP).
+const (
+	MaxNodesLimit = 200
+	MaxDepth      = 5
+)
+
+// ClampDiagram bounds depth to 1..MaxDepth (default 1) and max to
+// 1..MaxNodesLimit (default DefaultMaxNodes).
+func ClampDiagram(depth, max int) (int, int) {
+	if depth <= 0 {
+		depth = 1
+	}
+	if max <= 0 {
+		max = DefaultMaxNodes
+	}
+	return min(depth, MaxDepth), min(max, MaxNodesLimit)
+}
+
 // MaxChars keeps generated Markdown under GitHub's 65,536-character
 // comment limit with room for a wrapper.
 const MaxChars = 60000
@@ -166,12 +184,7 @@ func buildNeighbourhood(ctx context.Context, q *query.Q, ref string, depth, max 
 	if err != nil {
 		return nil, err
 	}
-	if depth <= 0 {
-		depth = 1
-	}
-	if max <= 0 {
-		max = DefaultMaxNodes
-	}
+	depth, max = ClampDiagram(depth, max)
 	start, _, err := q.FunctionsOf(ctx, e)
 	if err != nil {
 		return nil, err
@@ -240,8 +253,9 @@ func buildNeighbourhood(ctx context.Context, q *query.Q, ref string, depth, max 
 }
 
 // Mermaid renders the entity and its callers and callees to depth (default
-// 1) as a `graph LR` diagram of at most max nodes (default 40). Hidden nodes
-// are counted in a note pointing at `cartographer impact`.
+// 1, at most MaxDepth) as a `graph LR` diagram of at most max nodes (default
+// 40, at most MaxNodesLimit) and MaxChars characters. Hidden nodes are
+// counted in a note pointing at `cartographer impact`.
 func Mermaid(ctx context.Context, q *query.Q, ref string, depth, max int) (string, error) {
 	nb, err := buildNeighbourhood(ctx, q, ref, depth, max)
 	if err != nil {
@@ -250,12 +264,23 @@ func Mermaid(ctx context.Context, q *query.Q, ref string, depth, max int) (strin
 	return nb.mermaid(q.Provenance(ctx)), nil
 }
 
+// mermaid renders the diagram, dropping the farthest nodes until it fits in
+// MaxChars (so it stays a valid diagram), with capChars as a last resort.
 func (nb *neighbourhood) mermaid(comment string) string {
-	var b strings.Builder
-	more := ""
-	if nb.Hidden > 0 {
-		more = fmt.Sprintf("+%d more → cartographer impact %s", nb.Hidden, nb.Entity.ID)
+	nodes, hidden := nb.Nodes, nb.Hidden
+	for {
+		var b strings.Builder
+		more := ""
+		if hidden > 0 {
+			more = fmt.Sprintf("+%d more → cartographer impact %s", hidden, nb.Entity.ID)
+		}
+		writeMermaid(&b, comment, nodes, nb.Links, more)
+		out := b.String()
+		if len(out) <= MaxChars || len(nodes) <= 1 {
+			return capChars(out)
+		}
+		keep := max(1, min(len(nodes)-1, len(nodes)*MaxChars*9/(len(out)*10)))
+		hidden += len(nodes) - keep
+		nodes = nodes[:keep]
 	}
-	writeMermaid(&b, comment, nb.Nodes, nb.Links, more)
-	return b.String()
 }

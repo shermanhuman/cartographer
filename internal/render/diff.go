@@ -77,7 +77,7 @@ func loadFacts(ctx context.Context, db *sql.DB, sid string) (*snapFacts, error) 
 		}
 		best := ""
 		for _, pr := range strings.Split(precs, ",") {
-			if rank(pr) > rank(best) {
+			if query.PrecisionRank(pr) > query.PrecisionRank(best) {
 				best = pr
 			}
 		}
@@ -103,10 +103,6 @@ func loadFacts(ctx context.Context, db *sql.DB, sid string) (*snapFacts, error) 
 		return nil, err
 	}
 	return f, rows.Err()
-}
-
-func rank(p string) int {
-	return map[string]int{"precise": 3, "heuristic": 2, "candidate": 1}[p]
 }
 
 type sigChange struct {
@@ -217,7 +213,9 @@ func Diff(ctx context.Context, s *store.Store, baseID, headID string) (string, e
 		switch {
 		case !ok && !inSig[id]:
 			removed = append(removed, f)
-		case ok && f.FP != "" && h.FP != "" && f.FP != h.FP:
+		case ok && !inSig[id] && f.FP != "" && h.FP != "" && f.FP != h.FP:
+			// A function already listed under a signature change is not
+			// listed (or counted) again as a body change.
 			body = append(body, h)
 		}
 	}

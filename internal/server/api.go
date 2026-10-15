@@ -27,6 +27,16 @@ func nonNil[T any](s []T) []T {
 	return s
 }
 
+// jsonString is s as a JSON string literal, without HTML escaping, the way
+// it appears in authored annotation JSON.
+func jsonString(s string) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.Encode(s)
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 func decodeJSON[T any](raw string) T {
 	var v T
 	json.Unmarshal([]byte(raw), &v)
@@ -83,10 +93,15 @@ type moduleRow struct {
 }
 
 func modules(ctx context.Context, q *query.Q) ([]moduleRow, error) {
+	// Function counts come from one grouped scan merged in Go: a correlated
+	// count per module has no index to use and takes seconds on a real map.
+	counts, err := groupCounts(ctx, q, `SELECT module, count(*) FROM functions WHERE snapshot_id = ? GROUP BY module`)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.S.DB.QueryContext(ctx, `
-	  SELECT m.id, m.repo, m.name, m.file, m.line, m.language, m.context,
-	         (SELECT count(*) FROM functions f WHERE f.snapshot_id = m.snapshot_id AND f.module = m.id)
-	    FROM modules m WHERE m.snapshot_id = ? ORDER BY m.id`, q.Snapshot)
+	  SELECT id, repo, name, file, line, language, context
+	    FROM modules WHERE snapshot_id = ? ORDER BY id`, q.Snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -94,10 +109,31 @@ func modules(ctx context.Context, q *query.Q) ([]moduleRow, error) {
 	var out []moduleRow
 	for rows.Next() {
 		var m moduleRow
-		if err := rows.Scan(&m.ID, &m.Repo, &m.Name, &m.File, &m.Line, &m.Language, &m.Context, &m.Count); err != nil {
+		if err := rows.Scan(&m.ID, &m.Repo, &m.Name, &m.File, &m.Line, &m.Language, &m.Context); err != nil {
 			return nil, err
 		}
+		m.Count = counts[m.ID]
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// groupCounts runs a `SELECT key, count(*) … GROUP BY key` query for the
+// snapshot and returns the counts by key.
+func groupCounts(ctx context.Context, q *query.Q, sqlText string, args ...any) (map[string]int, error) {
+	rows, err := q.S.DB.QueryContext(ctx, sqlText, append([]any{q.Snapshot}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var k sql.NullString
+		var n int
+		if err := rows.Scan(&k, &n); err != nil {
+			return nil, err
+		}
+		out[k.String] += n
 	}
 	return out, rows.Err()
 }
@@ -118,15 +154,27 @@ type tableRow struct {
 		Nullable bool   `json:"nullable"`
 		Default  string `json:"default,omitempty"`
 	}
+	FKs    int // foreign keys from or to the table
 	Weight int // FKs + code mentions, for ordering
 }
 
 func tables(ctx context.Context, q *query.Q) ([]tableRow, error) {
+	// Grouped counts merged in Go, as in modules: no per-table subqueries.
+	fks, err := groupCounts(ctx, q, `
+	  SELECT t, count(*) FROM (
+	    SELECT from_table AS t FROM foreign_keys WHERE snapshot_id = ?1
+	    UNION ALL
+	    SELECT to_table FROM foreign_keys WHERE snapshot_id = ?1 AND to_table != from_table)
+	   GROUP BY t`)
+	if err != nil {
+		return nil, err
+	}
+	refs, err := groupCounts(ctx, q, `SELECT table_id, count(*) FROM table_refs WHERE snapshot_id = ? GROUP BY table_id`)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.S.DB.QueryContext(ctx, `
-	  SELECT t.id, t.schema_name, t.name, t.columns,
-	         (SELECT count(*) FROM foreign_keys k WHERE k.snapshot_id = t.snapshot_id AND (k.from_table = t.id OR k.to_table = t.id)) +
-	         (SELECT count(*) FROM table_refs r WHERE r.snapshot_id = t.snapshot_id AND r.table_id = t.id)
-	    FROM db_tables t WHERE t.snapshot_id = ? ORDER BY t.id`, q.Snapshot)
+	  SELECT id, schema_name, name, columns FROM db_tables WHERE snapshot_id = ? ORDER BY id`, q.Snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -135,10 +183,12 @@ func tables(ctx context.Context, q *query.Q) ([]tableRow, error) {
 	for rows.Next() {
 		var t tableRow
 		var cols string
-		if err := rows.Scan(&t.ID, &t.Schema, &t.Name, &cols, &t.Weight); err != nil {
+		if err := rows.Scan(&t.ID, &t.Schema, &t.Name, &cols); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(cols), &t.Columns)
+		t.FKs = fks[t.ID]
+		t.Weight = t.FKs + refs[t.ID]
 		out = append(out, t)
 	}
 	return out, rows.Err()
@@ -160,6 +210,7 @@ func tableEntry(t tableRow) obj {
 
 type annRow struct {
 	ID, Kind, Title, Status string
+	Raw                     map[string]any // the annotation JSON as authored
 	Body                    struct {
 		Summary  string            `json:"summary"`
 		Body     string            `json:"body"`
@@ -194,6 +245,7 @@ func annotationRows(ctx context.Context, q *query.Q) ([]annRow, error) {
 			return nil, err
 		}
 		json.Unmarshal([]byte(body), &a.Body)
+		json.Unmarshal([]byte(body), &a.Raw)
 		json.Unmarshal([]byte(steps), &a.Steps)
 		out = append(out, a)
 	}
@@ -218,8 +270,10 @@ func (a annRow) cites() []string {
 	return out
 }
 
-// annotations returns journeys, investigations and notes in the generic
-// annotation shape, with review status from the store per step.
+// annotations returns every annotation as authored (extra fields such as a
+// journey's groups and edges, a step's owner, boundary, risks and data, a
+// table note's role and rule, or an overview's views pass through), with
+// the generic fields normalised and review status from the store per step.
 func annotations(ctx context.Context, q *query.Q) (any, error) {
 	rows, err := annotationRows(ctx, q)
 	if err != nil {
@@ -231,16 +285,28 @@ func annotations(ctx context.Context, q *query.Q) (any, error) {
 		for _, s := range a.Steps {
 			status[s.ID] = obj{"status": s.Status, "reasons": nonNil(s.Reasons)}
 		}
+		rawSteps, _ := a.Raw["steps"].([]any)
 		steps := []obj{}
-		for _, s := range a.Body.Steps {
+		for i, s := range a.Body.Steps {
 			st := status[s.ID]
 			if st == nil {
 				st = obj{"status": "unreviewed", "reasons": []string{}}
 			}
-			steps = append(steps, obj{
+			step := obj{}
+			if i < len(rawSteps) {
+				if m, ok := rawSteps[i].(map[string]any); ok {
+					for k, v := range m {
+						step[k] = v
+					}
+				}
+			}
+			for k, v := range (obj{
 				"id": s.ID, "title": s.Title, "body": s.Body, "cites": nonNil(s.Cites), "reviewed": orEmpty(s.Reviewed),
 				"status": st["status"], "reasons": st["reasons"],
-			})
+			}) {
+				step[k] = v
+			}
+			steps = append(steps, step)
 		}
 		reasons := []string{}
 		if len(a.Body.Steps) == 0 {
@@ -248,11 +314,18 @@ func annotations(ctx context.Context, q *query.Q) (any, error) {
 				reasons = st["reasons"].([]string)
 			}
 		}
-		out = append(out, obj{
+		e := obj{}
+		for k, v := range a.Raw {
+			e[k] = v
+		}
+		for k, v := range (obj{
 			"kind": a.Kind, "id": a.ID, "title": a.Title, "summary": a.Body.Summary, "body": a.Body.Body,
 			"cites": nonNil(a.Body.Cites), "reviewed": orEmpty(a.Body.Reviewed), "status": a.Status,
 			"reasons": reasons, "steps": steps,
-		})
+		}) {
+			e[k] = v
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }
@@ -627,7 +700,9 @@ func docsFor(ctx context.Context, q *query.Q, ri repoIndex, ids ...string) ([]ob
 
 // annotationsCiting lists annotations whose body cites id.
 func annotationsCiting(ctx context.Context, q *query.Q, id string) ([]obj, error) {
-	rows, err := q.S.DB.QueryContext(ctx, `SELECT id, kind, title, status FROM annotations WHERE snapshot_id = ? AND body LIKE ? ORDER BY id`, q.Snapshot, `%"`+id+`"%`)
+	// The id as a JSON string, matched exactly (LIKE would treat _ and % in
+	// ids as wildcards).
+	rows, err := q.S.DB.QueryContext(ctx, `SELECT id, kind, title, status FROM annotations WHERE snapshot_id = ? AND instr(body, ?) > 0 ORDER BY id`, q.Snapshot, jsonString(id))
 	if err != nil {
 		return nil, err
 	}
@@ -729,10 +804,8 @@ func schemaIndex(ctx context.Context, q *query.Q) (any, error) {
 		for _, c := range t.Columns {
 			cols = append(cols, c.Name)
 		}
-		var rel int
-		q.S.DB.QueryRowContext(ctx, `SELECT count(*) FROM foreign_keys WHERE snapshot_id = ? AND (from_table = ?2 OR to_table = ?2)`, q.Snapshot, t.ID).Scan(&rel)
 		e["columns"] = cols
-		e["relationships"] = rel
+		e["relationships"] = t.FKs
 		out = append(out, e)
 	}
 	return out, nil
@@ -868,7 +941,7 @@ func moduleShard(ctx context.Context, q *query.Q, ri repoIndex, id, where string
 		rows.Scan(&from, &to, &sites, &precs)
 		best := ""
 		for _, p := range strings.Split(precs, ",") {
-			if precisionRank(p) > precisionRank(best) {
+			if query.PrecisionRank(p) > query.PrecisionRank(best) {
 				best = p
 			}
 		}
@@ -954,10 +1027,6 @@ func moduleShard(ctx context.Context, q *query.Q, ri repoIndex, id, where string
 		}
 	}
 	return shard, nil
-}
-
-func precisionRank(p string) int {
-	return map[string]int{"precise": 3, "heuristic": 2, "candidate": 1}[p]
 }
 
 func tableShard(ctx context.Context, q *query.Q, ri repoIndex, id string) (any, error) {

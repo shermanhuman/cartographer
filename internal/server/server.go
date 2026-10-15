@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shermanhuman/cartographer/internal/query"
@@ -36,7 +38,9 @@ type Options struct {
 	// Now stamps generated_at; tests pin it.
 	Now func() time.Time
 	// Default picks the snapshot when the request names none (e.g. the map
-	// of the repository serve was started in). nil means the newest.
+	// of the repository serve was started in). nil means the newest. It may
+	// be slow (it can run git); the server calls it again only when the set
+	// of imported snapshots changes.
 	Default func(ctx context.Context) (string, error)
 }
 
@@ -119,6 +123,14 @@ func New(o Options) http.Handler {
 	static, _ := fs.Sub(web.FS, ".")
 	files := http.FileServer(http.FS(static))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Only the root serves an index; any other directory is not a page,
+		// so it gets a 404 instead of a generated listing.
+		if p := strings.Trim(r.URL.Path, "/"); p != "" {
+			if fi, err := fs.Stat(static, p); err == nil && fi.IsDir() {
+				http.NotFound(w, r)
+				return
+			}
+		}
 		w.Header().Set("Cache-Control", "no-cache")
 		files.ServeHTTP(w, r)
 	})
@@ -151,9 +163,45 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-type api struct{ o Options }
+type api struct {
+	o Options
 
-// snapshotQ selects ?snapshot= or the newest snapshot.
+	defMu  sync.Mutex
+	defKey string // the snapshot ids the cached default was computed from
+	defID  string
+	defSet bool
+}
+
+// defaultSnapshot is Options.Default, memoized: it runs again only when a
+// snapshot is imported or pruned, so a click does not cost a git scan. ""
+// means the newest snapshot.
+func (a *api) defaultSnapshot(ctx context.Context) string {
+	if a.o.Default == nil {
+		return ""
+	}
+	var key string
+	if err := a.o.Store.DB.QueryRowContext(ctx, `SELECT coalesce(group_concat(id, ','), '') FROM (SELECT id FROM snapshots ORDER BY id)`).Scan(&key); err != nil {
+		log.Printf("cartographer serve: listing snapshots: %v", err)
+	}
+	a.defMu.Lock()
+	defer a.defMu.Unlock()
+	if a.defSet && a.defKey == key {
+		return a.defID
+	}
+	id, err := a.o.Default(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("cartographer serve: no default snapshot for this directory (%v); using the newest", err)
+		}
+		id = ""
+	}
+	if ctx.Err() == nil { // a cancelled request must not cache a partial answer
+		a.defKey, a.defID, a.defSet = key, id, true
+	}
+	return id
+}
+
+// snapshotQ selects ?snapshot= or the default snapshot.
 func (a *api) snapshotQ(r *http.Request) (*query.Q, int, error) {
 	id := r.URL.Query().Get("snapshot")
 	if id != "" {
@@ -165,10 +213,8 @@ func (a *api) snapshotQ(r *http.Request) (*query.Q, int, error) {
 			return nil, http.StatusNotFound, fmt.Errorf("no snapshot %q", id)
 		}
 	}
-	if id == "" && a.o.Default != nil {
-		if d, err := a.o.Default(r.Context()); err == nil {
-			id = d
-		}
+	if id == "" {
+		id = a.defaultSnapshot(r.Context())
 	}
 	q, err := query.New(r.Context(), a.o.Store, id)
 	if errors.Is(err, store.ErrNoSnapshot) {
@@ -238,6 +284,9 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {
+	if code >= 500 {
+		log.Printf("cartographer serve: %d: %s", code, msg)
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
@@ -266,7 +315,9 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 	ctx := r.Context()
 	db := q.S.DB
 	var ws, created, imported string
-	db.QueryRowContext(ctx, `SELECT workspace, created_at, imported_at FROM snapshots WHERE id = ?`, q.Snapshot).Scan(&ws, &created, &imported)
+	if err := db.QueryRowContext(ctx, `SELECT workspace, created_at, imported_at FROM snapshots WHERE id = ?`, q.Snapshot).Scan(&ws, &created, &imported); err != nil {
+		return nil, fmt.Errorf("status: snapshot %s: %w", q.Snapshot, err)
+	}
 	repos, err := q.Repos(ctx)
 	if err != nil {
 		return nil, err
@@ -277,11 +328,15 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 		{"docs", "docs"}, {"annotations", "annotations"}, {"contexts", "contexts"}, {"files", "files"},
 	} {
 		var n int
-		db.QueryRowContext(ctx, `SELECT count(*) FROM `+c.table+` WHERE snapshot_id = ?`, q.Snapshot).Scan(&n)
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM `+c.table+` WHERE snapshot_id = ?`, q.Snapshot).Scan(&n); err != nil {
+			return nil, fmt.Errorf("status: counting %s: %w", c.table, err)
+		}
 		counts[c.key] = n
 	}
 	var resolved int
-	db.QueryRowContext(ctx, `SELECT count(to_id) FROM calls WHERE snapshot_id = ?`, q.Snapshot).Scan(&resolved)
+	if err := db.QueryRowContext(ctx, `SELECT count(to_id) FROM calls WHERE snapshot_id = ?`, q.Snapshot).Scan(&resolved); err != nil {
+		return nil, fmt.Errorf("status: counting resolved calls: %w", err)
+	}
 	counts["resolved_call_sites"] = resolved
 	review := obj{}
 	rows, err := db.QueryContext(ctx, `SELECT status, count(*) FROM annotations WHERE snapshot_id = ? GROUP BY 1`, q.Snapshot)
@@ -291,10 +346,24 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 	for rows.Next() {
 		var s string
 		var n int
-		rows.Scan(&s, &n)
+		if err := rows.Scan(&s, &n); err != nil {
+			rows.Close()
+			return nil, err
+		}
 		review[s] = n
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// The snapshot a link without #snapshot= opens: the UI drops the
+	// parameter only when the picked snapshot is this one.
+	def := a.defaultSnapshot(ctx)
+	if def == "" {
+		if def, err = q.S.Latest(ctx); err != nil {
+			return nil, err
+		}
+	}
 	var fresh any
 	if a.o.Status != nil {
 		if fresh, err = a.o.Status(ctx, q.Snapshot); err != nil {
@@ -302,7 +371,7 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 		}
 	}
 	return obj{
-		"snapshot": q.Snapshot, "workspace": ws, "created_at": created, "imported_at": imported,
+		"snapshot": q.Snapshot, "default_snapshot": def, "workspace": ws, "created_at": created, "imported_at": imported,
 		"repos": nonNil(repos), "counts": counts, "annotations": review, "freshness": fresh,
 		"provenance": q.Provenance(ctx), "version": a.o.Version,
 		"generated_at": a.o.Now().UTC().Format(time.RFC3339),

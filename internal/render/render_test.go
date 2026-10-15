@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,10 +126,9 @@ func TestEmbedGolden(t *testing.T) {
 	}
 }
 
-// headSnapshot copies the fixture and edits its facts: Billing.charge/2 no
-// longer calls Orders.total and its body changed, total/1 became total/2, and
-// a new Orders.cancel/1 mentions the orders table.
-func headSnapshot(t *testing.T) string {
+// fixtureCopy copies the fixture snapshot to a temp dir and returns an
+// editor for its JSON files.
+func fixtureCopy(t *testing.T) (string, func(rel string, f func(m map[string]any))) {
 	t.Helper()
 	dir := t.TempDir()
 	err := filepath.WalkDir(fixture, func(p string, d os.DirEntry, err error) error {
@@ -164,6 +164,15 @@ func headSnapshot(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
+	return dir, edit
+}
+
+// headSnapshot copies the fixture and edits its facts: Billing.charge/2 no
+// longer calls Orders.total and its body changed, total/1 became total/2, and
+// a new Orders.cancel/1 mentions the orders table.
+func headSnapshot(t *testing.T) string {
+	t.Helper()
+	dir, edit := fixtureCopy(t)
 	edit("manifest.json", func(m map[string]any) {
 		m["id"] = "snapshot-20261016T120000Z"
 		m["created_at"] = "2026-10-16T12:00:00Z"
@@ -264,5 +273,113 @@ func TestCapChars(t *testing.T) {
 	}
 	if strings.Count(got, "```")%2 != 0 {
 		t.Error("capChars left a fence open")
+	}
+}
+
+// A function whose arity set changed and whose body also changed is listed
+// once, as a signature change, and counted once.
+func TestDiffSignatureChangeNotAlsoBody(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	ctx := context.Background()
+	// Base: the fixture with a fingerprint on total/1.
+	baseDir, editBase := fixtureCopy(t)
+	editBase("facts/shop-app.json", func(m map[string]any) {
+		for _, f := range m["functions"].([]any) {
+			if fn := f.(map[string]any); fn["id"] == "shop-app:Shop.Orders.total/1" {
+				fn["fingerprint"] = "total-old-body"
+			}
+		}
+	})
+	base, err := s.Import(ctx, baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Head: total/1 keeps its id with a new body, and total/2 is added.
+	dir, edit := fixtureCopy(t)
+	edit("manifest.json", func(m map[string]any) {
+		m["id"] = "snapshot-20261016T120000Z"
+		m["created_at"] = "2026-10-16T12:00:00Z"
+	})
+	edit("facts/shop-app.json", func(m map[string]any) {
+		var fns []any
+		for _, f := range m["functions"].([]any) {
+			fn := f.(map[string]any)
+			if fn["id"] == "shop-app:Shop.Orders.total/1" {
+				fn["fingerprint"] = "total-new-body"
+				two := map[string]any{}
+				for k, v := range fn {
+					two[k] = v
+				}
+				two["id"] = "shop-app:Shop.Orders.total/2"
+				two["arity"], two["min_arity"] = 2, 2
+				fns = append(fns, two)
+			}
+			fns = append(fns, fn)
+		}
+		m["functions"] = fns
+	})
+	head, err := s.Import(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Diff(ctx, s, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "| signature | ") {
+		t.Fatalf("want a signature row:\n%s", got)
+	}
+	if strings.Contains(got, "| body | ") {
+		t.Errorf("total/1 listed as both signature- and body-changed:\n%s", got)
+	}
+	if !strings.Contains(got, "**1** changed") {
+		t.Errorf("want 1 changed function:\n%s", got)
+	}
+}
+
+func TestClampDiagram(t *testing.T) {
+	for _, c := range []struct{ depth, max, wantDepth, wantMax int }{
+		{0, 0, 1, DefaultMaxNodes},
+		{-3, -1, 1, DefaultMaxNodes},
+		{2, 10, 2, 10},
+		{99, 100000, MaxDepth, MaxNodesLimit},
+	} {
+		d, m := ClampDiagram(c.depth, c.max)
+		if d != c.wantDepth || m != c.wantMax {
+			t.Errorf("ClampDiagram(%d, %d) = %d, %d; want %d, %d", c.depth, c.max, d, m, c.wantDepth, c.wantMax)
+		}
+	}
+	s := openStore(t)
+	ctx := context.Background()
+	q, _ := query.New(ctx, s, "")
+	if _, err := Mermaid(ctx, q, "Shop.Orders", 1000, 1000000); err != nil {
+		t.Fatalf("huge depth/max should be clamped, not fail: %v", err)
+	}
+}
+
+// A diagram whose labels push it past MaxChars drops its farthest nodes and
+// says so, rather than producing Markdown GitHub rejects.
+func TestMermaidFitsMaxChars(t *testing.T) {
+	nb := &neighbourhood{Entity: &query.Entity{ID: "x:big"}}
+	for i := 0; i < MaxNodesLimit; i++ {
+		id := fmt.Sprintf("n%03d", i)
+		nb.Nodes = append(nb.Nodes, mnode{ID: id, Label: strings.Repeat("L", 600), Repo: fmt.Sprintf("r%d", i%3)})
+		if i > 0 {
+			nb.Links = append(nb.Links, mlink{From: "n000", To: id})
+		}
+	}
+	got := nb.mermaid("provenance")
+	if len(got) > MaxChars {
+		t.Fatalf("diagram is %d chars > %d", len(got), MaxChars)
+	}
+	if !strings.HasPrefix(got, "graph LR\n") || !strings.Contains(got, "more → cartographer impact x:big") {
+		t.Errorf("want a trimmed diagram with a hidden-node note:\n%.300s", got)
+	}
+	if strings.Count(got, "subgraph") != strings.Count(got, "  end\n") {
+		t.Error("unbalanced subgraph/end after trimming")
 	}
 }
