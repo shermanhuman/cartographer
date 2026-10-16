@@ -268,12 +268,19 @@ func (s *Session) choose(ctx context.Context) (string, error) {
 }
 
 func (s *Session) chooseFrom(ctx context.Context, co fresh.Checkout) (string, error) {
+	id, _, err := s.chooseRepo(ctx, co)
+	return id, err
+}
+
+// chooseRepo is chooseFrom that also names the workspace repository the
+// checkout matched ("" outside git).
+func (s *Session) chooseRepo(ctx context.Context, co fresh.Checkout) (string, string, error) {
 	all, err := s.Store.Snapshots(ctx)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(all) == 0 {
-		return "", store.ErrNoSnapshot
+		return "", "", store.ErrNoSnapshot
 	}
 	latest := map[string]string{} // workspace -> newest snapshot (all is newest first)
 	var names []string
@@ -285,9 +292,9 @@ func (s *Session) chooseFrom(ctx context.Context, co fresh.Checkout) (string, er
 	}
 	if co.Root == "" {
 		if len(names) == 1 {
-			return latest[names[0]], nil
+			return latest[names[0]], "", nil
 		}
-		return "", &ErrNotMapped{Workspaces: names}
+		return "", "", &ErrNotMapped{Workspaces: names}
 	}
 	// Evidence ranks origin, then a [checkouts] path, then directory name.
 	// An origin match anywhere wins, so a newer workspace with a same-named
@@ -297,29 +304,29 @@ func (s *Session) chooseFrom(ctx context.Context, co fresh.Checkout) (string, er
 	repos := make([][]fresh.Repo, len(names))
 	for i, ws := range names {
 		if repos[i], err = s.repos(ctx, latest[ws]); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
 	for i, ws := range names {
-		if co.MatchOrigin(repos[i]) != "" {
-			return latest[ws], nil
+		if name := co.MatchOrigin(repos[i]); name != "" {
+			return latest[ws], name, nil
 		}
 	}
 	if cfg, _ := userconfig.Load(); cfg != nil {
 		for i, ws := range names {
 			for _, r := range repos[i] {
 				if p, ok := cfg.Checkouts[r.Name]; ok && samePath(fresh.ExpandHome(p), co.Root) {
-					return latest[ws], nil
+					return latest[ws], r.Name, nil
 				}
 			}
 		}
 	}
 	for i, ws := range names {
-		if co.Match(repos[i]) != "" {
-			return latest[ws], nil
+		if name := co.Match(repos[i]); name != "" {
+			return latest[ws], name, nil
 		}
 	}
-	return "", &ErrNotMapped{Workspaces: names}
+	return "", "", &ErrNotMapped{Workspaces: names}
 }
 
 // Choose is the snapshot queries from cwd would use (see choose), cached
@@ -350,6 +357,22 @@ func (s *Session) Mapped(ctx context.Context) bool {
 	}
 	_, err := s.chooseFrom(ctx, co)
 	return err == nil
+}
+
+// HasCode reports whether cwd is inside a mapped repository that has at
+// least one module or function in the snapshot chosen for it. A docs-only
+// repository (no extractor plugins) is mapped but has no code.
+func (s *Session) HasCode(ctx context.Context) bool {
+	co := fresh.Find(ctx, s.Cwd)
+	if co.Root == "" {
+		return false
+	}
+	id, repo, err := s.chooseRepo(ctx, co)
+	if err != nil || repo == "" {
+		return false
+	}
+	ok, err := s.Store.RepoHasCode(ctx, id, repo)
+	return err == nil && ok
 }
 
 // samePath reports whether a and b name the same directory, through symlinks

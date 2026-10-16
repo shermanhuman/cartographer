@@ -464,3 +464,34 @@ func TestChooseOriginOutranksExplicitCheckout(t *testing.T) {
 		t.Errorf("a [checkouts] entry let a newer same-named repo win over the origin match: %q, %v", id, err)
 	}
 }
+
+// HasCode is true only for a mapped repository with at least one module or
+// function in the chosen snapshot: a docs-only repository (plugins = [])
+// is mapped but has no code to point an agent at.
+func TestHasCode(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	importAs(t, s, "mini", "snapshot-20261015T120000Z", "",
+		`"repos": [`, `"repos": [
+    {"name": "shop-infra", "url": "https://github.com/example/shop-infra", "revision": "cccccccccccccccccccccccccccccccccccccccc"},`)
+	parent := t.TempDir()
+	app := filepath.Join(parent, "app")
+	gitInit(t, app, "https://github.com/example/shop-app")
+	infra := filepath.Join(parent, "infra")
+	gitInit(t, infra, "https://github.com/example/shop-infra")
+	unrelated := filepath.Join(parent, "unrelated")
+	gitInit(t, unrelated, "https://github.com/example/unrelated")
+	for _, tc := range []struct {
+		cwd             string
+		mapped, hasCode bool
+	}{{app, true, true}, {infra, true, false}, {unrelated, false, false}, {t.TempDir(), false, false}} {
+		sess := &Session{Store: s, Cwd: tc.cwd}
+		if got := sess.Mapped(ctx); got != tc.mapped {
+			t.Errorf("%s: Mapped = %v", filepath.Base(tc.cwd), got)
+		}
+		if got := sess.HasCode(ctx); got != tc.hasCode {
+			t.Errorf("%s: HasCode = %v", filepath.Base(tc.cwd), got)
+		}
+	}
+}

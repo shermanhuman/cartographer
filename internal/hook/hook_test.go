@@ -60,3 +60,21 @@ func TestGrepFailsOpenWhenMarkerUnwritable(t *testing.T) {
 		t.Errorf("unwritable marker must still nudge: %q", out.String())
 	}
 }
+
+// A repository that is mapped but has no code facts (docs only) gets no
+// nudge; it is still checked only once per session.
+func TestGrepSilentWithoutCode(t *testing.T) {
+	data := t.TempDir()
+	var asked []string
+	hasCode := func(_ context.Context, cwd string) bool { asked = append(asked, cwd); return cwd == "/work/app" }
+	for range 2 {
+		var out bytes.Buffer
+		Grep(context.Background(), strings.NewReader(`{"session_id":"d1","cwd":"/work/infra"}`), &out, data, hasCode)
+		if out.Len() != 0 {
+			t.Fatalf("docs-only repo should be silent: %q", out.String())
+		}
+	}
+	if strings.Join(asked, ",") != "/work/infra" {
+		t.Errorf("asked = %v, want the payload cwd once", asked)
+	}
+}

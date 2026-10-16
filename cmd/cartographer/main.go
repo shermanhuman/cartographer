@@ -79,7 +79,7 @@ Building (in a workspace with cartographer.toml):
 
 Agents:
   mcp                         stdio MCP server exposing the queries as map_* tools
-  hook grep                   PreToolUse hook: one nudge per session in mapped repos
+  hook grep                   PreToolUse hook: one nudge per session in mapped repos with code
 
 Other:
   version
@@ -479,7 +479,7 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		hook.Grep(ctx, os.Stdin, w, filepath.Dir(c.db), func(ctx context.Context, cwd string) bool {
 			sess := newSession(&c, s, io.Discard)
 			sess.Cwd, sess.AutoPull = cwd, false
-			return sess.Mapped(ctx)
+			return sess.HasCode(ctx)
 		})
 		return nil
 	case "mapped":
