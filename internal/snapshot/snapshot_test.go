@@ -651,7 +651,7 @@ func TestPublishReconcilesLostResponse(t *testing.T) {
 					t.Errorf("%s: err = %v, want ErrPublishUncertain", name, err)
 				}
 				// The operator is told how to tell success from failure.
-				if msg := fmt.Sprint(err); !strings.Contains(msg, "if GitHub shows "+id+" published with "+AssetName+", nothing else is needed") || !strings.Contains(msg, "re-run publish") {
+				if msg := fmt.Sprint(err); !strings.Contains(msg, "if GitHub shows "+id+" published with "+AssetName+", nothing else is needed") || !strings.Contains(msg, "otherwise re-run publish; a later successful publish prunes the stale release once it is an hour old") {
 					t.Errorf("%s: message not actionable: %s", name, msg)
 				}
 			} else if err != nil || r == nil || r.Draft || !r.Complete() {

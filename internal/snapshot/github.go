@@ -349,7 +349,7 @@ func (g *GitHub) Publish(ctx context.Context, repo, id, notes string, asset []by
 
 // uncertainHint tells the operator what to do after ErrPublishUncertain.
 func uncertainHint(tag string) string {
-	return fmt.Sprintf("if GitHub shows %s published with %s, nothing else is needed; otherwise re-run publish (the next successful publish prunes the stale release)", tag, AssetName)
+	return fmt.Sprintf("if GitHub shows %s published with %s, nothing else is needed; otherwise re-run publish; a later successful publish prunes the stale release once it is an hour old", tag, AssetName)
 }
 
 // Download opens the snapshot asset of a release.
