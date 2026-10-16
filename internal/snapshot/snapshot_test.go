@@ -156,6 +156,32 @@ func TestPublishPullPrune(t *testing.T) {
 	}
 }
 
+// A stored snapshot of another workspace that happens to share the release's
+// id is not "already present".
+func TestPullChecksStoredWorkspace(t *testing.T) {
+	ctx := context.Background()
+	f := newFake(t)
+	gh := f.client()
+	id := bundle.SnapshotID("mini", time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC))
+	if _, err := gh.Publish(ctx, "o/map", id, "notes", packFixture(t, id)); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	other := &bundle.Bundle{Manifest: bundle.Manifest{SnapshotFormat: bundle.Format, ID: id, Workspace: "other", CreatedAt: "2026-10-15T12:00:00Z"}}
+	if err := s.ImportBundle(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	p := &Puller{Store: s, GitHub: gh, DataDir: t.TempDir()}
+	res, err := p.Pull(ctx, "o/map")
+	if err == nil {
+		t.Fatalf("pull skipped or replaced another workspace's snapshot: %+v", res)
+	}
+	if all, _ := s.Snapshots(ctx); len(all) != 1 || all[0].Workspace != "other" {
+		t.Errorf("snapshots = %+v", all)
+	}
+}
+
 func TestPullErrors(t *testing.T) {
 	ctx := context.Background()
 	f := newFake(t)

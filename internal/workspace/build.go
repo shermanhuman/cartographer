@@ -142,7 +142,7 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 
 	m := &bundle.Manifest{
 		SnapshotFormat: bundle.Format,
-		ID:             "snapshot-" + now.Format("20060102T150405Z"),
+		ID:             bundle.SnapshotID(c.Name, now),
 		CreatedAt:      now.Format(time.RFC3339),
 		Workspace:      c.Name,
 		Contexts:       bundle.ContextCfg{Depth: c.Contexts.Depth},

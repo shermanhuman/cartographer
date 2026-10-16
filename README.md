@@ -17,7 +17,7 @@ answers from a prebuilt map:
 
 ```text
 $ cartographer impact Shop.Orders.total/1
-map snapshot-20261015T120000Z · shop-app@aaaaaaa shop-worker@bbbbbbb
+map snapshot-20261015T120000Z-43385991 · shop-app@aaaaaaa shop-worker@bbbbbbb
 impact of FN shop-app:Shop.Orders.total/1  lib/shop/orders.ex:20 (depth ≤3): 4 callers in 2 repo(s) · 1 cross-repo · 1 tests
 shop-app
   Shop.Billing

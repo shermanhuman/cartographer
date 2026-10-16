@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -15,7 +16,8 @@ import (
 	"github.com/shermanhuman/cartographer/internal/ident"
 )
 
-// Import loads a snapshot directory, replacing any snapshot with the same id.
+// Import loads a snapshot directory, replacing any snapshot of the same
+// workspace with the same id.
 func (s *Store) Import(ctx context.Context, dir string) (string, error) {
 	b, err := bundle.Read(dir)
 	if err != nil {
@@ -33,6 +35,14 @@ func (s *Store) ImportBundle(ctx context.Context, b *bundle.Bundle) error {
 	defer tx.Rollback()
 	im := &importer{ctx: ctx, tx: tx, b: b, sid: b.Manifest.ID, stmts: map[string]*sql.Stmt{}}
 	defer im.closeStmts()
+	// Ids are unique per workspace; never replace another workspace's graph.
+	var ws string
+	switch err := tx.QueryRowContext(ctx, `SELECT workspace FROM snapshots WHERE id = ?`, im.sid).Scan(&ws); {
+	case err == nil && ws != b.Manifest.Workspace:
+		return fmt.Errorf("store: import %s: snapshot %s belongs to workspace %q, not %q", im.sid, im.sid, ws, b.Manifest.Workspace)
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return err
+	}
 	if err := deleteSnapshot(ctx, tx, im.sid); err != nil {
 		return err
 	}

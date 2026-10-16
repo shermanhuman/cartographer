@@ -223,7 +223,8 @@ func (g *GitHub) Snapshots(ctx context.Context, repo string) ([]Release, error) 
 			break
 		}
 	}
-	// Tags embed a UTC timestamp, so lexical order is chronological.
+	// Tags start with a fixed-width UTC timestamp (bundle.SnapshotID), so
+	// lexical order is chronological.
 	sort.Slice(all, func(i, j int) bool { return all[i].Tag > all[j].Tag })
 	return all, nil
 }

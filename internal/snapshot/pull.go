@@ -51,8 +51,11 @@ func (p *Puller) Pull(ctx context.Context, source string) (res *Result, err erro
 	if err != nil {
 		return nil, err
 	}
+	// Present only if the stored snapshot is the tag's workspace too; older
+	// timestamp-only tags name no workspace and match by id alone.
+	tag := bundle.IDWorkspaceTag(newest.Tag)
 	for _, s := range have {
-		if s.ID == newest.Tag {
+		if s.ID == newest.Tag && (tag == "" || tag == bundle.WorkspaceTag(s.Workspace)) {
 			return &Result{Source: source, Snapshot: newest.Tag}, nil
 		}
 	}

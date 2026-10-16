@@ -175,6 +175,30 @@ func TestReimportReplacesAndPrune(t *testing.T) {
 	}
 }
 
+// Reimporting an id replaces it only within its workspace: another
+// workspace's snapshot with the same id is never silently overwritten.
+func TestImportRefusesOtherWorkspacesID(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if err := s.ImportBundle(ctx, emptyBundle("snapshot-X", "A", "2026-10-15T12:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ImportBundle(ctx, emptyBundle("snapshot-X", "A", "2026-10-15T12:00:00Z")); err != nil {
+		t.Errorf("same workspace reimport: %v", err)
+	}
+	err = s.ImportBundle(ctx, emptyBundle("snapshot-X", "B", "2026-10-15T12:00:00Z"))
+	if err == nil || !strings.Contains(err.Error(), `belongs to workspace "A"`) {
+		t.Errorf("cross-workspace replace: %v", err)
+	}
+	if all, _ := s.Snapshots(ctx); len(all) != 1 || all[0].Workspace != "A" {
+		t.Errorf("snapshots = %+v", all)
+	}
+}
+
 func TestAnnotationExtraFieldsPreserved(t *testing.T) {
 	s, _ := imported(t)
 	var body string

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // copyMini copies the fixture snapshot so a test can alter it.
@@ -95,5 +96,38 @@ func TestReadRejectsFactsOutsideSnapshot(t *testing.T) {
 	edit(t, filepath.Join(dir, "manifest.json"), `"facts/schema.json"`, `"facts/link.json"`)
 	if _, err := Read(dir); err == nil {
 		t.Error("read a facts file through a symlink leading outside the snapshot")
+	}
+}
+
+// Workspaces built in the same second get different ids; within one
+// workspace lexical order stays chronological.
+func TestSnapshotIDPerWorkspace(t *testing.T) {
+	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	a, b := SnapshotID("acme", at), SnapshotID("other", at)
+	if a == b {
+		t.Fatalf("same id for two workspaces: %s", a)
+	}
+	if !strings.HasPrefix(a, "snapshot-20261015T120000Z-") || len(a) != len("snapshot-20261015T120000Z-")+8 {
+		t.Errorf("id = %s", a)
+	}
+	if later := SnapshotID("acme", at.Add(time.Second)); !(a < later) {
+		t.Errorf("%s !< %s", a, later)
+	}
+	if IDWorkspaceTag(a) != WorkspaceTag("acme") || IDWorkspaceTag("snapshot-20261015T120000Z") != "" {
+		t.Errorf("tags: %q %q", IDWorkspaceTag(a), WorkspaceTag("acme"))
+	}
+}
+
+func TestReadRejectsIDOfAnotherWorkspace(t *testing.T) {
+	dir := copyMini(t)
+	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	edit(t, filepath.Join(dir, "manifest.json"), "snapshot-20261015T120000Z", SnapshotID("other", at))
+	if _, err := Read(dir); err == nil || !strings.Contains(err.Error(), `not workspace "mini"`) {
+		t.Fatalf("got %v", err)
+	}
+	dir = copyMini(t)
+	edit(t, filepath.Join(dir, "manifest.json"), "snapshot-20261015T120000Z", SnapshotID("mini", at))
+	if _, err := Read(dir); err != nil {
+		t.Fatal(err)
 	}
 }

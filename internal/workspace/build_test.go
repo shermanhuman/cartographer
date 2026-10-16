@@ -99,7 +99,7 @@ func TestBuildProducesReadableSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.ID != "snapshot-20261015T120000Z" || m.Repos[0].Revision != run(t, repo, "git", "rev-parse", "HEAD") {
+	if m.ID != bundle.SnapshotID(c.Name, now) || !strings.HasPrefix(m.ID, "snapshot-20261015T120000Z-") || m.Repos[0].Revision != run(t, repo, "git", "rev-parse", "HEAD") {
 		t.Errorf("manifest = %+v", m)
 	}
 	b, err := bundle.Read(out)

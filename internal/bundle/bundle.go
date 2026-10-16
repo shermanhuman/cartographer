@@ -7,18 +7,46 @@
 package bundle
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/shermanhuman/cartographer/internal/facts"
 )
 
 const Format = 1
+
+// SnapshotID names a snapshot of workspace built at t:
+// snapshot-<UTC second>-<WorkspaceTag>. Lexical order is chronological
+// within a workspace, and workspaces built in the same second differ.
+func SnapshotID(workspace string, t time.Time) string {
+	return "snapshot-" + t.UTC().Format("20060102T150405Z") + "-" + WorkspaceTag(workspace)
+}
+
+// WorkspaceTag is the 8 hex digits of sha256(workspace) that SnapshotID ends with.
+func WorkspaceTag(workspace string) string {
+	sum := sha256.Sum256([]byte(workspace))
+	return hex.EncodeToString(sum[:4])
+}
+
+var idPattern = regexp.MustCompile(`^snapshot-\d{8}T\d{6}Z-([0-9a-f]{8})$`)
+
+// IDWorkspaceTag returns the workspace tag an id made by SnapshotID carries,
+// or "" for other ids (older timestamp-only ones included).
+func IDWorkspaceTag(id string) string {
+	if m := idPattern.FindStringSubmatch(id); m != nil {
+		return m[1]
+	}
+	return ""
+}
 
 type Manifest struct {
 	SnapshotFormat int        `json:"snapshot_format"`
@@ -94,6 +122,9 @@ func Read(dir string) (*Bundle, error) {
 	}
 	if m.ID == "" || m.CreatedAt == "" {
 		return nil, fmt.Errorf("bundle: manifest needs id and created_at")
+	}
+	if tag := IDWorkspaceTag(m.ID); tag != "" && tag != WorkspaceTag(m.Workspace) {
+		return nil, fmt.Errorf("bundle: id %s names another workspace, not workspace %q", m.ID, m.Workspace)
 	}
 	if m.Contexts.Depth == 0 {
 		m.Contexts.Depth = 2
