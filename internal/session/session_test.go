@@ -445,3 +445,22 @@ func TestChooseUsesExplicitCheckoutForAFork(t *testing.T) {
 		t.Errorf("explicit checkout ignored: %q, %v", id, err)
 	}
 }
+
+// Ranking pinned: an origin match outranks a [checkouts] entry, which can't
+// name a workspace when two of them list the same repo name.
+func TestChooseOriginOutranksExplicitCheckout(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	importAs(t, s, "acme", "snapshot-20261015T120000Z", "")
+	importAs(t, s, "other", "snapshot-20261016T000000Z", "", "github.com/example/", "github.com/other/")
+	app := filepath.Join(t.TempDir(), "shop-app")
+	gitInit(t, app, "git@github.com:example/shop-app.git")
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	os.WriteFile(cfg, []byte("[checkouts]\nshop-app = "+strconv.Quote(app)+"\n"), 0o644)
+	t.Setenv("CARTOGRAPHER_CONFIG", cfg)
+	sess := &Session{Store: s, Cwd: app}
+	if id, err := sess.choose(ctx); err != nil || id != "snapshot-20261015T120000Z" {
+		t.Errorf("a [checkouts] entry let a newer same-named repo win over the origin match: %q, %v", id, err)
+	}
+}

@@ -82,7 +82,7 @@ func Fetch(ctx context.Context, c *Config, refs map[string]string, log io.Writer
 		// developer's own checkout keeps its branch, which a later Build
 		// without Fetch would snapshot.
 		if upstream, err := revision(ctx, r, src, refs, true); err == nil && upstream != rev {
-			return fmt.Errorf("fetch: %s: %s differs from origin (local %.12s, origin %.12s), and Fetch leaves your own checkout alone: bring it in line (pull or push), or use build --fetch to build origin's revision", r.Name, r.Ref, rev, upstream)
+			return fmt.Errorf("fetch: %s: %s differs from origin (local %.12s, origin %.12s), and --fetch-only leaves your own checkout alone: bring it in line (pull or push), or use build --fetch to build origin's revision", r.Name, r.Ref, rev, upstream)
 		}
 		if err := primeBlobs(ctx, src, rev); err != nil {
 			return fmt.Errorf("fetch: %s: %w", r.Name, err)

@@ -289,14 +289,20 @@ func (s *Session) chooseFrom(ctx context.Context, co fresh.Checkout) (string, er
 		}
 		return "", &ErrNotMapped{Workspaces: names}
 	}
-	// A [checkouts] path naming this checkout outranks everything (a fork's
-	// origin matches no workspace URL); then an origin match anywhere
-	// outranks a directory-name match, so a newer workspace with a
-	// same-named repo can't shadow the right project.
+	// Evidence ranks origin, then a [checkouts] path, then directory name.
+	// An origin match anywhere wins, so a newer workspace with a same-named
+	// repo can't shadow the right project; a [checkouts] path (keyed by repo
+	// name, so it can't tell such workspaces apart) maps a fork, whose origin
+	// matches no workspace URL; the name is the last resort.
 	repos := make([][]fresh.Repo, len(names))
 	for i, ws := range names {
 		if repos[i], err = s.repos(ctx, latest[ws]); err != nil {
 			return "", err
+		}
+	}
+	for i, ws := range names {
+		if co.MatchOrigin(repos[i]) != "" {
+			return latest[ws], nil
 		}
 	}
 	if cfg, _ := userconfig.Load(); cfg != nil {
@@ -306,11 +312,6 @@ func (s *Session) chooseFrom(ctx context.Context, co fresh.Checkout) (string, er
 					return latest[ws], nil
 				}
 			}
-		}
-	}
-	for i, ws := range names {
-		if co.MatchOrigin(repos[i]) != "" {
-			return latest[ws], nil
 		}
 	}
 	for i, ws := range names {
