@@ -3,12 +3,13 @@
 package userconfig
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -46,7 +47,8 @@ func Load() (*Config, error) {
 
 var source = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
-// AddWorkspace records a workspace source (owner/name) and saves.
+// AddWorkspace records a workspace source (owner/name). It edits the file
+// in place, so comments and other settings are kept.
 func AddWorkspace(src string) error {
 	if !source.MatchString(src) {
 		return fmt.Errorf("workspace source must be owner/name, got %q", src)
@@ -55,23 +57,104 @@ func AddWorkspace(src string) error {
 	if err != nil {
 		return err
 	}
-	for _, w := range c.Workspaces {
-		if w == src {
-			return nil
-		}
+	if slices.Contains(c.Workspaces, src) {
+		return nil
 	}
-	c.Workspaces = append(c.Workspaces, src)
-	sort.Strings(c.Workspaces)
-	return c.save()
+	old, err := os.ReadFile(Path())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	next := withWorkspace(string(old), src)
+	var check Config
+	if _, err := toml.Decode(next, &check); err != nil || !slices.Contains(check.Workspaces, src) {
+		return fmt.Errorf("userconfig: could not add %s to %s; add it to `workspaces` by hand", src, Path())
+	}
+	return write([]byte(next))
 }
 
-func (c *Config) save() error {
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
+var workspacesKey = regexp.MustCompile(`(?m)^[ \t]*workspaces[ \t]*=[ \t]*\[`)
+
+// withWorkspace returns body with src appended to its top-level workspaces
+// array, or with the array added before the first table when there is none.
+func withWorkspace(body, src string) string {
+	item := strconv.Quote(src)
+	if loc := workspacesKey.FindStringIndex(body); loc != nil && loc[0] < firstTable(body) {
+		if end, last := arrayEnd(body, loc[1]); end >= 0 {
+			sep := ", "
+			if last < 0 || body[last] == ',' || body[last] == '[' {
+				sep = " "
+			}
+			if last < 0 {
+				last = loc[1] - 1
+			}
+			return body[:last+1] + sep + item + body[last+1:]
+		}
+	}
+	return "workspaces = [" + item + "]\n" + body
+}
+
+// firstTable is the offset of the first [table] header (len(body) if none).
+func firstTable(body string) int {
+	off := 0
+	for _, line := range strings.SplitAfter(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			return off
+		}
+		off += len(line)
+	}
+	return len(body)
+}
+
+// arrayEnd scans an array whose contents start at i, skipping strings and
+// comments. It returns the offset of the closing bracket and of the last
+// significant character before it (-1 when the array is empty), or -1, -1
+// when the array is not closed.
+func arrayEnd(body string, i int) (end, last int) {
+	last = -1
+	for ; i < len(body); i++ {
+		switch ch := body[i]; ch {
+		case ']':
+			return i, last
+		case '#':
+			for i < len(body) && body[i] != '\n' {
+				i++
+			}
+		case '"', '\'':
+			for i++; i < len(body) && body[i] != ch; i++ {
+				if ch == '"' && body[i] == '\\' {
+					i++
+				}
+			}
+			last = i
+		case ' ', '\t', '\r', '\n':
+		default:
+			last = i
+		}
+	}
+	return -1, -1
+}
+
+// write replaces the config file atomically.
+func write(b []byte) error {
+	p := Path()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(Path()), 0o755); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(p), ".config-*.toml")
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(Path(), buf.Bytes(), 0o644)
+	defer os.Remove(f.Name())
+	if err := f.Chmod(0o644); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), p)
 }

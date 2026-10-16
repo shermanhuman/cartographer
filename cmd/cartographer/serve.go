@@ -14,6 +14,7 @@ import (
 	"github.com/shermanhuman/cartographer/internal/export"
 	"github.com/shermanhuman/cartographer/internal/query"
 	"github.com/shermanhuman/cartographer/internal/server"
+	"github.com/shermanhuman/cartographer/internal/session"
 	"github.com/shermanhuman/cartographer/internal/store"
 )
 
@@ -37,14 +38,23 @@ func serve(ctx context.Context, w io.Writer, s *store.Store, c *common) error {
 	if sess.AutoPull {
 		sess.PullDue(ctx)
 	}
-	status := func(ctx context.Context, snapshot string) (any, error) {
+	return server.Serve(ctx, ln, server.New(server.Options{Store: s, Version: version, Status: serveStatus(sess), Default: sess.Choose}))
+}
+
+// serveStatus reports freshness for /api/status, which the UI loads on every
+// page. Each call also starts a due pull in the background, so a long-running
+// serve picks up newly published snapshots on a later page load.
+func serveStatus(sess *session.Session) func(ctx context.Context, snapshot string) (any, error) {
+	return func(ctx context.Context, snapshot string) (any, error) {
+		if sess.AutoPull {
+			sess.PullDue(ctx)
+		}
 		rep, err := sess.Fresh(ctx, snapshot)
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"summary": rep.Summary(), "stale": rep.Summary() != "", "repos": rep.Lines()}, nil
 	}
-	return server.Serve(ctx, ln, server.New(server.Options{Store: s, Version: version, Status: status, Default: sess.Choose}))
 }
 
 func openBrowser(url string) {
@@ -73,7 +83,9 @@ func exportCmd(ctx context.Context, w io.Writer, s *store.Store, q *query.Q, c *
 		return errors.New("export: choose one of --page or --snippet")
 	}
 	t := export.Target{Around: c.around, Context: c.context, Table: c.table, Annotation: c.annotation, Depth: c.depth}
-	o := export.Options{Format: "pdf", Mode: "page", Snapshot: c.snapshot}
+	// Render the snapshot the target was resolved in (chosen from cwd when
+	// --snapshot is not given), not the newest one.
+	o := export.Options{Format: "pdf", Mode: "page", Snapshot: q.Snapshot}
 	if c.svg {
 		o.Format = "svg"
 	}

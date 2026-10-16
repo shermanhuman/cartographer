@@ -27,16 +27,6 @@ func nonNil[T any](s []T) []T {
 	return s
 }
 
-// jsonString is s as a JSON string literal, without HTML escaping, the way
-// it appears in authored annotation JSON.
-func jsonString(s string) string {
-	var b strings.Builder
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	enc.Encode(s)
-	return strings.TrimSuffix(b.String(), "\n")
-}
-
 func decodeJSON[T any](raw string) T {
 	var v T
 	json.Unmarshal([]byte(raw), &v)
@@ -148,6 +138,7 @@ func moduleEntry(m moduleRow) obj {
 
 type tableRow struct {
 	ID, Schema, Name string
+	Kind             string // table, view, ... (db_tables.kind)
 	Columns          []struct {
 		Name     string `json:"name"`
 		Type     string `json:"type"`
@@ -173,6 +164,7 @@ func tables(ctx context.Context, q *query.Q) ([]tableRow, error) {
 	if err != nil {
 		return nil, err
 	}
+	kinds := q.TableKinds(ctx) // before the rows below hold the connection
 	rows, err := q.S.DB.QueryContext(ctx, `
 	  SELECT id, schema_name, name, columns FROM db_tables WHERE snapshot_id = ? ORDER BY id`, q.Snapshot)
 	if err != nil {
@@ -181,10 +173,13 @@ func tables(ctx context.Context, q *query.Q) ([]tableRow, error) {
 	defer rows.Close()
 	var out []tableRow
 	for rows.Next() {
-		var t tableRow
+		t := tableRow{Kind: "table"}
 		var cols string
 		if err := rows.Scan(&t.ID, &t.Schema, &t.Name, &cols); err != nil {
 			return nil, err
+		}
+		if k := kinds[t.ID]; k != "" {
+			t.Kind = k
 		}
 		json.Unmarshal([]byte(cols), &t.Columns)
 		t.FKs = fks[t.ID]
@@ -203,7 +198,7 @@ func domainOf(t tableRow) string {
 
 func tableEntry(t tableRow) obj {
 	return obj{
-		"id": t.ID, "label": t.Name, "full": t.ID, "kind": "table", "repo": "", "domain": domainOf(t),
+		"id": t.ID, "label": t.Name, "full": t.ID, "kind": "table", "table_kind": t.Kind, "repo": "", "domain": domainOf(t),
 		"shard": t.ID, "count": len(t.Columns), "icon": "postgresql", "changes": []string{}, "evidence": []string{}, "cost": 0,
 	}
 }
@@ -700,20 +695,15 @@ func docsFor(ctx context.Context, q *query.Q, ri repoIndex, ids ...string) ([]ob
 
 // annotationsCiting lists annotations whose body cites id.
 func annotationsCiting(ctx context.Context, q *query.Q, id string) ([]obj, error) {
-	// The id as a JSON string, matched exactly (LIKE would treat _ and % in
-	// ids as wildcards).
-	rows, err := q.S.DB.QueryContext(ctx, `SELECT id, kind, title, status FROM annotations WHERE snapshot_id = ? AND instr(body, ?) > 0 ORDER BY id`, q.Snapshot, jsonString(id))
+	cites, err := q.AnnotationsCiting(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := []obj{}
-	for rows.Next() {
-		var aid, kind, title, status string
-		rows.Scan(&aid, &kind, &title, &status)
-		out = append(out, obj{"id": "ann:" + aid, "annotation": aid, "kind": kind, "title": title, "status": status})
+	for _, c := range cites {
+		out = append(out, obj{"id": "ann:" + c.ID, "annotation": c.ID, "kind": c.Kind, "title": c.Title, "status": c.Status})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func files(ctx context.Context, q *query.Q) (any, error) {
@@ -1089,8 +1079,12 @@ func tableShard(ctx context.Context, q *query.Q, ri repoIndex, id string) (any, 
 	if domain == "" {
 		domain = "tables"
 	}
+	tkind := "table"
+	if k := q.TableKinds(ctx)[id]; k != "" {
+		tkind = k
+	}
 	return obj{
-		"id": id, "kind": "table", "schema": schema, "name": name, "domain": domain,
+		"id": id, "kind": "table", "table_kind": tkind, "schema": schema, "name": name, "domain": domain,
 		"columns": nonNil(columns), "constraints": nonNil(constraints), "indexes": indexes, "triggers": []obj{},
 		"relationships": rels, "references": refs, "sources": []obj{}, "evidence": []string{},
 		"docs": docs, "annotations": anns, "rls": false,

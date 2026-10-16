@@ -171,3 +171,14 @@ func TestExportPDF(t *testing.T) {
 		}
 	}
 }
+
+// A link to an entity outside the rendered snapshot must fail the export
+// instead of printing an "Entity not found" page.
+func TestExportUnknownEntityFails(t *testing.T) {
+	needChrome(t)
+	_, h := setup(t)
+	_, err := Run(context.Background(), h, "view=entity&entity=nope%3AGone.fun%2F1&focus=nope%3AGone.fun%2F1", Options{Format: "pdf"})
+	if err == nil || !strings.Contains(err.Error(), "could not render") || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("Run: %v", err)
+	}
+}

@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -319,16 +320,47 @@ func (q *Q) docsAbout(ctx context.Context, d *output.Doc, id string) {
 			d.Body = append(d.Body, lines...)
 		}
 	}
-	// The annotation body is JSON; a citation holds the id as a JSON string.
-	rows, err = q.S.DB.QueryContext(ctx, `SELECT id, title, status FROM annotations WHERE snapshot_id = ? AND instr(body, ?) > 0 ORDER BY id`, q.Snapshot, `"`+id+`"`)
-	if err == nil {
-		for rows.Next() {
-			var aid, title, status string
-			rows.Scan(&aid, &title, &status)
-			d.L("  ANN ann:%s  %q  (%s)", aid, title, status)
-		}
-		rows.Close()
+	cites, _ := q.AnnotationsCiting(ctx, id)
+	for _, c := range cites {
+		d.L("  ANN ann:%s  %q  (%s)", c.ID, c.Title, c.Status)
 	}
+}
+
+// Citation is an annotation that cites an entity.
+type Citation struct{ ID, Kind, Title, Status string }
+
+// AnnotationsCiting lists the annotations whose body cites id. The body is
+// the authored JSON, where a citation holds the id as a JSON string; the id
+// is matched exactly as one (LIKE would treat _ and % as wildcards).
+func (q *Q) AnnotationsCiting(ctx context.Context, id string) ([]Citation, error) {
+	lit, err := json.Marshal(id)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.S.DB.QueryContext(ctx, `SELECT id, kind, title, status FROM annotations WHERE snapshot_id = ? AND (instr(body, ?) > 0 OR instr(body, ?) > 0) ORDER BY id`, q.Snapshot, string(lit), jsonLiteral(id))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Citation
+	for rows.Next() {
+		var c Citation
+		if err := rows.Scan(&c.ID, &c.Kind, &c.Title, &c.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// jsonLiteral is s as a JSON string without HTML escaping (<, > and & kept
+// as-is), the way hand-authored annotation JSON writes it.
+func jsonLiteral(s string) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.Encode(s)
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // Calls lists callers (reverse) or callees of an entity up to depth.
@@ -366,35 +398,59 @@ func (q *Q) Calls(ctx context.Context, ref string, depth int, reverse bool, limi
 	})
 	page(d, hops, limit, offset, func(h hop) string { return q.hopLine(h, e.Repo) })
 	if !reverse {
-		var unresolved int
-		q.S.DB.QueryRowContext(ctx, `SELECT count(*) FROM calls WHERE snapshot_id = ? AND from_id = ? AND to_id IS NULL`, q.Snapshot, e.ID).Scan(&unresolved)
-		if unresolved > 0 {
-			d.F("+%d unresolved/external call sites from %s (not traced)", unresolved, e.ID)
+		if unresolved := q.unresolvedFrom(ctx, start); unresolved > 0 {
+			d.F("+%d unresolved/external call sites from %s %s (not traced)", unresolved, abbrev(e.Kind), e.ID)
 		}
 	}
 	return d, nil
 }
 
-// page appends items[offset:offset+limit]; limit <= 0 means all, and a
-// negative offset counts as 0.
-func page[T any](d *output.Doc, items []T, limit, offset int, line func(T) string) {
-	offset = min(max(offset, 0), len(items))
-	items = items[offset:]
-	more := limit > 0 && len(items) > limit
-	if more {
-		items = items[:limit]
+// unresolvedFrom counts the unresolved call sites in the given functions.
+func (q *Q) unresolvedFrom(ctx context.Context, ids []string) int {
+	if len(ids) == 0 {
+		return 0
 	}
-	for _, it := range items {
-		d.Body = append(d.Body, line(it))
+	args := []any{q.Snapshot}
+	for _, id := range ids {
+		args = append(args, id)
 	}
-	if more {
-		d.F("more: offset=%d", offset+limit)
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	var n int
+	q.S.DB.QueryRowContext(ctx, `SELECT count(*) FROM calls WHERE snapshot_id = ? AND to_id IS NULL AND from_id IN (`+ph+`)`, args...).Scan(&n)
+	return n
+}
+
+// window is the [lo, hi) range of n items that limit and offset select;
+// limit <= 0 means all, and a negative offset counts as 0.
+func window(n, limit, offset int) (lo, hi int) {
+	lo = min(max(offset, 0), n)
+	hi = n
+	if limit > 0 && n-lo > limit {
+		hi = lo + limit
+	}
+	return lo, hi
+}
+
+// more notes the items after hi and the offset that pages to them.
+func more(d *output.Doc, n, hi int) {
+	if hi < n {
+		d.F("+%d more: offset=%d", n-hi, hi)
 	}
 }
 
+// page appends items[offset:offset+limit] (see window).
+func page[T any](d *output.Doc, items []T, limit, offset int, line func(T) string) {
+	lo, hi := window(len(items), limit, offset)
+	for _, it := range items[lo:hi] {
+		d.Body = append(d.Body, line(it))
+	}
+	more(d, len(items), hi)
+}
+
 // Impact is the blast radius: transitive callers grouped by repo and context,
-// with tests listed separately.
-func (q *Q) Impact(ctx context.Context, ref string, depth int) (*output.Doc, error) {
+// with tests listed separately. limit and offset page the listed callers
+// (code first, then tests); the header counts all of them.
+func (q *Q) Impact(ctx context.Context, ref string, depth, limit, offset int) (*output.Doc, error) {
 	e, err := q.Resolve(ctx, ref)
 	if err != nil {
 		return nil, err
@@ -446,8 +502,17 @@ func (q *Q) Impact(ctx context.Context, ref string, depth int) (*output.Doc, err
 		}
 		return a.ID < b.ID
 	})
+	all := append(code, tests...)
+	lo, hi := window(len(all), limit, offset)
 	repo, ctxName := "", ""
-	for _, h := range code {
+	for i, h := range all[lo:hi] {
+		if lo+i >= len(code) {
+			if lo+i == len(code) || i == 0 {
+				d.L("tests")
+			}
+			d.L("    %s", q.hopLine(h, ""))
+			continue
+		}
 		if h.Repo != repo {
 			repo, ctxName = h.Repo, ""
 			suffix := ""
@@ -462,16 +527,13 @@ func (q *Q) Impact(ctx context.Context, ref string, depth int) (*output.Doc, err
 		}
 		d.L("    %s", q.hopLine(h, ""))
 	}
-	if len(tests) > 0 {
-		d.L("tests")
-		for _, h := range tests {
-			d.L("    %s", q.hopLine(h, ""))
-		}
-	}
+	more(d, len(all), hi)
 	return d, nil
 }
 
-// Path finds the shortest call chain from a to b (or b to a).
+// Path finds the shortest call chain from a to b (or b to a). A module,
+// context, file or table stands for its functions (see functionsOf); the
+// chain runs between the functions it actually connects.
 func (q *Q) Path(ctx context.Context, from, to string) (*output.Doc, error) {
 	a, err := q.Resolve(ctx, from)
 	if err != nil {
@@ -481,35 +543,81 @@ func (q *Q) Path(ctx context.Context, from, to string) (*output.Doc, error) {
 	if err != nil {
 		return nil, err
 	}
+	af, anote, err := q.functionsOf(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	bf, bnote, err := q.functionsOf(ctx, b)
+	if err != nil {
+		return nil, err
+	}
 	d := &output.Doc{}
 	q.header(ctx, d)
 	for _, dir := range []struct {
-		src, dst *Entity
-		label    string
-	}{{a, b, "calls"}, {b, a, "calls (reverse direction)"}} {
-		chain, err := q.bfsPath(ctx, dir.src.ID, dir.dst.ID, 8)
+		src, dst   *Entity
+		srcF, dstF []string
+		label      string
+	}{{a, b, af, bf, "calls"}, {b, a, bf, af, "calls (reverse direction)"}} {
+		chain, err := q.bfsPath(ctx, dir.srcF, dir.dstF, 8)
 		if err != nil {
 			return nil, err
 		}
-		if chain != nil {
-			d.H("path %s → %s: %d hop(s), %s", dir.src.ID, dir.dst.ID, len(chain)-1, dir.label)
-			for i, id := range chain {
-				ent, _ := q.get(ctx, id)
-				if ent == nil {
-					continue
-				}
-				d.L("%d %s", i, q.entityLine(*ent))
-			}
-			return d, nil
+		if chain == nil {
+			continue
 		}
+		first, last := chain[0], chain[len(chain)-1]
+		d.H("path %s → %s: %d hop(s), %s", first, last, len(chain)-1, dir.label)
+		for _, end := range []struct {
+			e  *Entity
+			fn string
+		}{{dir.src, first}, {dir.dst, last}} {
+			if end.e.ID != end.fn {
+				d.H("%s %s → FN %s", abbrev(end.e.Kind), end.e.ID, end.fn)
+			}
+		}
+		for _, note := range []string{anote, bnote} {
+			if note != "" {
+				d.H("%s", note)
+			}
+		}
+		for i, id := range chain {
+			ent, _ := q.get(ctx, id)
+			if ent == nil {
+				continue
+			}
+			d.L("%d %s", i, q.entityLine(*ent))
+		}
+		return d, nil
 	}
 	d.H("no call path between %s and %s within 8 hops (unresolved/dynamic calls are not traced)", a.ID, b.ID)
+	for _, e := range []struct {
+		e  *Entity
+		fs []string
+	}{{a, af}, {b, bf}} {
+		if len(e.fs) == 0 {
+			d.H("%s %s has no functions", abbrev(e.e.Kind), e.e.ID)
+		}
+	}
 	return d, nil
 }
 
-func (q *Q) bfsPath(ctx context.Context, src, dst string, maxDepth int) ([]string, error) {
-	prev := map[string]string{src: ""}
-	frontier := []string{src}
+// bfsPath finds a shortest chain of calls from any of src to any of dst.
+func (q *Q) bfsPath(ctx context.Context, src, dst []string, maxDepth int) ([]string, error) {
+	target := map[string]bool{}
+	for _, id := range dst {
+		target[id] = true
+	}
+	prev := map[string]string{}
+	var frontier []string
+	for _, id := range src {
+		if target[id] {
+			return []string{id}, nil
+		}
+		if _, ok := prev[id]; !ok {
+			prev[id] = ""
+			frontier = append(frontier, id)
+		}
+	}
 	for depth := 0; depth < maxDepth && len(frontier) > 0; depth++ {
 		es, err := q.edges(ctx, frontier, false)
 		if err != nil {
@@ -521,9 +629,9 @@ func (q *Q) bfsPath(ctx context.Context, src, dst string, maxDepth int) ([]strin
 				continue
 			}
 			prev[e.To] = e.From
-			if e.To == dst {
+			if target[e.To] {
 				var chain []string
-				for n := dst; n != ""; n = prev[n] {
+				for n := e.To; n != ""; n = prev[n] {
 					chain = append([]string{n}, chain...)
 				}
 				return chain, nil
@@ -533,6 +641,25 @@ func (q *Q) bfsPath(ctx context.Context, src, dst string, maxDepth int) ([]strin
 		frontier = next
 	}
 	return nil, nil
+}
+
+// TableKinds maps each table whose kind isn't a plain "table" (a view,
+// materialized view, ...) to its kind. It is empty for a store without the
+// db_tables.kind column.
+func (q *Q) TableKinds(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	rows, err := q.S.DB.QueryContext(ctx, `SELECT id, kind FROM db_tables WHERE snapshot_id = ? AND kind != 'table'`, q.Snapshot)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, kind string
+		if rows.Scan(&id, &kind) == nil && kind != "" {
+			out[id] = kind
+		}
+	}
+	return out
 }
 
 // Table shows columns, keys and the code that mentions a table.
@@ -566,7 +693,11 @@ func (q *Q) Table(ctx context.Context, ref string) (*output.Doc, error) {
 	q.S.DB.QueryRowContext(ctx, `SELECT columns, constraints, indexes FROM db_tables WHERE snapshot_id = ? AND id = ?`, q.Snapshot, e.ID).Scan(&cols, &cons, &idx)
 	d := &output.Doc{}
 	q.header(ctx, d)
-	d.H("TBL %s", e.ID)
+	if k := q.TableKinds(ctx)[e.ID]; k != "" {
+		d.H("TBL %s [%s]", e.ID, k)
+	} else {
+		d.H("TBL %s", e.ID)
+	}
 	for _, c := range decode[[]struct {
 		Name, Type, Default string
 		Nullable            bool

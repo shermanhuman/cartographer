@@ -158,14 +158,18 @@ func (s *Session) forget() {
 	s.mu.Unlock()
 }
 
-// current returns the memo for s.Cwd, refreshing it after CacheTTL.
-// The caller holds s.mu.
+// current returns the memo for s.Cwd, refreshing it after CacheTTL. A memo
+// computed under a cancelled ctx (its git execs were killed) is returned
+// but not kept. The caller holds s.mu.
 func (s *Session) current(ctx context.Context) *memo {
 	if m := s.memo; m != nil && m.cwd == s.Cwd && time.Since(m.at) < CacheTTL {
 		return m
 	}
-	s.memo = &memo{at: time.Now(), cwd: s.Cwd, co: fresh.Find(ctx, s.Cwd), reports: map[string]*fresh.Report{}}
-	return s.memo
+	m := &memo{at: time.Now(), cwd: s.Cwd, co: fresh.Find(ctx, s.Cwd), reports: map[string]*fresh.Report{}}
+	if ctx.Err() == nil {
+		s.memo = m
+	}
+	return m
 }
 
 // resolve returns the snapshot to query and its freshness, with one
@@ -231,7 +235,9 @@ func (s *Session) freshFrom(ctx context.Context, m *memo, id string) (*fresh.Rep
 		explicit = cfg.Checkouts
 	}
 	rep := fresh.Check(ctx, repos, fresh.LocateFrom(ctx, repos, m.co, explicit))
-	m.reports[id] = rep
+	if ctx.Err() == nil { // a cancelled call's git execs failed; don't keep its answer
+		m.reports[id] = rep
+	}
 	return rep, nil
 }
 

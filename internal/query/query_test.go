@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -99,10 +100,10 @@ func TestCallersAndCallees(t *testing.T) {
 
 func TestImpactGroupsReposAndTests(t *testing.T) {
 	q, ctx := newQ(t), context.Background()
-	out := render(t)(q.Impact(ctx, "Shop.Orders.total/1", 3))
+	out := render(t)(q.Impact(ctx, "Shop.Orders.total/1", 3, 0, 0))
 	has(t, out, "4 callers in 2 repo(s) · 1 cross-repo · 1 tests", "shop-worker ⇄ cross-repo", "\ntests\n", "Shop.OrdersTest.test_total/1")
 	// impact of a table starts from functions that mention it
-	out = render(t)(q.Impact(ctx, "public.orders", 2))
+	out = render(t)(q.Impact(ctx, "public.orders", 2, 0, 0))
 	has(t, out, "starting from functions whose source mentions the table (candidate)", "ShopWeb.OrderController.create/2")
 }
 
@@ -204,4 +205,72 @@ func TestAnnotationCitationsMatchExactly(t *testing.T) {
 	if strings.Contains(strings.Join(d.Body, "\n"), "ann:checkout") {
 		t.Errorf("wildcard id matched: %v", d.Body)
 	}
+}
+
+func TestPathExpandsModulesContextsAndFiles(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	// A module reaches a function through one of its own functions.
+	out := render(t)(q.Path(ctx, "Shop.Billing", "Shop.Orders.total/1"))
+	has(t, out, "path shop-app:Shop.Billing.charge/2 → shop-app:Shop.Orders.total/1: 1 hop(s), calls",
+		"MOD shop-app:Shop.Billing → FN shop-app:Shop.Billing.charge/2",
+		"0 FN shop-app:Shop.Billing.charge/2", "1 FN shop-app:Shop.Orders.total/1")
+	// Both ends expanded: a context and a file.
+	out = render(t)(q.Path(ctx, "ctx:shop-worker:Worker.Nightly", "file:shop-app:lib/shop/orders.ex"))
+	has(t, out, "path shop-worker:Worker.Nightly.run/0 → shop-app:Shop.Orders.total/1: 2 hop(s), calls")
+	// Reverse direction still found from a module.
+	out = render(t)(q.Path(ctx, "Shop.Orders.total/1", "Shop.Billing"))
+	has(t, out, "1 hop(s), calls (reverse direction)")
+}
+
+func TestCalleesFooterCountsEveryStartFunction(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	out := render(t)(q.Calls(ctx, "Shop.Billing", 1, false, 0, 0))
+	has(t, out, "+2 unresolved/external call sites from MOD shop-app:Shop.Billing")
+}
+
+func TestImpactPages(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	out := render(t)(q.Impact(ctx, "Shop.Orders.total/1", 3, 1, 0))
+	has(t, out, "4 callers in 2 repo(s)", "d1 FN shop-app:Shop.Billing.charge/2", "+3 more: offset=1")
+	if strings.Contains(out, "OrderController") || strings.Contains(out, "\ntests\n") {
+		t.Errorf("page 1 shows more than one caller:\n%s", out)
+	}
+	out = render(t)(q.Impact(ctx, "Shop.Orders.total/1", 3, 2, 2))
+	has(t, out, "shop-worker ⇄ cross-repo", "\ntests\n", "Shop.OrdersTest.test_total/1")
+	if strings.Contains(out, "more: offset") || strings.Contains(out, "d1 FN shop-app:Shop.Billing.charge/2") {
+		t.Errorf("last page:\n%s", out)
+	}
+}
+
+func TestAnnotationsCitingQuotesLikeJSON(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	if _, err := q.S.DB.ExecContext(ctx, `INSERT INTO annotations(snapshot_id, id, kind, title, body, status, steps) VALUES (?, 'q', 'note', 'Quoted', ?, 'reviewed', '[]')`,
+		q.Snapshot, `{"cites": ["odd\"id\\x<y>"]}`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := q.AnnotationsCiting(ctx, `odd"id\x<y>`)
+	if err != nil || len(got) != 1 || got[0].ID != "q" || got[0].Kind != "note" || got[0].Title != "Quoted" {
+		t.Fatalf("AnnotationsCiting = %+v, %v", got, err)
+	}
+	if got, _ := q.AnnotationsCiting(ctx, `odd`); len(got) != 0 {
+		t.Errorf("a prefix matched: %+v", got)
+	}
+}
+
+// markView sets a table's kind. db_tables.kind arrives with fix/r3-core;
+// before that merge the column is added here.
+func markView(t *testing.T, db *sql.DB, id string) {
+	t.Helper()
+	db.Exec(`ALTER TABLE db_tables ADD COLUMN kind TEXT NOT NULL DEFAULT 'table'`)
+	if _, err := db.Exec(`UPDATE db_tables SET kind = 'view' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTableShowsItsKind(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	has(t, render(t)(q.Table(ctx, "public.customers")), "TBL public.customers\n") // a plain table, or no kind column
+	markView(t, q.S.DB, "public.customers")
+	has(t, render(t)(q.Table(ctx, "public.customers")), "TBL public.customers [view]")
+	has(t, render(t)(q.Table(ctx, "public.orders")), "TBL public.orders\n")
 }

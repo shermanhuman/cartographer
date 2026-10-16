@@ -110,7 +110,7 @@ func LocateFrom(ctx context.Context, repos []Repo, cur Checkout, explicit map[st
 	found := map[string]string{}
 	for _, r := range repos {
 		if p, ok := explicit[r.Name]; ok {
-			found[r.Name] = p
+			found[r.Name] = ExpandHome(p)
 		}
 	}
 	if cur.Root == "" {
@@ -164,6 +164,23 @@ func LocateFrom(ctx context.Context, repos []Repo, cur Checkout, explicit map[st
 	return found
 }
 
+// ExpandHome replaces a leading ~ with the home directory.
+func ExpandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, p[1:])
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
 // ValidRevision reports whether rev is a full hex object id (SHA-1 or SHA-256).
 func ValidRevision(rev string) bool {
 	if len(rev) != 40 && len(rev) != 64 {
@@ -186,6 +203,8 @@ func Check(ctx context.Context, repos []Repo, paths map[string]string) *Report {
 		switch {
 		case st.Path == "":
 			st.Note = "no local checkout found"
+		case !isDir(st.Path):
+			st.Note = "configured checkout path not found: " + st.Path
 		case r.Revision == "":
 			st.Note = "snapshot has no revision"
 		case !ValidRevision(r.Revision):

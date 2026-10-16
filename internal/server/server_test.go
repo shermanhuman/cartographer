@@ -299,10 +299,7 @@ func TestEmbedMermaidGraph(t *testing.T) {
 	if !strings.HasPrefix(h.Get("Content-Type"), "text/markdown") || !strings.Contains(md, "```mermaid\ngraph LR") || !strings.Contains(md, "map "+snap) {
 		t.Errorf("embed:\n%s", md)
 	}
-	mm, _ := get(t, srv, "/api/mermaid?max=2&id="+url.QueryEscape("Shop.Orders.total/1"), 200)
-	if !strings.HasPrefix(mm, "graph LR") || !strings.Contains(mm, "+1 more") {
-		t.Errorf("mermaid:\n%s", mm)
-	}
+	get(t, srv, "/api/mermaid?id="+url.QueryEscape("Shop.Orders.total/1"), 404) // no consumer; the CLI renders Mermaid
 	get(t, srv, "/api/embed?id=zzzz", 404)
 	g := getJSON[obj](t, srv, "/api/graph?depth=2&id="+url.QueryEscape("Shop.Billing.charge/2"))
 	depths := map[string]float64{}
@@ -610,5 +607,38 @@ func TestServerErrorsAreLogged(t *testing.T) {
 	writeError(httptest.NewRecorder(), http.StatusNotFound, "no entity")
 	if !strings.Contains(buf.String(), "500: database is locked") || strings.Contains(buf.String(), "no entity") {
 		t.Errorf("log: %q", buf.String())
+	}
+}
+
+// db_tables.kind arrives with fix/r3-core; before that merge the column is
+// added here.
+func TestTableKindInPayloads(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if _, err := s.Import(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	s.DB.Exec(`ALTER TABLE db_tables ADD COLUMN kind TEXT NOT NULL DEFAULT 'table'`)
+	if _, err := s.DB.Exec(`UPDATE db_tables SET kind = 'view' WHERE id = 'public.customers'`); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(Options{Store: s, Version: "test"}))
+	t.Cleanup(srv.Close)
+	kinds := map[string]any{}
+	for _, e := range getJSON[[]obj](t, srv, "/api/schema") {
+		kinds[e["id"].(string)] = e["table_kind"]
+		if e["kind"] != "table" {
+			t.Errorf("entity kind changed: %v", e)
+		}
+	}
+	if kinds["public.customers"] != "view" || kinds["public.orders"] != "table" {
+		t.Errorf("schema index kinds: %v", kinds)
+	}
+	shard := getJSON[obj](t, srv, "/api/entity/public.customers")
+	if shard["table_kind"] != "view" || shard["kind"] != "table" {
+		t.Errorf("shard: %v", shard)
 	}
 }

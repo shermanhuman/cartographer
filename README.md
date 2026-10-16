@@ -65,8 +65,22 @@ cartographer embed Shop.Billing.charge/2   # Markdown + Mermaid for an issue
 Private workspaces need a GitHub token: `GH_TOKEN`/`GITHUB_TOKEN`, else
 `gh auth token` (a `gh` on PATH, or one installed globally with mise).
 
-`cartographer help` lists every command. `--budget`, `--limit`/`--offset`
-and `--format json` work on all queries.
+`cartographer help` lists every command and `cartographer <command> --help`
+its flags. The queries (`status`, `find`, `show`, `callers`, `callees`,
+`impact`, `path`, `table`, `context`) take `--budget` and `--format json`;
+`find`, `callers`, `callees` and `impact` also page with `--limit`/`--offset`.
+
+`pull` and `workspace add` record workspaces in `~/.config/cartographer/config.toml`
+(`$CARTOGRAPHER_CONFIG`, or under `$XDG_CONFIG_HOME`). Freshness looks for each
+repository's checkout next to the one you are in; list checkouts that live
+elsewhere under `[checkouts]`:
+
+```toml
+workspaces = ["my-org/my-project-map"]
+
+[checkouts]
+shop-worker = "~/src/shop-worker"   # repository name = local path
+```
 
 ## Map your project
 
@@ -89,7 +103,10 @@ In CI, call the reusable workflows: `build-snapshot.yml` from the workspace
 repository (on dispatch and weekly), and `pr-impact.yml` from each product
 repository's pull requests for a sticky impact comment. Pin both the
 workflow ref (`@v0.1.0`) and its `cartographer-version` input to the same
-release; the workflows install exactly that binary.
+release; the workflows install exactly that binary. In your own CI, keep
+the token away from plugin code: `cartographer build --fetch-only` clones or
+fetches the repositories without running plugins or schema `prepare`, so
+only that step needs `GH_TOKEN`; build in a later step without it.
 
 ## How it works
 

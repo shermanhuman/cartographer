@@ -1,0 +1,110 @@
+package userconfig
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
+
+func use(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "cartographer", "config.toml")
+	if body != "" {
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("CARTOGRAPHER_CONFIG", p)
+	return p
+}
+
+func read(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestLoadMissingIsEmpty(t *testing.T) {
+	use(t, "")
+	c, err := Load()
+	if err != nil || len(c.Workspaces) != 0 || len(c.Checkouts) != 0 {
+		t.Fatalf("Load = %+v, %v", c, err)
+	}
+}
+
+func TestAddWorkspaceCreatesTheFile(t *testing.T) {
+	p := use(t, "")
+	if err := AddWorkspace("acme/map"); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddWorkspace("acme/map"); err != nil { // idempotent
+		t.Fatal(err)
+	}
+	c, err := Load()
+	if err != nil || !slices.Equal(c.Workspaces, []string{"acme/map"}) {
+		t.Fatalf("Load = %+v, %v\n%s", c, err, read(t, p))
+	}
+}
+
+func TestAddWorkspaceKeepsCommentsAndCheckouts(t *testing.T) {
+	const orig = `# my cartographer config
+workspaces = [
+  "acme/map", # the main map
+  # "acme/old", retired
+]
+
+# checkouts outside the sibling layout
+[checkouts]
+shop-app = "~/src/shop-app" # laptop
+`
+	p := use(t, orig)
+	if err := AddWorkspace("acme/other"); err != nil {
+		t.Fatal(err)
+	}
+	got := read(t, p)
+	for _, want := range []string{"# my cartographer config", "# the main map", `# "acme/old", retired`, "# checkouts outside the sibling layout", "# laptop"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("lost %q:\n%s", want, got)
+		}
+	}
+	c, err := Load()
+	if err != nil || !slices.Equal(c.Workspaces, []string{"acme/map", "acme/other"}) || c.Checkouts["shop-app"] != "~/src/shop-app" {
+		t.Fatalf("Load = %+v, %v\n%s", c, err, got)
+	}
+}
+
+func TestAddWorkspaceToAFileWithoutTheKey(t *testing.T) {
+	for _, orig := range []string{
+		"# only checkouts\n[checkouts]\nshop-app = \"/src/shop-app\"\n",
+		"workspaces = []\n",
+		"workspaces = [\"a/b\"]",
+		"workspaces = ['a/b',] # trailing comma\n",
+	} {
+		p := use(t, orig)
+		if err := AddWorkspace("acme/map"); err != nil {
+			t.Fatalf("%q: %v", orig, err)
+		}
+		c, err := Load()
+		if err != nil || !slices.Contains(c.Workspaces, "acme/map") {
+			t.Errorf("%q: Load = %+v, %v\n%s", orig, c, err, read(t, p))
+		}
+		if strings.HasPrefix(orig, "#") && (!strings.Contains(read(t, p), "# only checkouts") || c.Checkouts["shop-app"] != "/src/shop-app") {
+			t.Errorf("%q: lost content:\n%s", orig, read(t, p))
+		}
+	}
+}
+
+func TestAddWorkspaceRejectsBadSources(t *testing.T) {
+	use(t, "")
+	for _, src := range []string{"", "acme", "acme/map/x", "../x/y", "a b/c"} {
+		if err := AddWorkspace(src); err == nil {
+			t.Errorf("AddWorkspace(%q) succeeded", src)
+		}
+	}
+}
