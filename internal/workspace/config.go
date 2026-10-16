@@ -140,6 +140,22 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
+// Name returns the workspace name in a config file (or the cartographer.toml
+// in a dir) without validating the rest ("" when the file is missing or
+// unreadable, or names none).
+func Name(path string) string {
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		path = filepath.Join(path, FileName)
+	}
+	var c struct {
+		Name string `toml:"name"`
+	}
+	if _, err := toml.DecodeFile(path, &c); err != nil {
+		return ""
+	}
+	return c.Name
+}
+
 // Dir is the directory holding the config file.
 func (c *Config) Dir() string { return c.dir }
 
@@ -156,8 +172,11 @@ const Template = `# cartographer workspace: the repositories one system map cove
 # Plugins run in this directory, so pin their runtimes here (e.g. a mise.toml
 # with erlang/elixir/node). {plugins} is the bundled plugin directory.
 name = "my-project"
-# GitHub repository whose releases hold published snapshots (owner/name).
-publish = "my-org/my-project-map"
+# Locally, "cartographer build --local --import" maps the sibling checkouts
+# at their HEAD, and queries rebuild the map when a checkout moves on.
+# Publishing snapshots from CI is optional: set the GitHub repository whose
+# releases hold them (owner/name) and see the README's "Publish snapshots".
+# publish = "my-org/my-project-map"
 # How many complete snapshot releases publish keeps (newest first).
 keep = 30
 

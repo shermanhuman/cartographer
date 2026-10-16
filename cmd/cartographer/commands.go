@@ -18,7 +18,7 @@ import (
 
 // Flag groups shared by several commands.
 const (
-	queryFlags = "db snapshot no-pull budget format"
+	queryFlags = "db snapshot no-pull no-rebuild budget format"
 	pagedFlags = queryFlags + " limit offset"
 )
 
@@ -29,14 +29,14 @@ var commandFlags = map[string]string{
 	"path": queryFlags, "table": queryFlags, "context": queryFlags,
 	"find":    pagedFlags,
 	"callers": pagedFlags + " depth", "callees": pagedFlags + " depth", "impact": pagedFlags + " depth",
-	"mermaid": "db snapshot no-pull depth max",
-	"embed":   "db snapshot no-pull",
+	"mermaid": "db snapshot no-pull no-rebuild depth max",
+	"embed":   "db snapshot no-pull no-rebuild",
 	"diff":    "db",
-	"export":  "db snapshot no-pull depth pdf svg page snippet around context table annotation o",
-	"serve":   "db snapshot no-pull port open",
+	"export":  "db snapshot no-pull no-rebuild depth pdf svg page snippet around context table annotation o",
+	"serve":   "db snapshot no-pull no-rebuild port open",
 	"pull":    "db", "workspace": "", "import": "db", "snapshots": "db",
-	"mapped": "db no-pull", "hook": "db no-pull", "mcp": "db snapshot no-pull",
-	"init": "", "build": "db workspace out plugins import fetch fetch-only ref", "publish": "workspace", "review": "db snapshot workspace",
+	"mapped": "db no-pull", "hook": "db no-pull", "mcp": "db snapshot no-pull no-rebuild",
+	"init": "", "build": "db workspace out plugins import local background fetch fetch-only ref", "publish": "workspace", "review": "db snapshot workspace",
 	"validate-facts": "", "plugins-dir": "", "version": "",
 }
 

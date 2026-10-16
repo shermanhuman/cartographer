@@ -1,12 +1,14 @@
 // Package session prepares a query for the current directory: pull newer
 // snapshots when due, pick the snapshot whose workspace covers the current
-// repository, and mark results against local changes.
+// repository, mark results against local changes, and start a local rebuild
+// when a checkout has moved past the snapshot.
 package session
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,9 +17,11 @@ import (
 
 	"github.com/shermanhuman/cartographer/internal/fresh"
 	"github.com/shermanhuman/cartographer/internal/query"
+	"github.com/shermanhuman/cartographer/internal/rebuild"
 	"github.com/shermanhuman/cartographer/internal/snapshot"
 	"github.com/shermanhuman/cartographer/internal/store"
 	"github.com/shermanhuman/cartographer/internal/userconfig"
+	"github.com/shermanhuman/cartographer/internal/workspace"
 )
 
 // CacheTTL is how long a session reuses its snapshot choice and freshness
@@ -48,6 +52,7 @@ func WithoutCache(ctx context.Context) context.Context {
 type Session struct {
 	Store    *store.Store
 	DataDir  string
+	DB       string // the store's database file; a rebuild imported there counts as built
 	Cwd      string
 	Snapshot string // explicit snapshot id; "" selects by cwd
 	AutoPull bool
@@ -56,6 +61,12 @@ type Session struct {
 	Background bool
 	Log        io.Writer // warnings (pull failures); nil discards
 	GitHub     *snapshot.GitHub
+	// Rebuild starts a local rebuild of the registered workspace at dir
+	// (whose cartographer.toml names ws) when a checkout it builds is ahead
+	// of the snapshot and no rebuild is running or recently failed
+	// (rebuild.Dir in DataDir). It must return at once (spawn or go); the
+	// caller holds the session lock. nil never rebuilds.
+	Rebuild func(ws, dir string)
 
 	ghMu   sync.Mutex // guards GitHub's lazy creation
 	pullMu sync.Mutex // one auto-pull at a time; guards warned
@@ -72,6 +83,8 @@ type memo struct {
 	co      fresh.Checkout
 	chosen  string                   // snapshot chosen by cwd ("" not yet)
 	reports map[string]*fresh.Report // snapshot id -> freshness
+	local   map[string]string        // workspace name -> registered workspace dir ("" none)
+	sibling map[string]string        // workspace name -> unregistered sibling workspace ("" none)
 }
 
 // DataDir is $CARTOGRAPHER_DATA, else $XDG_DATA_HOME/cartographer or
@@ -151,6 +164,9 @@ func (s *Session) pullDue(ctx context.Context) {
 	}
 }
 
+// Forget drops the cached choice and freshness (a new snapshot arrived).
+func (s *Session) Forget() { s.forget() }
+
 // forget drops the cached choice and freshness (a new snapshot arrived).
 func (s *Session) forget() {
 	s.mu.Lock()
@@ -165,7 +181,7 @@ func (s *Session) current(ctx context.Context) *memo {
 	if m := s.memo; m != nil && m.cwd == s.Cwd && time.Since(m.at) < CacheTTL {
 		return m
 	}
-	m := &memo{at: time.Now(), cwd: s.Cwd, co: fresh.Find(ctx, s.Cwd), reports: map[string]*fresh.Report{}}
+	m := &memo{at: time.Now(), cwd: s.Cwd, co: fresh.Find(ctx, s.Cwd), reports: map[string]*fresh.Report{}, local: map[string]string{}, sibling: map[string]string{}}
 	if ctx.Err() == nil {
 		s.memo = m
 	}
@@ -210,6 +226,7 @@ func (s *Session) Query(ctx context.Context) (*query.Q, *fresh.Report, error) {
 	}
 	q.Changed = rep.Changed
 	q.Staleness = rep.Summary()
+	q.Notes = rep.Hints
 	return q, rep, nil
 }
 
@@ -220,7 +237,9 @@ func (s *Session) Fresh(ctx context.Context, id string) (*fresh.Report, error) {
 	return s.freshFrom(ctx, s.current(ctx), id)
 }
 
-// freshFrom computes (or reuses) id's report. The caller holds s.mu.
+// freshFrom computes (or reuses) id's report, and with it decides once per
+// computation whether to start a rebuild (see rebuildDue). The caller holds
+// s.mu.
 func (s *Session) freshFrom(ctx context.Context, m *memo, id string) (*fresh.Report, error) {
 	if rep, ok := m.reports[id]; ok {
 		return rep, nil
@@ -230,15 +249,109 @@ func (s *Session) freshFrom(ctx context.Context, m *memo, id string) (*fresh.Rep
 		return nil, err
 	}
 	cfg, _ := userconfig.Load()
-	var explicit map[string]string
-	if cfg != nil {
-		explicit = cfg.Checkouts
+	if cfg == nil {
+		cfg = &userconfig.Config{}
 	}
-	rep := fresh.Check(ctx, repos, fresh.LocateFrom(ctx, repos, m.co, explicit))
+	rep := fresh.Check(ctx, repos, fresh.LocateFrom(ctx, repos, m.co, cfg.Checkouts))
+	if s.DataDir != "" {
+		if ws, _ := s.Store.Workspace(ctx, id); ws != "" {
+			rep.Rebuild = rebuild.Dir{Path: s.DataDir}.Status(ws)
+			if s.Rebuild != nil {
+				s.rebuildDue(ctx, m, ws, repos, rep, cfg)
+			}
+		}
+	}
 	if ctx.Err() == nil { // a cancelled call's git execs failed; don't keep its answer
 		m.reports[id] = rep
 	}
 	return rep, nil
+}
+
+// recentlyBuilt reports whether a rebuild imported exactly heads into db
+// within FailBackoff: a guard against a tight loop when a newer snapshot
+// at older revisions (a pull, an import) is in use, which a later rebuild
+// may still replace.
+func recentlyBuilt(d rebuild.Dir, ws, db string, heads map[string]string) (time.Time, bool) {
+	revs, at := d.Built(ws, db)
+	return at, revs != nil && maps.Equal(revs, heads) && time.Since(at) < rebuild.FailBackoff
+}
+
+// rebuildDue starts a rebuild of ws when the report shows a checkout ahead
+// of the snapshot and the checkouts the registered workspace builds (the
+// ones workspace.Local resolves, which may not be the one the query runs
+// in: a second clone, a worktree) are ahead too, so the new snapshot will
+// answer the evidence. It never starts one for a workspace whose
+// cartographer.toml changed since it was registered (userconfig.Trust), for
+// a pinned snapshot, while one runs, within FailBackoff of a failure, or
+// right after a rebuild of the same HEADs. A workspace that can't be
+// resolved still starts one:
+// the build records why, and that backs off. Advice goes to rep.Hints.
+func (s *Session) rebuildDue(ctx context.Context, m *memo, ws string, repos []fresh.Repo, rep *fresh.Report, cfg *userconfig.Config) {
+	dir, ok := m.local[ws]
+	if !ok {
+		dir = rebuild.Registered(ws, cfg.LocalWorkspaces)
+		m.local[ws] = dir
+	}
+	if dir == "" {
+		sib, ok := m.sibling[ws]
+		if !ok {
+			sib = rebuild.Sibling(ws, m.co)
+			m.sibling[ws] = sib
+		}
+		if sib != "" {
+			rep.Hints = append(rep.Hints, "to keep this map fresh automatically: cartographer workspace add "+sib)
+		}
+		return
+	}
+	switch userconfig.Trust(dir) {
+	case userconfig.TrustChanged:
+		rep.Hints = append(rep.Hints, "cartographer.toml changed since you registered it: review, then cartographer workspace add "+dir)
+		return
+	case userconfig.TrustUnknown: // listed by hand, never added
+		rep.Hints = append(rep.Hints, "to keep this map fresh automatically: cartographer workspace add "+dir)
+		return
+	}
+	d := rebuild.Dir{Path: s.DataDir}
+	if s.Snapshot != "" || !rebuild.Needed(rep) || !d.Due(ws) {
+		return
+	}
+	if _, running := d.Running(ws); running {
+		return
+	}
+	wcfg, err := workspace.Load(dir)
+	var paths map[string]string
+	if err == nil {
+		paths, _, err = workspace.Local(ctx, wcfg, cfg.Checkouts)
+	}
+	if err != nil {
+		s.Rebuild(ws, dir)
+		return
+	}
+	snap := map[string]string{}
+	for _, r := range repos {
+		snap[r.Name] = r.Revision
+	}
+	heads := map[string]string{}
+	ahead := false
+	for name, p := range paths {
+		heads[name] = fresh.Head(ctx, p)
+		if rev, ok := snap[name]; !ok || heads[name] != rev && fresh.Ahead(ctx, p, rev) {
+			ahead = true
+		}
+	}
+	at, recent := recentlyBuilt(d, ws, s.DB, heads)
+	switch {
+	case !ahead:
+		for _, st := range rep.Repos {
+			if (st.Behind > 0 || st.Note == fresh.NoteRevisionMissing) && paths[st.Name] != "" && !samePath(paths[st.Name], st.Path) {
+				rep.Hints = append(rep.Hints, fmt.Sprintf("checkout here differs from the one the workspace builds: %s at %s", st.Name, paths[st.Name]))
+			}
+		}
+	case recent:
+		rep.Hints = append(rep.Hints, fmt.Sprintf("rebuilt these checkouts at %s, but a newer snapshot came in since; rebuilds again after %s", at.Local().Format("15:04"), at.Add(rebuild.FailBackoff).Local().Format("15:04")))
+	default:
+		s.Rebuild(ws, dir)
+	}
 }
 
 func (s *Session) repos(ctx context.Context, id string) ([]fresh.Repo, error) {
@@ -257,7 +370,7 @@ func (s *Session) repos(ctx context.Context, id string) ([]fresh.Repo, error) {
 type ErrNotMapped struct{ Workspaces []string }
 
 func (e *ErrNotMapped) Error() string {
-	return fmt.Sprintf("this repository isn't covered by any pulled map (have: %s); pull its workspace with `cartographer pull <owner/name>` or pass --snapshot", strings.Join(e.Workspaces, ", "))
+	return fmt.Sprintf("this repository isn't covered by any map (have: %s); build its workspace with `cartographer build --local --import` there (and `cartographer workspace add <dir>` to keep it fresh), pull it with `cartographer pull <owner/name>`, or pass --snapshot", strings.Join(e.Workspaces, ", "))
 }
 
 // choose picks the newest snapshot of the workspace whose repositories

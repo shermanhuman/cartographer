@@ -166,6 +166,16 @@ func (s *Store) Snapshots(ctx context.Context) ([]SnapshotInfo, error) {
 	return out, rows.Err()
 }
 
+// Workspace names the workspace of a snapshot ("" when unknown).
+func (s *Store) Workspace(ctx context.Context, id string) (string, error) {
+	var ws string
+	err := s.DB.QueryRowContext(ctx, `SELECT workspace FROM snapshots WHERE id = ?`, id).Scan(&ws)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return ws, err
+}
+
 // Latest returns the newest snapshot id.
 func (s *Store) Latest(ctx context.Context) (string, error) {
 	var id string

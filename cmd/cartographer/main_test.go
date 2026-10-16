@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,9 +55,18 @@ func TestNoSnapshotMessage(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	// Spawned as the detached rebuild child (selfExe in tests): be the CLI.
+	if os.Getenv("CARTOGRAPHER_TEST_CLI") == "1" {
+		if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "cartographer:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	dir, _ := os.MkdirTemp("", "carto-cli-")
 	os.Setenv("CARTOGRAPHER_CONFIG", filepath.Join(dir, "config.toml"))
 	os.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	os.Setenv("CARTOGRAPHER_NO_REBUILD", "1") // tests opt in to rebuilds explicitly
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
