@@ -142,6 +142,36 @@ func (b cancelBody) Close() error {
 	return err
 }
 
+// HTTPError is a non-2xx GitHub response.
+type HTTPError struct {
+	Method, URL string
+	StatusCode  int
+	Status      string
+	Body        string
+}
+
+func (e *HTTPError) Error() string {
+	hint := ""
+	if e.StatusCode == 401 || e.StatusCode == 404 {
+		hint = " (check access to the repository and the token: GH_TOKEN, GITHUB_TOKEN or `gh auth login`)"
+	}
+	return fmt.Sprintf("github %s %s: %s: %s%s", e.Method, e.URL, e.Status, e.Body, hint)
+}
+
+// hasStatus reports whether err is an HTTPError with one of codes.
+func hasStatus(err error, codes ...int) bool {
+	var he *HTTPError
+	if !errors.As(err, &he) {
+		return false
+	}
+	for _, c := range codes {
+		if he.StatusCode == c {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *GitHub) do(ctx context.Context, method, u string, body io.Reader, contentType, accept string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
@@ -165,11 +195,7 @@ func (g *GitHub) do(ctx context.Context, method, u string, body io.Reader, conte
 	if resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		hint := ""
-		if resp.StatusCode == 401 || resp.StatusCode == 404 {
-			hint = " (check access to the repository and the token: GH_TOKEN, GITHUB_TOKEN or `gh auth login`)"
-		}
-		return nil, fmt.Errorf("github %s %s: %s: %s%s", method, u, resp.Status, strings.TrimSpace(string(msg)), hint)
+		return nil, &HTTPError{Method: method, URL: u, StatusCode: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(msg))}
 	}
 	return resp, nil
 }
@@ -276,15 +302,20 @@ func (g *GitHub) Publish(ctx context.Context, repo, id, notes string, asset []by
 	if err != nil {
 		return nil, err
 	}
-	// Clean up even if ctx was cancelled; g.json bounds each call.
-	cleanup := func() { g.deleteRelease(context.WithoutCancel(ctx), repo, r) }
+	// Clean up even if ctx was cancelled; g.json bounds each call. A failed
+	// cleanup is reported with the error that caused it.
+	fail := func(err error) error {
+		if cerr := g.deleteRelease(context.WithoutCancel(ctx), repo, r); cerr != nil {
+			return errors.Join(err, fmt.Errorf("delete draft %s: %w", id, cerr))
+		}
+		return err
+	}
 	u := fmt.Sprintf("%s/repos/%s/releases/%d/assets?name=%s", g.uploads(), repo, r.ID, url.QueryEscape(AssetName))
 	uctx, cancel := context.WithTimeout(ctx, g.transferTimeout())
 	defer cancel()
 	resp, err := g.do(uctx, "POST", u, bytes.NewReader(asset), "application/gzip", "")
 	if err != nil {
-		cleanup()
-		return nil, err
+		return nil, fail(err)
 	}
 	resp.Body.Close()
 	var pub Release
@@ -292,8 +323,7 @@ func (g *GitHub) Publish(ctx context.Context, repo, id, notes string, asset []by
 		"draft": false, "make_latest": "true",
 	}, &pub)
 	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("publish draft release %s: %w", id, err)
+		return nil, fail(fmt.Errorf("publish draft release %s: %w", id, err))
 	}
 	return &pub, nil
 }
@@ -315,10 +345,12 @@ func (g *GitHub) Download(ctx context.Context, r Release) (io.ReadCloser, error)
 }
 
 // Prune deletes complete snapshot releases (and their tags) beyond the
-// newest keep, which must be at least 1, and incomplete ones (drafts, or
-// releases without the asset) older than the newest complete snapshot.
-// Incomplete releases never count toward keep; newer ones are left alone,
-// since a publish may still be in progress.
+// newest keep, which must be at least 1. Incomplete ones (drafts, or
+// releases without the asset) never count toward keep; one is deleted only
+// when it is older than the newest complete snapshot and its tag is older
+// than StalePartial. A newer or recent one may be a publish still in
+// progress: tags are stamped when a build starts, so an overlapping run's
+// draft can be older than a release another run just published.
 func (g *GitHub) Prune(ctx context.Context, repo string, keep int) (int, error) {
 	if keep < 1 {
 		return 0, fmt.Errorf("prune: keep must be at least 1, got %d", keep)
@@ -334,8 +366,8 @@ func (g *GitHub) Prune(ctx context.Context, repo string, keep int) (int, error) 
 			if complete <= keep {
 				continue
 			}
-		} else if complete == 0 {
-			continue // newer than every complete snapshot
+		} else if complete == 0 || !staleTag(r.Tag) {
+			continue
 		}
 		if err := g.deleteRelease(ctx, repo, r); err != nil {
 			return n, err
@@ -345,12 +377,29 @@ func (g *GitHub) Prune(ctx context.Context, repo string, keep int) (int, error) 
 	return n, nil
 }
 
+// staleTag reports whether a snapshot tag's timestamp (snapshot-<UTC>[-hash],
+// see bundle.SnapshotID) is older than StalePartial. Unparseable tags are
+// never stale.
+func staleTag(tag string) bool {
+	const layout = "20060102T150405Z"
+	ts := strings.TrimPrefix(tag, TagPrefix)
+	if len(ts) < len(layout) {
+		return false
+	}
+	t, err := time.Parse(layout, ts[:len(layout)])
+	return err == nil && time.Since(t) > StalePartial
+}
+
+// deleteRelease deletes a release and its tag. "Already gone" is not an
+// error: 404 on the release (a racing prune), 404 or 422 on the tag ref (a
+// draft has no tag).
 func (g *GitHub) deleteRelease(ctx context.Context, repo string, r Release) error {
-	if err := g.json(ctx, "DELETE", fmt.Sprintf("%s/repos/%s/releases/%d", g.api(), repo, r.ID), nil, nil); err != nil {
+	err := g.json(ctx, "DELETE", fmt.Sprintf("%s/repos/%s/releases/%d", g.api(), repo, r.ID), nil, nil)
+	if err != nil && !hasStatus(err, http.StatusNotFound) {
 		return err
 	}
-	err := g.json(ctx, "DELETE", fmt.Sprintf("%s/repos/%s/git/refs/tags/%s", g.api(), repo, url.PathEscape(r.Tag)), nil, nil)
-	if err != nil && !strings.Contains(err.Error(), "422") && !strings.Contains(err.Error(), "404") {
+	err = g.json(ctx, "DELETE", fmt.Sprintf("%s/repos/%s/git/refs/tags/%s", g.api(), repo, url.PathEscape(r.Tag)), nil, nil)
+	if err != nil && !hasStatus(err, http.StatusNotFound, http.StatusUnprocessableEntity) {
 		return err
 	}
 	return nil

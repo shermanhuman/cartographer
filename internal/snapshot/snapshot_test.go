@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,6 +33,12 @@ type fakeGitHub struct {
 	// failUpload / failPublish make the asset upload / the draft's publish
 	// PATCH fail.
 	failUpload, failPublish bool
+	// failDelete makes release DELETEs fail; refStatus, when set, is the
+	// status of tag ref DELETEs.
+	failDelete bool
+	refStatus  int
+	// onUpload runs inside the upload handler.
+	onUpload func()
 }
 
 func newFake(t *testing.T) *fakeGitHub {
@@ -93,6 +100,9 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		var id int64
 		fmt.Sscanf(p[strings.Index(p, "/releases/")+len("/releases/"):], "%d", &id)
 		f.calls = append(f.calls, "upload")
+		if f.onUpload != nil {
+			f.onUpload()
+		}
 		if f.failUpload {
 			http.Error(w, "boom", 500)
 			return
@@ -112,10 +122,22 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		var id int64
 		fmt.Sscanf(p[strings.LastIndex(p, "/")+1:], "%d", &id)
 		f.calls = append(f.calls, "delete")
+		if f.failDelete {
+			http.Error(w, "boom", 500)
+			return
+		}
+		if f.releases[id] == nil {
+			http.Error(w, `{"message":"Not Found"}`, 404)
+			return
+		}
 		f.deleted = append(f.deleted, f.releases[id].Tag)
 		delete(f.releases, id)
 		w.WriteHeader(204)
 	case r.Method == "DELETE" && strings.Contains(p, "/git/refs/tags/"):
+		if f.refStatus != 0 {
+			http.Error(w, "ref", f.refStatus)
+			return
+		}
 		w.WriteHeader(204)
 	default:
 		http.Error(w, "unexpected "+r.Method+" "+p, 500)
@@ -123,7 +145,7 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 // add stores a release directly, with the snapshot asset when withAsset.
-func (f *fakeGitHub) add(t *testing.T, tag string, draft, withAsset bool) {
+func (f *fakeGitHub) add(t *testing.T, tag string, draft, withAsset bool) int64 {
 	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -136,6 +158,7 @@ func (f *fakeGitHub) add(t *testing.T, tag string, draft, withAsset bool) {
 		rel.Assets = []Asset{{ID: aid, Name: AssetName, URL: fmt.Sprintf("%s/assets/%d", f.srv.URL, aid)}}
 	}
 	f.releases[rel.ID] = rel
+	return rel.ID
 }
 
 func (f *fakeGitHub) tags() []string {
@@ -466,40 +489,115 @@ func TestSnapshotsSkipIncomplete(t *testing.T) {
 	}
 }
 
-// Prune keeps the newest complete snapshots, deletes incomplete releases
-// older than the newest complete one, and leaves newer incomplete ones (a
-// publish may be in progress); incomplete releases never count toward keep.
+// tagAgo is a snapshot tag stamped d ago.
+func tagAgo(d time.Duration) string {
+	return bundle.SnapshotID("mini", time.Now().Add(-d))
+}
+
+// Prune keeps the newest complete snapshots and deletes incomplete releases
+// older than the newest complete one once their tag is older than
+// StalePartial. Newer incomplete ones, and recent ones (an overlapping
+// publish still in progress), are left alone; incomplete releases never
+// count toward keep.
 func TestPruneIncomplete(t *testing.T) {
 	ctx := context.Background()
 	f := newFake(t)
 	gh := f.client()
-	f.add(t, "snapshot-20261015T090000Z", false, false) // old, no asset
-	f.add(t, "snapshot-20261015T100000Z", false, true)
-	f.add(t, "snapshot-20261015T110000Z", true, true) // stale draft
-	f.add(t, "snapshot-20261015T120000Z", false, true)
-	f.add(t, "snapshot-20261015T130000Z", true, false) // in-progress draft
-	f.add(t, "notes-1", false, false)                  // not a snapshot
+	var (
+		oldBare    = tagAgo(10 * time.Hour) // published, no asset
+		c1         = tagAgo(9 * time.Hour)
+		staleDraft = tagAgo(8 * time.Hour)
+		busyDraft  = tagAgo(30 * time.Second) // overlapping run, still uploading
+		c2         = tagAgo(10 * time.Second)
+		newDraft   = tagAgo(0) // newer than every complete one
+	)
+	f.add(t, oldBare, false, false)
+	f.add(t, c1, false, true)
+	f.add(t, staleDraft, true, true)
+	f.add(t, busyDraft, true, false)
+	f.add(t, c2, false, true)
+	f.add(t, newDraft, true, false)
+	f.add(t, "notes-1", false, false) // not a snapshot
+	tags := func(ts ...string) string { sort.Strings(ts); return strings.Join(ts, ",") }
 	n, err := gh.Prune(ctx, "o/map", 2)
 	if err != nil || n != 2 {
 		t.Errorf("prune = %d, %v", n, err)
 	}
-	want := "notes-1,snapshot-20261015T100000Z,snapshot-20261015T120000Z,snapshot-20261015T130000Z"
-	if got := strings.Join(f.tags(), ","); got != want {
-		t.Errorf("after prune keep=2: %s, want %s", got, want)
+	if got, want := strings.Join(f.tags(), ","), tags("notes-1", c1, busyDraft, c2, newDraft); got != want {
+		t.Errorf("after prune keep=2:\n got %s\nwant %s", got, want)
 	}
 	n, err = gh.Prune(ctx, "o/map", 1)
 	if err != nil || n != 1 {
 		t.Errorf("prune = %d, %v", n, err)
 	}
-	want = "notes-1,snapshot-20261015T120000Z,snapshot-20261015T130000Z"
-	if got := strings.Join(f.tags(), ","); got != want {
-		t.Errorf("after prune keep=1: %s, want %s", got, want)
+	if got, want := strings.Join(f.tags(), ","), tags("notes-1", busyDraft, c2, newDraft); got != want {
+		t.Errorf("after prune keep=1:\n got %s\nwant %s", got, want)
 	}
 
 	// No complete snapshot yet: incomplete releases are left alone.
 	g := newFake(t)
-	g.add(t, "snapshot-20261015T110000Z", true, false)
+	g.add(t, tagAgo(5*time.Hour), true, false)
 	if n, err := g.client().Prune(ctx, "o/map", 1); err != nil || n != 0 {
 		t.Errorf("prune with nothing complete = %d, %v", n, err)
+	}
+}
+
+// A failed cleanup is reported along with the error that triggered it, so
+// the operator learns a draft was left behind.
+func TestPublishReportsFailedCleanup(t *testing.T) {
+	f := newFake(t)
+	f.failUpload, f.failDelete = true, true
+	id := "snapshot-20261015T120000Z"
+	_, err := f.client().Publish(context.Background(), "o/map", id, "", packFixture(t, id))
+	if err == nil || !strings.Contains(err.Error(), "/assets") || !strings.Contains(err.Error(), "delete draft "+id) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// The draft is deleted even when ctx is cancelled mid-publish.
+func TestPublishCleansUpAfterCancel(t *testing.T) {
+	f := newFake(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.onUpload = cancel
+	f.failUpload = true
+	id := "snapshot-20261015T120000Z"
+	if _, err := f.client().Publish(ctx, "o/map", id, "", packFixture(t, id)); err == nil {
+		t.Fatal("publish should fail")
+	}
+	if got := f.tags(); len(got) != 0 {
+		t.Errorf("draft left after cancel: %v", got)
+	}
+}
+
+// deleteRelease tolerates only the statuses that mean "already gone": 404 on
+// the release (a racing prune), 404/422 on the tag ref (a draft has no tag).
+// A tag containing "422" must not make a 5xx look tolerated.
+func TestDeleteReleaseStatuses(t *testing.T) {
+	ctx := context.Background()
+	f := newFake(t)
+	gh := f.client()
+	tag := "snapshot-20261015T042200Z-a4221b00"
+	if err := gh.deleteRelease(ctx, "o/map", Release{ID: 99, Tag: tag}); err != nil {
+		t.Errorf("missing release: %v", err)
+	}
+	for _, tc := range []struct {
+		status int
+		ok     bool
+	}{{404, true}, {422, true}, {500, false}, {502, false}} {
+		f.refStatus = tc.status
+		id := f.add(t, tag, false, false)
+		err := gh.deleteRelease(ctx, "o/map", Release{ID: id, Tag: tag})
+		if (err == nil) != tc.ok {
+			t.Errorf("ref DELETE %d: err = %v", tc.status, err)
+		}
+		var he *HTTPError
+		if err != nil && (!errors.As(err, &he) || he.StatusCode != tc.status) {
+			t.Errorf("ref DELETE %d: want *HTTPError, got %v", tc.status, err)
+		}
+	}
+	f.refStatus, f.failDelete = 0, true
+	if err := gh.deleteRelease(ctx, "o/map", Release{ID: 1, Tag: tag}); err == nil {
+		t.Error("release DELETE 500 swallowed")
 	}
 }
