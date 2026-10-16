@@ -29,7 +29,25 @@ disable-model-invocation: true
    `app-private-key`) that can read every repository. Keep the workflow ref
    and `cartographer-version` equal; the workflow installs exactly that binary.
 7. **Product repositories:** on push to `main`, send a `product-main-push`
-   dispatch to the workspace; on pull requests, call
+   dispatch to the workspace with an App token scoped to the workspace
+   repository (App permissions apply installation-wide; the reusable
+   workflows mint theirs with `permission-contents: read`):
+
+   ```yaml
+   - id: app
+     uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+     with:
+       app-id: ${{ secrets.MAP_APP_ID }}
+       private-key: ${{ secrets.MAP_APP_PRIVATE_KEY }}
+       owner: ${{ github.repository_owner }}
+       repositories: my-project-map
+       permission-contents: write
+   - env:
+       GH_TOKEN: ${{ steps.app.outputs.token }}
+     run: gh api repos/${{ github.repository_owner }}/my-project-map/dispatches -f event_type=product-main-push
+   ```
+
+   On pull requests, call
    `shermanhuman/cartographer/.github/workflows/pr-impact.yml@v0.1.0` with
    `cartographer-version: v0.1.0` (same release as the ref), `workspace`,
    `repo` and the App secrets for a sticky impact comment.

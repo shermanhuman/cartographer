@@ -74,6 +74,9 @@ jobs:
           app-id: ${{ secrets.app-id }}
           private-key: ${{ secrets.app-private-key }}
           owner: ${{ github.repository_owner }}
+          # App permissions apply installation-wide (the App may hold contents
+          # write for dispatches); this token only reads.
+          permission-contents: read
           # Revoked by the "Revoke token" step, before any build code runs.
           skip-token-revoke: true
       - if: steps.creds.outputs.ok == 'true'
