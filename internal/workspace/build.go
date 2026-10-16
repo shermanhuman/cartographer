@@ -42,19 +42,59 @@ type BuildOptions struct {
 	// Log receives progress lines; nil discards them.
 	Log io.Writer
 	// Fetch clones missing checkouts from their URL and fetches existing
-	// ones (and any Refs revisions) before building. A GH_TOKEN/GITHUB_TOKEN
-	// in the environment authenticates https://github.com URLs; it is passed
-	// to git through its environment only (never argv), and is removed from
-	// the environment of plugins and the schema prepare command.
+	// ones (and any Refs revisions) before building; a configured ref then
+	// resolves against origin (origin/HEAD, origin/<branch>), since a fetch
+	// does not move a checkout's local branches. A GH_TOKEN/GITHUB_TOKEN in
+	// the environment authenticates https://github.com URLs; it is passed to
+	// git through its environment only (never argv), and is removed from the
+	// environment of plugins and the schema prepare command. Those run as
+	// the same user, though, and can read the parent's environment: when
+	// they may run untrusted code (a pull request), use Fetch in a separate
+	// process that holds the token, then Build without it.
 	Fetch bool
 }
 
+func logger(w io.Writer) func(string, ...any) {
+	return func(format string, a ...any) {
+		if w != nil {
+			fmt.Fprintf(w, format+"\n", a...)
+		}
+	}
+}
+
+// Fetch clones or fetches every repo (and any refs revisions) and downloads
+// the files of the revision a later Build without Fetch will snapshot, so
+// that build needs neither the network nor credentials (a blobless clone
+// otherwise fetches file contents lazily). It runs no plugin and no prepare
+// command: CI gives the token to this step only (build --fetch-only).
+func Fetch(ctx context.Context, c *Config, refs map[string]string, log io.Writer) error {
+	logf := logger(log)
+	for _, r := range c.Repos {
+		src := c.RepoPath(r)
+		if err := fetchRepo(ctx, r, src, refs[r.Name]); err != nil {
+			return fmt.Errorf("fetch: %s: %w", r.Name, err)
+		}
+		rev, err := revision(ctx, r, src, refs, false)
+		if err != nil {
+			return fmt.Errorf("fetch: %s: %w", r.Name, err)
+		}
+		if err := primeBlobs(ctx, src, rev); err != nil {
+			return fmt.Errorf("fetch: %s: %w", r.Name, err)
+		}
+		logf("%s @ %s: fetched", r.Name, rev[:min(12, len(rev))])
+	}
+	return nil
+}
+
 // Build snapshots every repo with git archive, runs the plugins and writes a
-// snapshot directory that bundle.Read accepts.
+// snapshot directory that bundle.Read accepts. The snapshot is assembled in
+// a temporary directory beside Out and renamed to Out only when complete, so
+// a failed or cancelled build leaves nothing behind.
 func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, error) {
-	logf := func(format string, a ...any) {
-		if o.Log != nil {
-			fmt.Fprintf(o.Log, format+"\n", a...)
+	logf := logger(o.Log)
+	logStderr := func(what, stderr string) {
+		if stderr = strings.TrimSpace(stderr); stderr != "" {
+			logf("%s stderr:\n%s", what, tail(stderr))
 		}
 	}
 	if o.Out == "" {
@@ -77,8 +117,19 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 		return nil, err
 	}
 	defer os.RemoveAll(work)
+	if err := os.MkdirAll(filepath.Dir(o.Out), 0o755); err != nil {
+		return nil, err
+	}
+	out, err := os.MkdirTemp(filepath.Dir(o.Out), "."+filepath.Base(o.Out)+".tmp-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(out) // a no-op once renamed to o.Out
+	if err := os.Chmod(out, 0o755); err != nil {
+		return nil, err
+	}
 	for _, d := range []string{"facts", "docs", "annotations"} {
-		if err := os.MkdirAll(filepath.Join(o.Out, d), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(out, d), 0o755); err != nil {
 			return nil, err
 		}
 	}
@@ -99,21 +150,16 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 	}
 	var cos []checkout
 	for _, r := range c.Repos {
-		ref := r.Ref
-		if v, ok := o.Refs[r.Name]; ok {
-			ref = v
-		}
 		src := c.RepoPath(r)
 		if o.Fetch {
 			if err := fetchRepo(ctx, r, src, o.Refs[r.Name]); err != nil {
 				return nil, fmt.Errorf("build: %s: fetch: %w", r.Name, err)
 			}
 		}
-		rev, err := git(ctx, src, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+		rev, err := revision(ctx, r, src, o.Refs, o.Fetch)
 		if err != nil {
 			return nil, fmt.Errorf("build: %s: %w", r.Name, err)
 		}
-		rev = strings.TrimSpace(rev)
 		root := filepath.Join(work, "repos", r.Name)
 		files, err := archive(ctx, src, rev, root)
 		if err != nil {
@@ -134,7 +180,7 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 		}
 		pdigest := o.PluginsDigest
 		if pdigest == "" && o.PluginsDir != "" {
-			if pdigest, err = dirDigest(o.PluginsDir); err != nil {
+			if pdigest, err = DirDigest(o.PluginsDir); err != nil {
 				return nil, fmt.Errorf("build: plugins digest: %w", err)
 			}
 		}
@@ -152,20 +198,24 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 			logf("schema: building (cache key %s)", key[:12])
 			env := mapEnv(c.Schema.Env)
 			if c.Schema.Prepare != "" {
-				if _, err := runCmd(ctx, prep.root, env, []string{"sh", "-c", c.Schema.Prepare}, nil); err != nil {
+				stderr, err := runCmd(ctx, prep.root, env, []string{"sh", "-c", c.Schema.Prepare}, nil)
+				if err != nil {
 					return nil, fmt.Errorf("build: schema prepare: %w", err)
 				}
+				logStderr("schema prepare", stderr)
 			}
 			v := map[string]string{"plugins": o.PluginsDir, "workspace": c.dir, "root": prep.root, "repo": prep.repo.Name, "revision": prep.revision}
-			if err := runPlugin(ctx, c.dir, env, expand(c.Schema.Command, v), cached, ""); err != nil {
+			stderr, err := runPlugin(ctx, c.dir, env, expand(c.Schema.Command, v), cached, "")
+			if err != nil {
 				return nil, fmt.Errorf("build: schema: %w", err)
 			}
+			logStderr("schema", stderr)
 		}
-		if err := copyFile(cached, filepath.Join(o.Out, "facts", "schema.json")); err != nil {
+		if err := copyFile(cached, filepath.Join(out, "facts", "schema.json")); err != nil {
 			return nil, err
 		}
 		m.Facts = append(m.Facts, "facts/schema.json")
-		vars["schema_facts"] = filepath.Join(o.Out, "facts", "schema.json")
+		vars["schema_facts"] = filepath.Join(out, "facts", "schema.json")
 	}
 
 	for _, co := range cos {
@@ -179,16 +229,18 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 			logf("%s: plugin %s", co.repo.Name, pname)
 			// Plugins run in the workspace directory, never inside the archived
 			// repository: its tool config (e.g. mise.toml) is not trusted here.
-			if err := runPlugin(ctx, c.dir, mapEnv(p.Env), expand(p.Command, v), filepath.Join(o.Out, rel), co.repo.Name); err != nil {
+			stderr, err := runPlugin(ctx, c.dir, mapEnv(p.Env), expand(p.Command, v), filepath.Join(out, rel), co.repo.Name)
+			if err != nil {
 				return nil, fmt.Errorf("build: %s: plugin %s: %w", co.repo.Name, pname, err)
 			}
+			logStderr(fmt.Sprintf("%s: plugin %s", co.repo.Name, pname), stderr)
 			m.Facts = append(m.Facts, rel)
 		}
 		for _, f := range co.files {
 			if !isDoc(f, co.repo.Docs) {
 				continue
 			}
-			if err := copyFile(filepath.Join(co.root, filepath.FromSlash(f)), filepath.Join(o.Out, "docs", co.repo.Name, filepath.FromSlash(f))); err != nil {
+			if err := copyFile(filepath.Join(co.root, filepath.FromSlash(f)), filepath.Join(out, "docs", co.repo.Name, filepath.FromSlash(f))); err != nil {
 				return nil, err
 			}
 		}
@@ -197,7 +249,7 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 	anns, _ := filepath.Glob(filepath.Join(c.dir, c.Annotations, "*.json"))
 	sort.Strings(anns)
 	for _, a := range anns {
-		if err := copyFile(a, filepath.Join(o.Out, "annotations", filepath.Base(a))); err != nil {
+		if err := copyFile(a, filepath.Join(out, "annotations", filepath.Base(a))); err != nil {
 			return nil, err
 		}
 	}
@@ -206,11 +258,14 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(o.Out, "manifest.json"), append(raw, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(out, "manifest.json"), append(raw, '\n'), 0o644); err != nil {
 		return nil, err
 	}
-	if _, err := bundle.Read(o.Out); err != nil {
+	if _, err := bundle.Read(out); err != nil {
 		return nil, fmt.Errorf("build: produced an invalid snapshot: %w", err)
+	}
+	if err := os.Rename(out, o.Out); err != nil {
+		return nil, fmt.Errorf("build: %w", err)
 	}
 	logf("snapshot %s: %d facts documents", m.ID, len(m.Facts))
 	return m, nil
@@ -236,6 +291,42 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 		return "", errors.New(redact(fmt.Sprintf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))))
 	}
 	return out.String(), nil
+}
+
+// revision resolves the commit to snapshot: an override from refs as given,
+// else the configured ref. After a fetch the configured ref resolves against
+// origin when origin has it (HEAD -> origin/HEAD, main -> origin/main),
+// because fetching moves origin/*, not a checkout's local branches.
+func revision(ctx context.Context, r Repo, src string, refs map[string]string, fetched bool) (string, error) {
+	ref, override := refs[r.Name]
+	if !override {
+		ref = r.Ref
+		if fetched {
+			remote := "refs/remotes/origin/" + strings.TrimPrefix(ref, "refs/heads/")
+			if out, err := git(ctx, src, "rev-parse", "--verify", "--quiet", "--end-of-options", remote+"^{commit}"); err == nil {
+				return strings.TrimSpace(out), nil
+			}
+		}
+	}
+	out, err := git(ctx, src, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// primeBlobs reads every file of rev once, which makes a blobless clone
+// download them now (with credentials) rather than during a later archive.
+func primeBlobs(ctx context.Context, src, rev string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", src, "archive", "--format=tar", rev)
+	cmd.Env = gitEnv()
+	cmd.Stdout = io.Discard
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		return errors.New(redact(fmt.Sprintf("git archive %s: %v: %s", rev, err, strings.TrimSpace(errb.String()))))
+	}
+	return nil
 }
 
 // archive extracts the tracked files of rev into dst and returns their paths.
@@ -308,12 +399,22 @@ func schemaKey(ctx context.Context, c *Config, rev string, r Repo, pluginsDigest
 	h := sha256.New()
 	fmt.Fprintf(h, "schema-version=%s\ncommand=%q\nprepare=%q\nprepare-repo=%q\nenv=%q\nplugins=%s\n",
 		c.Schema.Version, c.Schema.Command, c.Schema.Prepare, c.Schema.PrepareRepo, mapEnv(c.Schema.Env), pluginsDigest)
-	if r.Name != "" && len(c.Schema.CacheKey) > 0 {
-		out, err := git(ctx, c.RepoPath(r), append([]string{"ls-tree", "-r", rev, "--"}, c.Schema.CacheKey...)...)
-		if err != nil {
-			return "", err
+	if r.Name != "" && len(c.Schema.CacheKey) == 0 {
+		// Nothing narrower configured: any change to the repo misses.
+		fmt.Fprintf(h, "revision=%s\n", rev)
+	}
+	if r.Name != "" {
+		for _, p := range c.Schema.CacheKey {
+			out, err := git(ctx, c.RepoPath(r), "ls-tree", "-r", rev, "--", p)
+			if err != nil {
+				return "", err
+			}
+			if strings.TrimSpace(out) == "" {
+				// A mistyped path would freeze the cache forever.
+				return "", fmt.Errorf("build: schema cache_key %q matches nothing in %s at %s", p, r.Name, rev[:min(12, len(rev))])
+			}
+			fmt.Fprintf(h, "cache_key=%q\n%s", p, out)
 		}
-		h.Write([]byte(out))
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -369,32 +470,38 @@ func runCmd(ctx context.Context, dir string, env, argv []string, stdout io.Write
 		cmd.Stdout = stdout
 	}
 	if err := cmd.Run(); err != nil {
-		tail := errb.String()
-		if len(tail) > 2000 {
-			tail = "…" + tail[len(tail)-2000:]
-		}
-		return "", fmt.Errorf("%s: %v\n%s", argv[0], err, tail)
+		return "", fmt.Errorf("%s: %v\n%s", argv[0], err, tail(errb.String()))
 	}
 	return errb.String(), nil
 }
 
-// runPlugin runs an extractor, validates its facts output and writes it.
-func runPlugin(ctx context.Context, dir string, env, argv []string, out, repo string) error {
+// tail keeps the last 2000 bytes of command output for logs and errors.
+func tail(s string) string {
+	if len(s) > 2000 {
+		return "…" + s[len(s)-2000:]
+	}
+	return s
+}
+
+// runPlugin runs an extractor, validates its facts output and writes it. It
+// returns the extractor's stderr (warnings) for the caller to log.
+func runPlugin(ctx context.Context, dir string, env, argv []string, out, repo string) (string, error) {
 	var buf bytes.Buffer
-	if _, err := runCmd(ctx, dir, env, argv, &buf); err != nil {
-		return err
+	stderr, err := runCmd(ctx, dir, env, argv, &buf)
+	if err != nil {
+		return "", err
 	}
 	d, err := facts.Decode(bytes.NewReader(buf.Bytes()))
 	if err != nil {
-		return err
+		return stderr, err
 	}
 	if err := d.Validate(); err != nil {
-		return err
+		return stderr, err
 	}
 	if repo != "" && d.Repo != repo {
-		return fmt.Errorf("facts repo is %q, want %q", d.Repo, repo)
+		return stderr, fmt.Errorf("facts repo is %q, want %q", d.Repo, repo)
 	}
-	return writeAtomic(out, buf.Bytes())
+	return stderr, writeAtomic(out, buf.Bytes())
 }
 
 // writeAtomic writes b to a temporary file beside path and renames it into
@@ -438,8 +545,9 @@ func validFacts(path string) error {
 	return d.Validate()
 }
 
-// dirDigest hashes the relative paths and contents of every file under dir.
-func dirDigest(dir string) (string, error) {
+// DirDigest hashes the relative paths and contents of every file under dir
+// (16 hex digits), e.g. for BuildOptions.PluginsDigest.
+func DirDigest(dir string) (string, error) {
 	h := sha256.New()
 	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -489,8 +597,12 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, b, 0o644)
 }
 
+// managedKey marks a clone fetchRepo created, whose local branches it may move.
+const managedKey = "cartographer.managed"
+
 // fetchRepo clones r into dir when missing, otherwise fetches origin; an
-// extra revision (e.g. a pull request head) is fetched explicitly.
+// extra revision (e.g. a pull request head) is fetched explicitly. The clone
+// stores no credential: auth reaches git only through gitEnv.
 func fetchRepo(ctx context.Context, r Repo, dir, extra string) error {
 	if strings.HasPrefix(extra, "-") {
 		return fmt.Errorf("invalid revision %q", extra)
@@ -504,6 +616,15 @@ func fetchRepo(ctx context.Context, r Repo, dir, extra string) error {
 			return err
 		}
 		if _, err := git(ctx, parent, "clone", "--quiet", "--filter=blob:none", "--no-checkout", "--", r.URL, dir); err != nil {
+			return err
+		}
+		if _, err := git(ctx, dir, "config", managedKey, "true"); err != nil {
+			return err
+		}
+	} else if out, _ := git(ctx, dir, "config", "--bool", managedKey); strings.TrimSpace(out) == "true" {
+		// A clone cartographer made (no work tree to protect): move its local
+		// branches too, so a later build without fetch sees upstream.
+		if _, err := git(ctx, dir, "fetch", "--quiet", "--update-head-ok", "--", "origin", "+refs/heads/*:refs/heads/*"); err != nil {
 			return err
 		}
 	} else if _, err := git(ctx, dir, "fetch", "--quiet", "--", "origin"); err != nil {
