@@ -112,10 +112,21 @@ func Read(dir string) (*Bundle, error) {
 		seen[kind][id] = rel
 		return nil
 	}
+	// Facts paths come from the manifest: they must stay inside dir, through
+	// symlinks too (os.Root).
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
 	for _, rel := range m.Facts {
-		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(rel)))
+		name, ok := cleanRel(rel)
+		if !ok {
+			return nil, fmt.Errorf("bundle: unsafe facts path %q", rel)
+		}
+		f, err := root.Open(filepath.FromSlash(name))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("bundle: %w", err)
 		}
 		d, err := facts.Decode(f)
 		f.Close()

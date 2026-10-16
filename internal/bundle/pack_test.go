@@ -112,3 +112,17 @@ func TestPackRejectsSymlinks(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestUnpackEntryCap(t *testing.T) {
+	old := maxEntries
+	maxEntries = 2
+	t.Cleanup(func() { maxEntries = old })
+	reg := func(n string) *tar.Header { return &tar.Header{Name: n, Typeflag: tar.TypeReg, Mode: 0o644} }
+	if err := Unpack(tarEntries(t, entry{reg("a"), "1"}, entry{reg("b"), "2"}), t.TempDir()); err != nil {
+		t.Fatalf("at cap: %v", err)
+	}
+	err := Unpack(tarEntries(t, entry{reg("a"), "1"}, entry{reg("b"), "2"}, entry{&tar.Header{Name: "d/", Typeflag: tar.TypeDir, Mode: 0o755}, ""}), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "more than 2 entries") {
+		t.Fatalf("over cap: got %v", err)
+	}
+}

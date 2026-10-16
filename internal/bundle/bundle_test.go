@@ -76,3 +76,24 @@ func TestReadRejectsFactsRepoNotInManifest(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestReadRejectsFactsOutsideSnapshot(t *testing.T) {
+	dir := copyMini(t)
+	os.WriteFile(filepath.Join(filepath.Dir(dir), "outside.json"), []byte(`{"facts_version":1,"producer":{"name":"x"}}`), 0o644)
+	for _, rel := range []string{"../outside.json", "facts/../../outside.json", "/etc/passwd", `facts\shop-app.json`} {
+		edit(t, filepath.Join(dir, "manifest.json"), `"facts/schema.json"`, `"`+strings.ReplaceAll(rel, `\`, `\\`)+`"`)
+		_, err := Read(dir)
+		if err == nil || !strings.Contains(err.Error(), "unsafe facts path") {
+			t.Errorf("%s: got %v", rel, err)
+		}
+		edit(t, filepath.Join(dir, "manifest.json"), `"`+strings.ReplaceAll(rel, `\`, `\\`)+`"`, `"facts/schema.json"`)
+	}
+	// A symlink inside the snapshot can't lead out of it either.
+	if err := os.Symlink(filepath.Join(filepath.Dir(dir), "outside.json"), filepath.Join(dir, "facts", "link.json")); err != nil {
+		t.Skip(err)
+	}
+	edit(t, filepath.Join(dir, "manifest.json"), `"facts/schema.json"`, `"facts/link.json"`)
+	if _, err := Read(dir); err == nil {
+		t.Error("read a facts file through a symlink leading outside the snapshot")
+	}
+}
