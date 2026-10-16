@@ -376,7 +376,9 @@ defmodule Cartographer.ElixirExtractTest do
           Cartographer.ElixirSource.new(),
           "defmodule A do\nend",
           "lib/a.ex",
-          "x", atom_budget: 0)
+          "x",
+          atom_budget: 0
+        )
 
       assert [%{kind: "atom_budget", file: "lib/a.ex"}] = acc.notes
       assert acc.modules == []
@@ -609,6 +611,124 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{target: %{module: "Caller"}, kind: "local"}] = from(doc, "Caller.one/1", "mine")
       assert [%{kind: "local_or_import"}] = from(doc, "Caller.two/1", "mod_fun")
       assert [%{kind: "dynamic", target: %{arity: 1}}] = from(doc, "Caller.two/1", "call")
+    end
+
+    test "a later import of the same module replaces the earlier one" do
+      doc =
+        extract(~S'''
+        defmodule A do
+          def first(x), do: x
+          def length(_), do: 99
+        end
+        defmodule Caller do
+          import A
+          import A, only: [first: 1]
+          def run(x), do: {length(x), first(x)}
+        end
+        ''')
+
+      assert [%{target: %{module: "Kernel"}, kind: "import"}] =
+               from(doc, "Caller.run/1", "length")
+
+      assert [%{target: %{module: "A"}, kind: "import"}] = from(doc, "Caller.run/1", "first")
+    end
+
+    test "only: :functions excludes macros and only: :macros excludes functions" do
+      doc =
+        extract(~S'''
+        defmodule M do
+          defmacro length(_), do: 99
+          def fun(x), do: x
+        end
+        defmodule Funs do
+          import M, only: :functions
+          def run(x), do: {length(x), fun(x)}
+        end
+        defmodule Macs do
+          import M, only: :macros
+          def run(x), do: {length(x), fun(x)}
+        end
+        ''')
+
+      assert [%{target: %{module: "Kernel"}, kind: "import"}] = from(doc, "Funs.run/1", "length")
+      assert [%{target: %{module: "M"}, kind: "import"}] = from(doc, "Funs.run/1", "fun")
+      assert [%{target: %{module: "M"}, kind: "import"}] = from(doc, "Macs.run/1", "length")
+      assert [%{target: t, kind: "local_or_import"}] = from(doc, "Macs.run/1", "fun")
+      refute Map.has_key?(t, :module)
+    end
+
+    test "except is relative to the earlier import; sigils, Kernel and scope follow Elixir" do
+      doc =
+        extract(~S'''
+        defmodule A do
+          def first(x), do: x
+          def second(x), do: x
+          def length(_), do: 99
+          def _hidden(x), do: x
+          def sigil_q(s, _), do: s
+          defmacro mac(x), do: x
+        end
+        defmodule Rel do
+          import A, only: [first: 1, second: 1]
+          import A, except: [second: 1]
+          def run(x), do: {first(x), second(x)}
+        end
+        defmodule Back do
+          import A, only: :functions
+          import A, except: [first: 1]
+          def run(x), do: {first(x), second(x), mac(x)}
+        end
+        defmodule Sig do
+          import A, only: :sigils
+          def run(x), do: {sigil_q(x, []), first(x), _hidden(x)}
+        end
+        defmodule NoKernel do
+          import Kernel, except: [length: 1]
+          import A, only: [length: 1]
+          def run(x), do: length(x)
+        end
+        defmodule KernelMacros do
+          import Kernel, only: :macros
+          def run(x), do: {length(x), to_string(x)}
+        end
+        defmodule Scoped do
+          def run(x) do
+            import A, only: [first: 1]
+            first(x)
+          end
+          def other(x), do: first(x)
+        end
+        defmodule Dyn do
+          import A, only: [first: 1]
+          import A, @opts
+          def run(x), do: {first(x), length(x)}
+        end
+        ''')
+
+      assert [%{target: %{module: "A"}, kind: "import"}] = from(doc, "Rel.run/1", "first")
+      assert [%{kind: "local_or_import"}] = from(doc, "Rel.run/1", "second")
+
+      assert [%{kind: "local_or_import"}] = from(doc, "Back.run/1", "first")
+      assert [%{target: %{module: "A"}, kind: "import"}] = from(doc, "Back.run/1", "second")
+      assert [%{target: %{module: "A"}, kind: "import"}] = from(doc, "Back.run/1", "mac")
+
+      assert [%{target: %{module: "A"}, kind: "import"}] = from(doc, "Sig.run/1", "sigil_q")
+      assert [%{kind: "local_or_import"}] = from(doc, "Sig.run/1", "first")
+      assert [%{kind: "local_or_import"}] = from(doc, "Sig.run/1", "_hidden")
+
+      assert [%{target: %{module: "A"}, kind: "import"}] = from(doc, "NoKernel.run/1", "length")
+
+      assert [%{kind: "local_or_import"}] = from(doc, "KernelMacros.run/1", "length")
+
+      assert [%{target: %{module: "Kernel"}, kind: "import"}] =
+               from(doc, "KernelMacros.run/1", "to_string")
+
+      assert [%{target: %{module: "A"}, kind: "import"}] = from(doc, "Scoped.run/1", "first")
+      assert [%{kind: "local_or_import"}] = from(doc, "Scoped.other/1", "first")
+
+      # Non-literal options: neither A nor Kernel can be claimed.
+      assert [%{kind: "local_or_import"}] = from(doc, "Dyn.run/1", "first")
+      assert [%{kind: "local_or_import"}] = from(doc, "Dyn.run/1", "length")
     end
   end
 end

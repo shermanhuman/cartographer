@@ -8,9 +8,12 @@ defmodule Cartographer.ElixirFacts do
 
   @version "0.1.0"
   @public ~w(def defmacro defdelegate defguard)
-  @kernel MapSet.new(
-            Kernel.__info__(:functions) ++ Kernel.__info__(:macros),
-            fn {n, a} -> {Atom.to_string(n), a} end
+  # defguard defines a macro; defdelegate a function.
+  @macro_kinds ~w(defmacro defmacrop defguard defguardp)
+  @kernel Map.new(
+            Enum.map(Kernel.__info__(:functions), &{&1, :functions}) ++
+              Enum.map(Kernel.__info__(:macros), &{&1, :macros}),
+            fn {{n, a}, kind} -> {{Atom.to_string(n), a}, kind} end
           )
   @ref_extensions ~w(.ex .exs .sql .sh)
 
@@ -330,7 +333,8 @@ defmodule Cartographer.ElixirFacts do
     defined =
       Enum.reduce(functions, %{}, fn f, acc ->
         [_, module] = String.split(f.module, ":", parts: 2)
-        entry = {f.min_arity, f.arity, f.kind in @public}
+        kind = if f.kind in @macro_kinds, do: :macros, else: :functions
+        entry = {f.min_arity, f.arity, f.kind in @public, kind}
         Map.update(acc, {module, f.name}, [entry], &[entry | &1])
       end)
 
@@ -352,42 +356,50 @@ defmodule Cartographer.ElixirFacts do
     )
   end
 
+  # An unqualified call goes to a local definition, else to the one module
+  # whose effective import (ElixirSource.import_entry/2: a later import of a
+  # module replaces the earlier one, only/except filter by name/arity and by
+  # function vs macro) brings it in. Only modules defined in this repo can
+  # be checked; imports of other modules are not candidates (as before), and
+  # a module whose import options are not literal blocks attribution when it
+  # defines the name. Kernel is the fallback when nothing else imports it.
   defp classify(%{module: nil, kind: kind} = c, defined)
        when kind in ["local_or_import", "capture"] do
     as = fn resolved -> if kind == "capture", do: "capture", else: resolved end
+    fa = {c.name, c.arity}
 
-    cond do
-      defined?(defined, c.caller_module, c.name, c.arity, false) ->
-        {c.caller_module, as.("local")}
+    if defined?(defined, c.caller_module, c.name, c.arity, false) do
+      {c.caller_module, as.("local")}
+    else
+      matches =
+        for {module, entry} <- Enum.sort(c.imports),
+            module != "Kernel",
+            def_kind = defined_kind(defined, module, c.name, c.arity),
+            def_kind != nil,
+            entry == :unknown or ElixirSource.imports?(entry, def_kind, fa),
+            uniq: true,
+            do: {module, entry}
 
-      true ->
-        candidates =
-          for {module, filter} <- c.imports,
-              module != "Kernel",
-              allows?(filter, c.name, c.arity),
-              defined?(defined, module, c.name, c.arity, true),
-              uniq: true,
-              do: module
+      kernel = Map.get(c.imports, "Kernel", ElixirSource.kernel_import())
 
-        kernel_filter =
-          Enum.find_value(c.imports, :all, fn
-            {"Kernel", filter} -> filter
-            _ -> nil
-          end)
+      case matches do
+        [{module, entry}] when entry != :unknown ->
+          {module, as.("import")}
 
-        case candidates do
-          [module] ->
-            {module, as.("import")}
+        [] ->
+          case Map.fetch(@kernel, fa) do
+            {:ok, kernel_kind} ->
+              if ElixirSource.imports?(kernel, kernel_kind, fa),
+                do: {"Kernel", as.("import")},
+                else: {nil, kind}
 
-          [] ->
-            if MapSet.member?(@kernel, {c.name, c.arity}) and
-                 allows?(kernel_filter, c.name, c.arity),
-               do: {"Kernel", as.("import")},
-               else: {nil, kind}
+            :error ->
+              {nil, kind}
+          end
 
-          _ ->
-            {nil, kind}
-        end
+        _ ->
+          {nil, kind}
+      end
     end
   end
 
@@ -396,13 +408,20 @@ defmodule Cartographer.ElixirFacts do
   defp defined?(defined, module, name, arity, public_only) do
     defined
     |> Map.get({module, name}, [])
-    |> Enum.any?(fn {min, max, public} -> arity in min..max and (public or not public_only) end)
+    |> Enum.any?(fn {min, max, public, _} ->
+      arity in min..max and (public or not public_only)
+    end)
   end
 
-  defp allows?(:all, _, _), do: true
-  defp allows?({:only, set}, name, arity), do: MapSet.member?(set, {name, arity})
-  defp allows?({:except, set}, name, arity), do: not MapSet.member?(set, {name, arity})
-  defp allows?(_, _, _), do: false
+  # :functions or :macros for a public definition of module.name/arity in
+  # this repo, else nil.
+  defp defined_kind(defined, module, name, arity) do
+    defined
+    |> Map.get({module, name}, [])
+    |> Enum.find_value(fn {min, max, public, kind} ->
+      if public and arity in min..max, do: kind
+    end)
+  end
 
   # --- table references ------------------------------------------------------
 

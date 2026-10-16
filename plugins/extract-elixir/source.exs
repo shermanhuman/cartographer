@@ -98,7 +98,7 @@ defmodule Cartographer.ElixirSource do
     env = %{
       module: nil,
       aliases: %{},
-      imports: [],
+      imports: %{},
       file: relative,
       repo: repo,
       caller: nil
@@ -322,9 +322,13 @@ defmodule Cartographer.ElixirSource do
       else: {env, acc}
   end
 
+  # A later import of the same module replaces the earlier one in this
+  # lexical scope (it does not add to it); see import_entry/2.
   defp walk({:import, _, [mod | opts]}, env, acc) do
-    import = {name(mod, env), import_filter(List.first(opts) || [])}
-    {%{env | imports: [import | env.imports]}, acc}
+    module = name(mod, env)
+    prior = Map.get(env.imports, module, if(module == "Kernel", do: kernel_import()))
+    entry = import_entry(List.first(opts) || [], prior)
+    {%{env | imports: Map.put(env.imports, module, entry)}, acc}
   end
 
   defp walk({kind, meta, [head | body]} = clause, env, acc) when kind in @defs do
@@ -525,27 +529,114 @@ defmodule Cartographer.ElixirSource do
     %{acc | calls: [c | acc.calls]}
   end
 
-  # `import Mod, only: [...]` / `except: [...]` filters; anything not literal
-  # is :unknown and blocks attribution to that module.
-  defp import_filter(opts) do
-    if Keyword.keyword?(opts) do
-      cond do
-        is_list(opts[:only]) -> fun_set(:only, opts[:only])
-        opts[:only] in [:functions, :macros] -> :all
-        opts[:only] != nil -> :unknown
-        is_list(opts[:except]) -> fun_set(:except, opts[:except])
-        opts[:except] != nil -> :unknown
-        true -> :all
+  # The effective import of one module, as Elixir's elixir_import computes
+  # it: `:unknown` (options are not literal; blocks attribution) or
+  # `%{functions: spec | nil, macros: spec | nil}`, where nil imports nothing
+  # of that kind and a spec is `%{base: :all | :sigils | {:only, set},
+  # except: set}` over `{name, arity}` (see `imports?/3`).
+  #
+  # `only: [...]` keeps the listed names of both kinds; `only: :functions`
+  # / `:macros` import every name of that kind and nothing of the other;
+  # `only: :sigils` imports sigil_* of both. `except: [...]` (alone or with
+  # `only: :functions | :macros | :sigils`) removes names from the previous
+  # import of that kind in this scope, or, when there is none, from every
+  # name of that kind. Kernel's implicit import is `kernel_import/0`.
+  defp import_entry(opts, prior) do
+    with true <- is_list(opts) and Enum.all?(opts, &match?({k, _} when ident?(k), &1)),
+         {:ok, except} <- except_set(opts[:except]) do
+      only = opts[:only]
+
+      calc = fn kind, base ->
+        cond do
+          except == nil ->
+            %{base: base, except: MapSet.new()}
+
+          prior == :unknown ->
+            :unknown
+
+          is_map(prior) and prior[kind] != nil ->
+            Map.update!(prior[kind], :except, &MapSet.union(&1, except))
+
+          true ->
+            %{base: base, except: except}
+        end
       end
+
+      entry =
+        cond do
+          is_list(only) and except == nil ->
+            case fun_set(only) do
+              {:ok, set} ->
+                %{
+                  functions: %{base: {:only, set}, except: MapSet.new()},
+                  macros: %{base: {:only, set}, except: MapSet.new()}
+                }
+
+              :error ->
+                :unknown
+            end
+
+          only == :functions ->
+            %{functions: calc.(:functions, :all), macros: nil}
+
+          only == :macros ->
+            %{functions: nil, macros: calc.(:macros, :all)}
+
+          only == :sigils ->
+            %{functions: calc.(:functions, :sigils), macros: calc.(:macros, :sigils)}
+
+          only == nil ->
+            %{functions: calc.(:functions, :all), macros: calc.(:macros, :all)}
+
+          true ->
+            :unknown
+        end
+
+      if is_map(entry) and :unknown in Map.values(entry), do: :unknown, else: entry
     else
-      :unknown
+      _ -> :unknown
     end
   end
 
-  defp fun_set(tag, list) do
+  @doc "Kernel's implicit import: every public function and macro."
+  def kernel_import,
+    do: %{
+      functions: %{base: :all, except: MapSet.new()},
+      macros: %{base: :all, except: MapSet.new()}
+    }
+
+  @doc """
+  Whether the effective import `entry` of a module (see `import_entry/2`)
+  brings in `name/arity`, which that module defines as `kind` (`:functions`
+  or `:macros`).
+  """
+  def imports?(entry, kind, {name, arity}) when is_map(entry) do
+    case entry[kind] do
+      nil ->
+        false
+
+      %{base: base, except: except} ->
+        admitted =
+          case base do
+            :all -> not String.starts_with?(name, "_")
+            :sigils -> String.starts_with?(name, "sigil_")
+            {:only, set} -> MapSet.member?(set, {name, arity})
+          end
+
+        admitted and not MapSet.member?(except, {name, arity})
+    end
+  end
+
+  def imports?(_, _, _), do: false
+
+  defp except_set(nil), do: {:ok, nil}
+  defp except_set(list) when is_list(list), do: fun_set(list)
+  defp except_set(_), do: :error
+
+  defp fun_set(list) do
     if Enum.all?(list, &match?({n, a} when ident?(n) and is_integer(a), &1)),
-      do: {tag, MapSet.new(list, fn {n, a} -> {str(n), a} end)},
-      else: :unknown
+      do: {:ok, MapSet.new(list, fn {n, a} -> {str(n), a} end)},
+      else: :error
   end
 
   @doc "Last source line covered by an AST node (do/end, closing, end of expression)."

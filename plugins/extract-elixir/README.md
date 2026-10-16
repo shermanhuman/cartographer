@@ -48,7 +48,7 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   |---|---|---|
   | `remote` | `Mod.fun(...)` after alias expansion; Erlang modules are `:mod` | yes |
   | `local` | unqualified call to a function defined in the caller's module | caller's module |
-  | `import` | unqualified call matched to exactly one imported module in this repo (honouring `only`/`except`), or to `Kernel` | yes |
+  | `import` | unqualified call matched to exactly one imported module in this repo, or to `Kernel`, using the effective import in its lexical scope as Elixir computes it: a later `import` of a module replaces the earlier one, `only:` lists and `:functions`/`:macros`/`:sigils` filter by name/arity and by function vs macro, and `except:` removes names from the earlier import (Kernel's implicit one included). Non-literal options block attribution | yes |
   | `local_or_import` | unqualified call the walker cannot attribute (imports from dependencies, `use`-injected functions) | omitted |
   | `capture` | `&Mod.fun/1` or `&fun/1` (attributed like local/import) | when known |
   | `delegate` | `defdelegate ... to:` | yes |
