@@ -610,8 +610,6 @@ func TestServerErrorsAreLogged(t *testing.T) {
 	}
 }
 
-// db_tables.kind arrives with fix/r3-core; before that merge the column is
-// added here.
 func TestTableKindInPayloads(t *testing.T) {
 	s, err := store.Open(":memory:")
 	if err != nil {
@@ -621,7 +619,6 @@ func TestTableKindInPayloads(t *testing.T) {
 	if _, err := s.Import(context.Background(), fixture); err != nil {
 		t.Fatal(err)
 	}
-	s.DB.Exec(`ALTER TABLE db_tables ADD COLUMN kind TEXT NOT NULL DEFAULT 'table'`)
 	if _, err := s.DB.Exec(`UPDATE db_tables SET kind = 'view' WHERE id = 'public.customers'`); err != nil {
 		t.Fatal(err)
 	}

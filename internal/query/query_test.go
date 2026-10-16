@@ -257,11 +257,9 @@ func TestAnnotationsCitingQuotesLikeJSON(t *testing.T) {
 	}
 }
 
-// markView sets a table's kind. db_tables.kind arrives with fix/r3-core;
-// before that merge the column is added here.
+// markView makes a table a view.
 func markView(t *testing.T, db *sql.DB, id string) {
 	t.Helper()
-	db.Exec(`ALTER TABLE db_tables ADD COLUMN kind TEXT NOT NULL DEFAULT 'table'`)
 	if _, err := db.Exec(`UPDATE db_tables SET kind = 'view' WHERE id = ?`, id); err != nil {
 		t.Fatal(err)
 	}

@@ -644,8 +644,7 @@ func (q *Q) bfsPath(ctx context.Context, src, dst []string, maxDepth int) ([]str
 }
 
 // TableKinds maps each table whose kind isn't a plain "table" (a view,
-// materialized view, ...) to its kind. It is empty for a store without the
-// db_tables.kind column.
+// materialized view, ...) to its kind.
 func (q *Q) TableKinds(ctx context.Context) map[string]string {
 	out := map[string]string{}
 	rows, err := q.S.DB.QueryContext(ctx, `SELECT id, kind FROM db_tables WHERE snapshot_id = ? AND kind != 'table'`, q.Snapshot)
@@ -689,12 +688,12 @@ func (q *Q) Table(ctx context.Context, ref string) (*output.Doc, error) {
 	if e.Kind != "table" {
 		return nil, fmt.Errorf("%s is a %s, not a table", e.ID, e.Kind)
 	}
-	var cols, cons, idx string
-	q.S.DB.QueryRowContext(ctx, `SELECT columns, constraints, indexes FROM db_tables WHERE snapshot_id = ? AND id = ?`, q.Snapshot, e.ID).Scan(&cols, &cons, &idx)
+	var cols, cons, idx, kind string
+	q.S.DB.QueryRowContext(ctx, `SELECT columns, constraints, indexes, kind FROM db_tables WHERE snapshot_id = ? AND id = ?`, q.Snapshot, e.ID).Scan(&cols, &cons, &idx, &kind)
 	d := &output.Doc{}
 	q.header(ctx, d)
-	if k := q.TableKinds(ctx)[e.ID]; k != "" {
-		d.H("TBL %s [%s]", e.ID, k)
+	if kind != "" && kind != "table" {
+		d.H("TBL %s [%s]", e.ID, kind)
 	} else {
 		d.H("TBL %s", e.ID)
 	}
