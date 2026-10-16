@@ -126,9 +126,16 @@ func Locate(ctx context.Context, repos []Repo, cwd string, explicit map[string]s
 // scanned only while some repo is still unmatched, those named like a repo
 // first, so a workspace of sibling clones costs one git exec per repo.
 func LocateFrom(ctx context.Context, repos []Repo, cur Checkout, explicit map[string]string) map[string]string {
+	// Evidence ranks as in snapshot choice: the current checkout's origin,
+	// then [checkouts] paths, then directory names.
 	found := map[string]string{}
+	if cur.Root != "" {
+		if name := cur.MatchOrigin(repos); name != "" {
+			found[name] = cur.Root
+		}
+	}
 	for _, r := range repos {
-		if p, ok := explicit[r.Name]; ok {
+		if p, ok := explicit[r.Name]; ok && found[r.Name] == "" {
 			found[r.Name] = ExpandHome(p)
 		}
 	}

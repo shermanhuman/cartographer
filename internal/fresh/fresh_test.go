@@ -197,3 +197,25 @@ func TestCheckReportsRenamedFromPath(t *testing.T) {
 		t.Errorf("changed = %v", rep.Repos[0].Changed)
 	}
 }
+
+// Freshness ranks evidence like snapshot choice: a cwd whose origin matches
+// the repo is measured there, even when [checkouts] names another clone.
+func TestLocateOriginOutranksExplicit(t *testing.T) {
+	ctx := context.Background()
+	cur := filepath.Join(t.TempDir(), "shop-app")
+	os.MkdirAll(cur, 0o755)
+	sh(t, cur, "git", "init", "-q")
+	sh(t, cur, "git", "remote", "add", "origin", "git@github.com:example/shop-app.git")
+	elsewhere := t.TempDir()
+	repos := []Repo{{Name: "shop-app", URL: "https://github.com/example/shop-app"}}
+	co := Find(ctx, cur)
+	got := LocateFrom(ctx, repos, co, map[string]string{"shop-app": elsewhere})
+	if got["shop-app"] != co.Root {
+		t.Errorf("shop-app located at %q, want cwd %q", got["shop-app"], co.Root)
+	}
+	// Without an origin match the explicit entry still decides.
+	other := Find(ctx, t.TempDir())
+	if got := LocateFrom(ctx, repos, other, map[string]string{"shop-app": elsewhere}); got["shop-app"] != elsewhere {
+		t.Errorf("explicit entry ignored: %q", got["shop-app"])
+	}
+}
