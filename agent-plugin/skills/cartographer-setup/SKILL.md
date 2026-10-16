@@ -23,13 +23,16 @@ disable-model-invocation: true
 5. **Build locally:** `cartographer build --import`, then
    `cartographer status` and `cartographer serve --open`.
 6. **Publish from CI:** call
-   `shermanhuman/cartographer/.github/workflows/build-snapshot.yml@main` on
-   `repository_dispatch`, `workflow_dispatch` and a weekly schedule, with a
-   GitHub App (`app-id`, `app-private-key`) that can read every repository.
+   `shermanhuman/cartographer/.github/workflows/build-snapshot.yml@v0.1.0`
+   with `cartographer-version: v0.1.0` on `repository_dispatch`,
+   `workflow_dispatch` and a weekly schedule, with a GitHub App (`app-id`,
+   `app-private-key`) that can read every repository. Keep the workflow ref
+   and `cartographer-version` equal; the workflow installs exactly that binary.
 7. **Product repositories:** on push to `main`, send a `product-main-push`
    dispatch to the workspace; on pull requests, call
-   `shermanhuman/cartographer/.github/workflows/pr-impact.yml@main` with
-   `workspace`, `repo` and the App secrets for a sticky impact comment.
+   `shermanhuman/cartographer/.github/workflows/pr-impact.yml@v0.1.0` with
+   `cartographer-version: v0.1.0` (same release as the ref), `workspace`,
+   `repo` and the App secrets for a sticky impact comment.
 8. **Teammates:** `cartographer pull <owner/workspace>` once; queries and the
    MCP server then pull newer snapshots at most hourly.
 9. **Annotations:** journeys cite entity ids; after reviewing one, run
