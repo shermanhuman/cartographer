@@ -37,11 +37,15 @@ const usage = `cartographer — multi-repository system map
 Queries (token-budgeted, ranked; --format json prints the rendered lines as
 {"header": [...], "body": [...], "footer": [...]} arrays, unbudgeted):
   status                      snapshot, repos, coverage, annotation review state
-  find <words>                search functions, modules, tables, files, docs
+  find <words> [--limit N] [--offset N]
+                              search functions, modules, tables, files, docs
   show <ref>                  explain one entity and its neighbours
-  callers <ref> [--depth N]   who calls it (cross-repo flagged)
-  callees <ref> [--depth N]   what it calls
-  impact <ref> [--depth N]    blast radius grouped by repo, context and tests
+  callers <ref> [--depth N] [--limit N] [--offset N]
+                              who calls it (cross-repo flagged)
+  callees <ref> [--depth N] [--limit N] [--offset N]
+                              what it calls
+  impact <ref> [--depth N] [--limit N] [--offset N]
+                              blast radius grouped by repo, context and tests
   path <a> <b>                shortest call chain
   table <name>                columns, keys and code that mentions a table
   context <name>              a module cluster: modules, tables, docs
@@ -80,8 +84,10 @@ Agents:
 Other:
   version
 
-Common flags: --db PATH (or $CARTOGRAPHER_DB), --snapshot ID, --budget TOKENS,
---limit N, --offset N, --format text|json, --no-pull, --workspace DIR.
+Common flags: --db PATH (or $CARTOGRAPHER_DB), --snapshot ID, --no-pull;
+on queries also --budget TOKENS and --format text|json. --limit/--offset page
+find, callers, callees and impact. "cartographer <command> --help" lists the
+flags a command takes.
 Queries pull newer snapshots at most hourly and mark lines in files changed
 since the snapshot with ⚠.
 A <ref> is an id, a label like Shop.Orders.create/2, or a unique search term.
@@ -224,10 +230,21 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		return err
 	}
 	cmd, args := args[0], args[1:]
+	if _, ok := commandFlags[cmd]; !ok {
+		return fmt.Errorf("unknown command %q (see `cartographer help`)", cmd)
+	}
 	var c common
 	fs := flags(cmd, &c)
+	fs.SetOutput(io.Discard)
 	pos, err := parse(fs, args)
+	if errors.Is(err, flag.ErrHelp) {
+		commandHelp(w, fs, cmd)
+		return nil
+	}
 	if err != nil {
+		return fmt.Errorf("%s: %w (see `cartographer %s --help`)", cmd, err, cmd)
+	}
+	if err := checkFormat(cmd, c.format); err != nil {
 		return err
 	}
 	need := func(n int, what string) error {
@@ -296,7 +313,13 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 				return err
 			}
 		}
-		m, err := workspace.Build(ctx, cfg, workspace.BuildOptions{Out: out, PluginsDir: pluginsDir, Refs: c.refs, Log: os.Stderr, Fetch: c.fetch})
+		var pdigest string
+		if cfg.Schema != nil {
+			if pdigest, err = schemaPluginsDigest(cfg.Schema.Command, pluginsDir); err != nil {
+				return err
+			}
+		}
+		m, err := workspace.Build(ctx, cfg, workspace.BuildOptions{Out: out, PluginsDir: pluginsDir, PluginsDigest: pdigest, Refs: c.refs, Log: os.Stderr, Fetch: c.fetch})
 		if err != nil {
 			return err
 		}

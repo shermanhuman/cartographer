@@ -62,7 +62,7 @@ async function graph(){
   if(state.view==='modules'){await ensureBrowser('modules');return {title:'Code explorer',subtitle:'Browse repositories and folders. Select a file, inspect its functions, then open a relationship graph.',nodes:[],edges:[],type:'TRACKED FILES · PINNED REVISIONS',note:`${fileManifest.repositories.reduce((n,r)=>n+r.count,0).toLocaleString()} files across ${fileManifest.repositories.length} repositories. Function details cover the files an extractor parsed.`,browser:true}}
   if(state.view==='tables'){await ensureBrowser('tables');return {title:'Data structure',subtitle:'Find a table or column. Inspect columns, keys, indexes, relationships and code mentions in one place.',nodes:[],edges:[],type:'SCHEMA SNAPSHOT',note:`All ${schemaIndex.length} tables are browsable. Foreign keys are schema facts; code mentions are textual candidates. No live database is queried.`,browser:true}}
   if(state.view==='contexts'){await ensureBrowser('contexts');return {title:'Contexts',subtitle:'Module clusters by namespace: their modules, the tables their code mentions, and the docs that describe them.',nodes:[],edges:[],type:'MODULE NAMESPACE CLUSTERS',note:`${overview.contexts.length} contexts across ${new Set(overview.contexts.map(c=>c.repo)).size} repositories. Contexts are derived from module names, not reviewed boundaries.`,browser:true}}
-  const e=byId(state.entity);if(!e)return {title:'Entity not found',subtitle:'This link refers to an entity outside the selected snapshot.',nodes:[],edges:[],note:'Use search to find a current entity or return to System overview.',type:'UNKNOWN ENTITY'};
+  const e=byId(state.entity);if(!e)return {title:'Entity not found',subtitle:'This link refers to an entity outside the selected snapshot.',nodes:[],edges:[],note:'Use search to find a current entity or return to System overview.',type:'UNKNOWN ENTITY',error:`entity ${state.entity} not found in snapshot ${status.snapshot}`};
   const d=await detail(e), title=e.label;
   let nodes=[],edges=[],note='',pages=1,total=0;
   if(e.kind==='module'){
@@ -181,6 +181,8 @@ async function render(){
   try{
     if(!['overview','code','data','docs'].includes(state.tab))state.tab='overview';
     const g=await graph();if(token!==renderToken)return;currentGraph=g;
+    // An export waits for data-ready and fails on data-error.
+    if(g.error)document.body.dataset.error=g.error;else delete document.body.dataset.error;
     if(!state.focus)state.focus=journeyOf(state.view)?resolveStep(state.view,state.step).code[0]||'':state.view==='home'?overview.services[0]?.id||'':state.view==='entity'?state.entity:state.view==='modules'&&state.file?(fileBrowser.fileMap.get(state.file)?.modules[0]||state.file):state.view==='tables'?state.table:state.view==='contexts'?state.cluster:g.nodes[0]?.id||'';
     $('#investigation-host').innerHTML=investigationHTML(state);
     $('#title').textContent=g.title;$('#subtitle').textContent=g.subtitle||'';$('#map-scope').textContent=g.title.toUpperCase();$('#map-type').textContent=g.type;$('#map-note').textContent=g.note;crumbs();

@@ -65,8 +65,22 @@ cartographer embed Shop.Billing.charge/2   # Markdown + Mermaid for an issue
 Private workspaces need a GitHub token: `GH_TOKEN`/`GITHUB_TOKEN`, else
 `gh auth token` (a `gh` on PATH, or one installed globally with mise).
 
-`cartographer help` lists every command. `--budget`, `--limit`/`--offset`
-and `--format json` work on all queries.
+`cartographer help` lists every command and `cartographer <command> --help`
+its flags. The queries (`status`, `find`, `show`, `callers`, `callees`,
+`impact`, `path`, `table`, `context`) take `--budget` and `--format json`;
+`find`, `callers`, `callees` and `impact` also page with `--limit`/`--offset`.
+
+`pull` and `workspace add` record workspaces in `~/.config/cartographer/config.toml`
+(`$CARTOGRAPHER_CONFIG`, or under `$XDG_CONFIG_HOME`). Freshness looks for each
+repository's checkout next to the one you are in; list checkouts that live
+elsewhere under `[checkouts]`:
+
+```toml
+workspaces = ["my-org/my-project-map"]
+
+[checkouts]
+shop-worker = "~/src/shop-worker"   # repository name = local path
+```
 
 ## Map your project
 
