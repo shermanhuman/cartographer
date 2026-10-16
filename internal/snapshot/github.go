@@ -335,16 +335,21 @@ func (g *GitHub) Publish(ctx context.Context, repo, id, notes string, asset []by
 		gerr := g.json(context.WithoutCancel(ctx), "GET", fmt.Sprintf("%s/repos/%s/releases/%d", g.api(), repo, r.ID), nil, &cur)
 		switch {
 		case gerr != nil:
-			return nil, fmt.Errorf("%w: release %s (id %d) left in place: publish: %w; checking it: %v", ErrPublishUncertain, id, r.ID, err, gerr)
+			return nil, fmt.Errorf("%w: release %s (id %d) left in place: publish: %w; checking it: %v; %s", ErrPublishUncertain, id, r.ID, err, gerr, uncertainHint(id))
 		case cur.Complete():
 			return &cur, nil
 		case cur.Draft:
 			return nil, fail(fmt.Errorf("publish draft release %s: %w", id, err))
 		default:
-			return nil, fmt.Errorf("%w: release %s (id %d) is published without a complete asset; left in place: %w", ErrPublishUncertain, id, r.ID, err)
+			return nil, fmt.Errorf("%w: release %s (id %d) is published without a complete asset; left in place: %w; %s", ErrPublishUncertain, id, r.ID, err, uncertainHint(id))
 		}
 	}
 	return &pub, nil
+}
+
+// uncertainHint tells the operator what to do after ErrPublishUncertain.
+func uncertainHint(tag string) string {
+	return fmt.Sprintf("if GitHub shows %s published with %s, nothing else is needed; otherwise re-run publish (the next successful publish prunes the stale release)", tag, AssetName)
 }
 
 // Download opens the snapshot asset of a release.
