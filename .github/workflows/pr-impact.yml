@@ -1,0 +1,180 @@
+# Reusable, called from a product repository's pull_request workflow: build a
+# snapshot with this PR's head, diff it against the newest published snapshot
+# and keep one sticky comment on the PR up to date.
+name: cartographer impact
+on:
+  workflow_call:
+    inputs:
+      workspace:
+        description: Workspace repository (owner/name) holding cartographer.toml and published snapshots.
+        type: string
+        required: true
+      repo:
+        description: This repository's name in cartographer.toml.
+        type: string
+        required: true
+      workspace-path:
+        type: string
+        default: "."
+      cartographer-version:
+        type: string
+        default: latest
+      postgres-image:
+        type: string
+        default: postgres:18
+    secrets:
+      app-id:
+        description: GitHub App id; with app-private-key, mints a token that can read the workspace repository and every repository it lists.
+        required: false
+      app-private-key:
+        required: false
+      repo-token:
+        description: Alternative to the App.
+        required: false
+jobs:
+  impact:
+    # Fork PRs get no secrets, so they are skipped rather than failed.
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: cartographer-impact-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      HAS_APP: ${{ secrets.app-id != '' }}
+      HAS_REPO_TOKEN: ${{ secrets.repo-token != '' }}
+      PGHOST: 127.0.0.1
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      CARTOGRAPHER_NO_PULL: "1"
+    steps:
+      - id: creds
+        name: Credentials
+        run: |
+          if [ "$HAS_APP" = true ] || [ "$HAS_REPO_TOKEN" = true ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::cartographer impact skipped: no app-id/app-private-key or repo-token secret is available to this run."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+      - id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          # Revoked by the "Revoke token" step, before any build code runs.
+          skip-token-revoke: true
+      - if: steps.creds.outputs.ok == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.workspace }}
+          token: ${{ steps.app.outputs.token || secrets.repo-token }}
+          persist-credentials: false
+          path: workspace
+      - if: steps.creds.outputs.ok == 'true'
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          working_directory: workspace/${{ inputs.workspace-path }}
+      - if: steps.creds.outputs.ok == 'true'
+        name: Install cartographer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.cartographer-version }}
+        # Inline so the binary version is exactly the cartographer-version
+        # input; pin both this workflow and that input.
+        run: |
+          set -euo pipefail
+          case "$(uname -s)/$(uname -m)" in
+            Linux/x86_64) target=linux_amd64 ;;
+            Linux/aarch64|Linux/arm64) target=linux_arm64 ;;
+            Darwin/arm64) target=darwin_arm64 ;;
+            Darwin/x86_64) target=darwin_amd64 ;;
+            *) echo "unsupported runner $(uname -s)/$(uname -m)"; exit 1 ;;
+          esac
+          tag="$VERSION"
+          if [ "$tag" = latest ]; then
+            tag=$(gh release view --repo shermanhuman/cartographer --json tagName --jq .tagName)
+          fi
+          dir="$RUNNER_TEMP/cartographer-$tag"
+          mkdir -p "$dir"
+          gh release download "$tag" --repo shermanhuman/cartographer --dir "$dir" \
+            --pattern "cartographer_*_${target}.tar.gz" --pattern checksums.txt --clobber
+          (cd "$dir" && grep "_${target}.tar.gz" checksums.txt | sha256sum -c -)
+          tar -C "$dir" -xzf "$dir"/cartographer_*_"${target}".tar.gz
+          echo "$dir" >> "$GITHUB_PATH"
+      # Schema cache: restore the newest entry for this workspace config; save
+      # a new entry only when the cached files changed (key = their hash).
+      - if: steps.creds.outputs.ok == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: _cartographer-cache/cartographer/schema
+          key: cartographer-schema-${{ hashFiles(format('workspace/{0}/cartographer.toml', inputs.workspace-path)) }}-
+          restore-keys: cartographer-schema-${{ hashFiles(format('workspace/{0}/cartographer.toml', inputs.workspace-path)) }}-
+      # The token reaches only the steps below that run no PR code (step-level
+      # env, never $GITHUB_ENV). The PR head's `prepare` and plugins run in
+      # "Head snapshot", after the App token is revoked; a repo-token secret
+      # cannot be revoked here, so prefer the App.
+      - name: Base snapshot
+        id: base
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.repo-token }}
+          WORKSPACE: ${{ inputs.workspace }}
+        run: |
+          cartographer pull "$WORKSPACE"
+          echo "id=$(cartographer snapshots | head -1 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Fetch repositories
+        if: steps.creds.outputs.ok == 'true'
+        working-directory: workspace/${{ inputs.workspace-path }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.repo-token }}
+          REPO: ${{ inputs.repo }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cartographer build --fetch-only --ref "$REPO=$HEAD_SHA"
+      - name: Revoke token
+        if: always() && steps.app.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: gh api --method DELETE /installation/token
+      - name: Head snapshot
+        id: head
+        if: steps.creds.outputs.ok == 'true'
+        working-directory: workspace/${{ inputs.workspace-path }}
+        env:
+          REPO: ${{ inputs.repo }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          XDG_CACHE_HOME: ${{ github.workspace }}/_cartographer-cache
+        run: |
+          out=$(cartographer build --import --out "$RUNNER_TEMP/head" --ref "$REPO=$HEAD_SHA")
+          echo "$out"
+          echo "id=$(echo "$out" | sed -n 's/^imported //p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: success() && steps.creds.outputs.ok == 'true' && hashFiles('_cartographer-cache/cartographer/schema/*.json') != ''
+        with:
+          path: _cartographer-cache/cartographer/schema
+          key: cartographer-schema-${{ hashFiles(format('workspace/{0}/cartographer.toml', inputs.workspace-path)) }}-${{ hashFiles('_cartographer-cache/cartographer/schema/*.json') }}
+      - name: Diff
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          BASE_ID: ${{ steps.base.outputs.id }}
+          HEAD_ID: ${{ steps.head.outputs.id }}
+        run: cartographer diff "$BASE_ID" "$HEAD_ID" > "$RUNNER_TEMP/impact.md"
+      - if: steps.creds.outputs.ok == 'true'
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: cartographer
+          path: ${{ runner.temp }}/impact.md
+          GITHUB_TOKEN: ${{ github.token }}

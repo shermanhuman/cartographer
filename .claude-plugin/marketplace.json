@@ -1,0 +1,19 @@
+{
+  "name": "cartographer",
+  "description": "cartographer: a multi-repository system map for coding agents.",
+  "owner": {
+    "name": "Sherman Boyd"
+  },
+  "plugins": [
+    {
+      "name": "cartographer",
+      "description": "Multi-repo system map for agents: callers, impact, schema, embeds over MCP.",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/shermanhuman/cartographer.git",
+        "path": "./agent-plugin",
+        "ref": "main"
+      }
+    }
+  ]
+}

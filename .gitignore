@@ -1,0 +1,4 @@
+/cartographer
+/dist/
+*.db
+.worktrees/

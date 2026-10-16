@@ -1,0 +1,122 @@
+# Reusable: build a workspace snapshot from the repos in cartographer.toml and
+# publish it as a release of the calling (workspace) repository.
+name: Build snapshot
+on:
+  workflow_call:
+    inputs:
+      cartographer-version:
+        type: string
+        default: latest
+      workspace-path:
+        description: Directory of cartographer.toml in the calling repository.
+        type: string
+        default: "."
+      postgres-image:
+        description: Database for schema `prepare` (only used on a schema cache miss).
+        type: string
+        default: postgres:18
+    secrets:
+      app-id:
+        description: GitHub App id; with app-private-key, mints a token that can read every repository in the workspace.
+        required: false
+      app-private-key:
+        required: false
+      repo-token:
+        description: "Alternative to the App: a token that can read every repository in the workspace. Defaults to github.token."
+        required: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      HAS_APP: ${{ secrets.app-id != '' }}
+      PGHOST: 127.0.0.1
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      CARTOGRAPHER_NO_PULL: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          # Revoked by the "Revoke token" step, before any build code runs.
+          skip-token-revoke: true
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          working_directory: ${{ inputs.workspace-path }}
+      - name: Install cartographer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.cartographer-version }}
+        # Inline so the binary version is exactly the cartographer-version
+        # input; pin both this workflow and that input.
+        run: |
+          set -euo pipefail
+          case "$(uname -s)/$(uname -m)" in
+            Linux/x86_64) target=linux_amd64 ;;
+            Linux/aarch64|Linux/arm64) target=linux_arm64 ;;
+            Darwin/arm64) target=darwin_arm64 ;;
+            Darwin/x86_64) target=darwin_amd64 ;;
+            *) echo "unsupported runner $(uname -s)/$(uname -m)"; exit 1 ;;
+          esac
+          tag="$VERSION"
+          if [ "$tag" = latest ]; then
+            tag=$(gh release view --repo shermanhuman/cartographer --json tagName --jq .tagName)
+          fi
+          dir="$RUNNER_TEMP/cartographer-$tag"
+          mkdir -p "$dir"
+          gh release download "$tag" --repo shermanhuman/cartographer --dir "$dir" \
+            --pattern "cartographer_*_${target}.tar.gz" --pattern checksums.txt --clobber
+          (cd "$dir" && grep "_${target}.tar.gz" checksums.txt | sha256sum -c -)
+          tar -C "$dir" -xzf "$dir"/cartographer_*_"${target}".tar.gz
+          echo "$dir" >> "$GITHUB_PATH"
+      # Schema cache: restore the newest entry for this workspace config; save
+      # a new entry only when the cached files changed (key = their hash).
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: _cartographer-cache/cartographer/schema
+          key: cartographer-schema-${{ hashFiles(format('{0}/cartographer.toml', inputs.workspace-path)) }}-
+          restore-keys: cartographer-schema-${{ hashFiles(format('{0}/cartographer.toml', inputs.workspace-path)) }}-
+      # Only the fetch holds the read token (step-level env); `prepare` and
+      # the plugins run in "Build", without it.
+      - name: Fetch repositories
+        working-directory: ${{ inputs.workspace-path }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.repo-token || github.token }}
+        run: cartographer build --fetch-only
+      - name: Revoke token
+        if: always() && steps.app.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: gh api --method DELETE /installation/token
+      - name: Build
+        working-directory: ${{ inputs.workspace-path }}
+        env:
+          XDG_CACHE_HOME: ${{ github.workspace }}/_cartographer-cache
+        run: cartographer build --out "$RUNNER_TEMP/snapshot"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: success() && hashFiles('_cartographer-cache/cartographer/schema/*.json') != ''
+        with:
+          path: _cartographer-cache/cartographer/schema
+          key: cartographer-schema-${{ hashFiles(format('{0}/cartographer.toml', inputs.workspace-path)) }}-${{ hashFiles('_cartographer-cache/cartographer/schema/*.json') }}
+      - name: Publish
+        working-directory: ${{ inputs.workspace-path }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cartographer publish "$RUNNER_TEMP/snapshot"

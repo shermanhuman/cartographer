@@ -1,0 +1,8 @@
+{
+  "facts_version": 1,
+  "producer": {"name": "extract-postgres-schema", "version": "0.1.0"},
+  "tables": [
+    {"id": "public.customers", "schema": "public", "name": "customers"},
+    {"id": "public.orders", "schema": "public", "name": "orders"}
+  ]
+}

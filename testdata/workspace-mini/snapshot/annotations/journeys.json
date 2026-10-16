@@ -1,0 +1,41 @@
+{
+  "annotations": [
+    {
+      "kind": "journey",
+      "id": "checkout",
+      "title": "Checkout",
+      "summary": "A customer places an order and is charged.",
+      "steps": [
+        {
+          "id": "place",
+          "title": "Place order",
+          "body": "The controller creates the order.",
+          "cites": [
+            "shop-app:ShopWeb.OrderController.create/2",
+            "shop-app:Shop.Orders.create/2"
+          ],
+          "reviewed": {
+            "shop-app:ShopWeb.OrderController.create/2": "h1",
+            "shop-app:Shop.Orders.create/2": "h2"
+          },
+          "group": "buy",
+          "outcome": "An order row exists."
+        },
+        {
+          "id": "charge",
+          "title": "Charge",
+          "body": "Billing charges the order total.",
+          "cites": [
+            "shop-app:Shop.Billing.charge/2"
+          ]
+        }
+      ],
+      "groups": [
+        {
+          "id": "buy",
+          "label": "1 \u00b7 Buy"
+        }
+      ]
+    }
+  ]
+}

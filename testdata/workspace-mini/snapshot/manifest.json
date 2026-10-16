@@ -1,0 +1,12 @@
+{
+  "snapshot_format": 1,
+  "id": "snapshot-20261015T120000Z",
+  "created_at": "2026-10-15T12:00:00Z",
+  "workspace": "mini",
+  "repos": [
+    {"name": "shop-app", "url": "https://github.com/example/shop-app", "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"name": "shop-worker", "url": "https://github.com/example/shop-worker", "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+  ],
+  "facts": ["facts/shop-app.json", "facts/shop-worker.json", "facts/schema.json"],
+  "contexts": {"depth": 2}
+}

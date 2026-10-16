@@ -1,0 +1,18 @@
+{
+  "facts_version": 1,
+  "producer": {"name": "extract-elixir", "version": "0.1.0", "call_precision": "precise"},
+  "repo": "shop-worker",
+  "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "files": [
+    {"path": "lib/worker/nightly.ex", "language": "elixir", "category": "source"}
+  ],
+  "modules": [
+    {"id": "shop-worker:Worker.Nightly", "name": "Worker.Nightly", "namespace": ["Worker", "Nightly"], "file": "lib/worker/nightly.ex", "line": 1, "language": "elixir"}
+  ],
+  "functions": [
+    {"id": "shop-worker:Worker.Nightly.run/0", "module": "shop-worker:Worker.Nightly", "name": "run", "arity": 0, "min_arity": 0, "kind": "def", "file": "lib/worker/nightly.ex", "line": 3, "clauses": [3]}
+  ],
+  "calls": [
+    {"from": "shop-worker:Worker.Nightly.run/0", "target": {"module": "Shop.Billing", "name": "charge", "arity": 2}, "kind": "remote", "file": "lib/worker/nightly.ex", "line": 4}
+  ]
+}
