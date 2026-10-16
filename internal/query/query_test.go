@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -254,4 +255,22 @@ func TestAnnotationsCitingQuotesLikeJSON(t *testing.T) {
 	if got, _ := q.AnnotationsCiting(ctx, `odd`); len(got) != 0 {
 		t.Errorf("a prefix matched: %+v", got)
 	}
+}
+
+// markView sets a table's kind. db_tables.kind arrives with fix/r3-core;
+// before that merge the column is added here.
+func markView(t *testing.T, db *sql.DB, id string) {
+	t.Helper()
+	db.Exec(`ALTER TABLE db_tables ADD COLUMN kind TEXT NOT NULL DEFAULT 'table'`)
+	if _, err := db.Exec(`UPDATE db_tables SET kind = 'view' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTableShowsItsKind(t *testing.T) {
+	q, ctx := newQ(t), context.Background()
+	has(t, render(t)(q.Table(ctx, "public.customers")), "TBL public.customers\n") // a plain table, or no kind column
+	markView(t, q.S.DB, "public.customers")
+	has(t, render(t)(q.Table(ctx, "public.customers")), "TBL public.customers [view]")
+	has(t, render(t)(q.Table(ctx, "public.orders")), "TBL public.orders\n")
 }

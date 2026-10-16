@@ -609,3 +609,36 @@ func TestServerErrorsAreLogged(t *testing.T) {
 		t.Errorf("log: %q", buf.String())
 	}
 }
+
+// db_tables.kind arrives with fix/r3-core; before that merge the column is
+// added here.
+func TestTableKindInPayloads(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if _, err := s.Import(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	s.DB.Exec(`ALTER TABLE db_tables ADD COLUMN kind TEXT NOT NULL DEFAULT 'table'`)
+	if _, err := s.DB.Exec(`UPDATE db_tables SET kind = 'view' WHERE id = 'public.customers'`); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(Options{Store: s, Version: "test"}))
+	t.Cleanup(srv.Close)
+	kinds := map[string]any{}
+	for _, e := range getJSON[[]obj](t, srv, "/api/schema") {
+		kinds[e["id"].(string)] = e["table_kind"]
+		if e["kind"] != "table" {
+			t.Errorf("entity kind changed: %v", e)
+		}
+	}
+	if kinds["public.customers"] != "view" || kinds["public.orders"] != "table" {
+		t.Errorf("schema index kinds: %v", kinds)
+	}
+	shard := getJSON[obj](t, srv, "/api/entity/public.customers")
+	if shard["table_kind"] != "view" || shard["kind"] != "table" {
+		t.Errorf("shard: %v", shard)
+	}
+}
