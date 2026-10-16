@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/shermanhuman/cartographer/internal/bundle"
+	"github.com/shermanhuman/cartographer/internal/facts"
 )
 
 const mini = "../../testdata/workspace-mini/snapshot"
@@ -278,5 +279,98 @@ func TestContainsWord(t *testing.T) {
 		if got := containsWord(c.s, c.name); got != c.want {
 			t.Errorf("containsWord(%q, %q) = %v, want %v", c.s, c.name, got, c.want)
 		}
+	}
+}
+
+// Two facts documents for one repository whose modules share a context.
+func TestContextsSharedAcrossDocs(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	b := emptyBundle("snapshot-x", "W", "2026-10-01T00:00:00Z")
+	b.Manifest.Repos = []bundle.Repo{{Name: "r"}}
+	b.Facts = []*facts.Doc{
+		{FactsVersion: 1, Producer: facts.Producer{Name: "p1"}, Repo: "r", Modules: []facts.Module{{ID: "r:App.Accounts.A", Name: "App.Accounts.A", File: "a.ex"}}},
+		{FactsVersion: 1, Producer: facts.Producer{Name: "p2"}, Repo: "r", Modules: []facts.Module{{ID: "r:App.Accounts.B", Name: "App.Accounts.B", File: "b.ex"}}},
+	}
+	if err := s.ImportBundle(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM contexts WHERE id = 'ctx:r:App.Accounts'`); n != 1 {
+		t.Errorf("contexts = %d", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM entities WHERE id = 'ctx:r:App.Accounts'`); n != 1 {
+		t.Errorf("context entities = %d", n)
+	}
+}
+
+// Only fingerprinted functions are stamped by review, so other cites
+// (modules, tables, files, contexts, functions without a fingerprint) are
+// judged on existence alone.
+func TestAnnotationNonFunctionCites(t *testing.T) {
+	const (
+		validate = "shop-app:Shop.Orders.validate/1" // no fingerprint
+		mod      = "shop-app:Shop.Orders"
+		tbl      = "public.orders"
+		file     = "file:shop-app:lib/shop_web/order_controller.ex"
+	)
+	for _, c := range []struct {
+		name       string
+		step       bundle.Step
+		want       string
+		wantReason []string
+	}{
+		{"module and table", bundle.Step{ID: "s", Cites: []string{mod, tbl}}, "reviewed", nil},
+		{"file and context", bundle.Step{ID: "s", Cites: []string{file, "ctx:shop-app:Shop.Orders"}}, "reviewed", nil},
+		{"function without fingerprint", bundle.Step{ID: "s", Cites: []string{validate}}, "reviewed", nil},
+		{"stamped plus unfingerprinted", bundle.Step{ID: "s", Cites: []string{ctrl, validate, mod}, Reviewed: map[string]string{ctrl: "h1"}}, "reviewed", nil},
+		{"fingerprinted function never stamped", bundle.Step{ID: "s", Cites: []string{mod, charge}}, "unreviewed", nil},
+		{"missing module", bundle.Step{ID: "s", Cites: []string{"shop-app:Gone"}}, "needs_review", []string{"missing: shop-app:Gone"}},
+	} {
+		status, steps := freshness(t, bundle.Annotation{Kind: "journey", ID: "j", Steps: []bundle.Step{c.step}})
+		if status != c.want || steps[0].Status != c.want || !reflect.DeepEqual(steps[0].Reasons, c.wantReason) {
+			t.Errorf("%s: status %q, step %+v, want %q %v", c.name, status, steps[0], c.want, c.wantReason)
+		}
+	}
+}
+
+func TestTableKind(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	b := emptyBundle("snapshot-x", "W", "2026-10-01T00:00:00Z")
+	b.Facts = []*facts.Doc{{FactsVersion: 1, Producer: facts.Producer{Name: "pg"}, Tables: []facts.Table{
+		{ID: "public.v", Name: "v", Kind: "view"},
+		{ID: "public.t", Name: "t"},
+	}}}
+	if err := s.ImportBundle(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"public.v": "view", "public.t": "table"} {
+		var kind string
+		if err := s.DB.QueryRow(`SELECT kind FROM db_tables WHERE id = ?`, id).Scan(&kind); err != nil || kind != want {
+			t.Errorf("%s kind = %q, %v; want %q", id, kind, err, want)
+		}
+	}
+}
+
+func TestKnownOtherReportsErrors(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	tx, err := s.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.Rollback()
+	im := &importer{ctx: context.Background(), tx: tx, sid: "s"}
+	if _, err := im.knownOther("public.orders"); err == nil {
+		t.Error("a failed lookup must be an error, not a missing cite")
 	}
 }

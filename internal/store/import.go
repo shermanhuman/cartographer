@@ -55,6 +55,7 @@ type importer struct {
 	modRepo   map[string]string
 	vocab     map[string]int
 	seenFiles map[string]bool
+	seenCtx   map[string]bool // context ids, unique across facts documents
 }
 
 func (im *importer) exec(query string, args ...any) error {
@@ -97,6 +98,7 @@ func (im *importer) run() error {
 	im.modules, im.modRepo = map[string]facts.Module{}, map[string]string{}
 	im.vocab = map[string]int{}
 	im.seenFiles = map[string]bool{}
+	im.seenCtx = map[string]bool{}
 
 	for _, d := range im.b.Facts {
 		if err := im.definitions(d); err != nil {
@@ -163,7 +165,10 @@ func (im *importer) definitions(d *facts.Doc) error {
 	for _, mo := range d.Modules {
 		ctxName := contextName(mo, depth)
 		ctxID := "ctx:" + repo + ":" + ctxName
-		contexts[ctxID] = ctxName
+		if !im.seenCtx[ctxID] { // several plugins may fill one context
+			im.seenCtx[ctxID] = true
+			contexts[ctxID] = ctxName
+		}
 		im.modules[mo.ID], im.modRepo[mo.ID] = mo, repo
 		if err := im.exec(`INSERT INTO modules(snapshot_id, id, repo, name, file, line, language, context) VALUES (?,?,?,?,?,?,?,?)`,
 			im.sid, mo.ID, repo, mo.Name, mo.File, mo.Line, mo.Language, ctxID); err != nil {
@@ -197,8 +202,12 @@ func (im *importer) definitions(d *facts.Doc) error {
 		}
 	}
 	for _, t := range d.Tables {
-		if err := im.exec(`INSERT INTO db_tables(snapshot_id, id, schema_name, name, columns, constraints, indexes) VALUES (?,?,?,?,?,?,?)`,
-			im.sid, t.ID, t.Schema, t.Name, js(nonNil(t.Columns)), js(nonNil(t.Constraints)), js(nonNil(t.Indexes))); err != nil {
+		kind := t.Kind
+		if kind == "" {
+			kind = "table"
+		}
+		if err := im.exec(`INSERT INTO db_tables(snapshot_id, id, schema_name, name, kind, columns, constraints, indexes) VALUES (?,?,?,?,?,?,?,?)`,
+			im.sid, t.ID, t.Schema, t.Name, kind, js(nonNil(t.Columns)), js(nonNil(t.Constraints)), js(nonNil(t.Indexes))); err != nil {
 			return err
 		}
 		cols := make([]string, len(t.Columns))
@@ -475,48 +484,30 @@ type StepStatus struct {
 }
 
 // annotations computes Swimm-style freshness: a cited entity that is gone, or
-// whose fingerprint differs from the reviewed one, makes the step stale. Once
-// a step has been reviewed, a cited function without a stamp (added later)
-// also needs review. Steps that cite nothing don't affect the status.
+// whose fingerprint differs from the reviewed one, makes the step stale.
+// Review stamps only functions with a fingerprint, so only they can be
+// unreviewed: a step citing one with no stamps at all is unreviewed, and once
+// a step has been reviewed, such a function without a stamp (added later)
+// needs review. Other cites (modules, tables, files, contexts) are judged on
+// existence alone. Steps that cite nothing don't affect the status.
 func (im *importer) annotations() error {
 	for _, a := range im.b.Annotations {
 		var steps []StepStatus
-		overall := "reviewed"
-		check := func(id string, cites []string, reviewed map[string]string) StepStatus {
-			st := StepStatus{ID: id, Status: "reviewed"}
-			if len(cites) == 0 {
-				return st
-			}
-			stamped := false
-			for _, v := range reviewed {
-				stamped = stamped || v != ""
-			}
-			if !stamped {
-				st.Status = "unreviewed"
-			}
-			for _, c := range cites {
-				f, isFn := im.funcs[c]
-				_, isMod := im.modules[c]
-				switch {
-				case !isFn && !isMod && !im.knownOther(c):
-					st.Status = "needs_review"
-					st.Reasons = append(st.Reasons, "missing: "+c)
-				case isFn && stamped && reviewed[c] == "":
-					st.Status = "needs_review"
-					st.Reasons = append(st.Reasons, "unreviewed: "+c)
-				case isFn && reviewed[c] != "" && reviewed[c] != f.Fingerprint:
-					st.Status = "needs_review"
-					st.Reasons = append(st.Reasons, "changed: "+c)
-				}
-			}
-			return st
-		}
 		if len(a.Steps) == 0 {
-			steps = append(steps, check(a.ID, a.Cites, a.Reviewed))
+			st, err := im.stepStatus(a.ID, a.Cites, a.Reviewed)
+			if err != nil {
+				return err
+			}
+			steps = append(steps, st)
 		}
 		for _, s := range a.Steps {
-			steps = append(steps, check(s.ID, s.Cites, s.Reviewed))
+			st, err := im.stepStatus(s.ID, s.Cites, s.Reviewed)
+			if err != nil {
+				return err
+			}
+			steps = append(steps, st)
 		}
+		overall := "reviewed"
 		for _, s := range steps {
 			switch {
 			case s.Status == "needs_review":
@@ -536,14 +527,48 @@ func (im *importer) annotations() error {
 	return nil
 }
 
+func (im *importer) stepStatus(id string, cites []string, reviewed map[string]string) (StepStatus, error) {
+	st := StepStatus{ID: id, Status: "reviewed"}
+	stamped := false
+	for _, v := range reviewed {
+		stamped = stamped || v != ""
+	}
+	for _, c := range cites {
+		f, isFn := im.funcs[c]
+		_, isMod := im.modules[c]
+		known := isFn || isMod
+		if !known {
+			var err error
+			if known, err = im.knownOther(c); err != nil {
+				return st, err
+			}
+		}
+		unstamped := isFn && f.Fingerprint != "" && reviewed[c] == ""
+		switch {
+		case !known:
+			st.Status = "needs_review"
+			st.Reasons = append(st.Reasons, "missing: "+c)
+		case isFn && reviewed[c] != "" && reviewed[c] != f.Fingerprint:
+			st.Status = "needs_review"
+			st.Reasons = append(st.Reasons, "changed: "+c)
+		case unstamped && stamped:
+			st.Status = "needs_review"
+			st.Reasons = append(st.Reasons, "unreviewed: "+c)
+		case unstamped && st.Status == "reviewed":
+			st.Status = "unreviewed"
+		}
+	}
+	return st, nil
+}
+
 // knownOther reports whether id names a table, file or context in this snapshot.
-func (im *importer) knownOther(id string) bool {
+func (im *importer) knownOther(id string) (bool, error) {
 	var n int
-	im.tx.QueryRowContext(im.ctx, `SELECT
+	err := im.tx.QueryRowContext(im.ctx, `SELECT
 	  (SELECT count(*) FROM db_tables WHERE snapshot_id = ?1 AND id = ?2) +
 	  (SELECT count(*) FROM contexts WHERE snapshot_id = ?1 AND id = ?2) +
 	  (SELECT count(*) FROM files WHERE snapshot_id = ?1 AND 'file:' || repo || ':' || path = ?2)`, im.sid, id).Scan(&n)
-	return n > 0
+	return n > 0, err
 }
 
 func rawOr(a bundle.Annotation) string {

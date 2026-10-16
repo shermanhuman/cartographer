@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS db_tables (
   id TEXT NOT NULL,
   schema_name TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'table', -- table | partitioned_table | view | materialized_view
   columns TEXT NOT NULL DEFAULT '[]',
   constraints TEXT NOT NULL DEFAULT '[]',
   indexes TEXT NOT NULL DEFAULT '[]',
