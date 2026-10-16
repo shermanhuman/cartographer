@@ -168,3 +168,17 @@ func TestMatchOriginMismatchIsNotNameMatch(t *testing.T) {
 		t.Errorf("sibling with another origin claimed: %v", got)
 	}
 }
+
+// Git quotes non-ASCII paths unless -z; facts carry them raw.
+func TestCheckKeepsUnicodePathsRaw(t *testing.T) {
+	ctx := context.Background()
+	app := t.TempDir()
+	sh(t, app, "git", "init", "-q", "-b", "main")
+	rev := commit(t, app, "lib/café.ex", "a")
+	os.WriteFile(filepath.Join(app, "lib/café.ex"), []byte("b"), 0o644)
+	os.WriteFile(filepath.Join(app, "lib/naïve thing.ex"), []byte("x"), 0o644) // untracked
+	rep := Check(ctx, []Repo{{Name: "app", Revision: rev}}, map[string]string{"app": app})
+	if !rep.Changed("app", "lib/café.ex") || !rep.Changed("app", "lib/naïve thing.ex") {
+		t.Errorf("changed = %v", rep.Repos[0].Changed)
+	}
+}

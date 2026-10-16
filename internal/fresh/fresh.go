@@ -31,8 +31,13 @@ type State struct {
 type Report struct{ Repos []State }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := gitRaw(ctx, dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+func gitRaw(ctx context.Context, dir string, args ...string) (string, error) {
 	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
-	return strings.TrimSpace(string(out)), err
+	return string(out), err
 }
 
 // Root returns the git top-level directory containing dir, or "".
@@ -231,15 +236,16 @@ func Check(ctx context.Context, repos []Repo, paths map[string]string) *Report {
 				break
 			}
 			fmt.Sscanf(n, "%d", &st.Behind)
-			if out, err := git(ctx, st.Path, "diff", "--name-only", "--end-of-options", r.Revision, "--"); err == nil {
-				for _, f := range strings.Split(out, "\n") {
+			// -z: paths verbatim, as facts record them (no C-quoting).
+			if out, err := gitRaw(ctx, st.Path, "diff", "--name-only", "-z", "--end-of-options", r.Revision, "--"); err == nil {
+				for _, f := range strings.Split(out, "\x00") {
 					if f != "" {
 						st.Changed[f] = true
 					}
 				}
 			}
-			if out, err := git(ctx, st.Path, "ls-files", "--others", "--exclude-standard"); err == nil {
-				for _, f := range strings.Split(out, "\n") {
+			if out, err := gitRaw(ctx, st.Path, "ls-files", "-z", "--others", "--exclude-standard"); err == nil {
+				for _, f := range strings.Split(out, "\x00") {
 					if f != "" {
 						st.Changed[f] = true
 					}
