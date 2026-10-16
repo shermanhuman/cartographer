@@ -139,8 +139,8 @@ func TestPublishPullPrune(t *testing.T) {
 	if p.Due("o/map") {
 		t.Error("should not be due right after a pull")
 	}
-	if _, err := os.Stat(filepath.Join(p.DataDir, "snapshots", res.Snapshot, "manifest.json")); err != nil {
-		t.Error("unpacked snapshot missing")
+	if entries, _ := os.ReadDir(filepath.Join(p.DataDir, "snapshots")); len(entries) != 0 {
+		t.Errorf("unpacked snapshot kept after import: %v", entries)
 	}
 	again, _ := p.Pull(ctx, "o/map")
 	if again.Imported {
@@ -242,9 +242,11 @@ func TestConcurrentPulls(t *testing.T) {
 	s, _ := store.Open(":memory:")
 	defer s.Close()
 	data := t.TempDir()
-	// A stale partial from another process must survive pruning.
-	stale := filepath.Join(data, "snapshots", "snapshot-x"+partialMark+"123")
-	os.MkdirAll(stale, 0o755)
+	// Another process's in-progress pull must survive pruning; a snapshot
+	// left unpacked by an older version is removed.
+	busy := filepath.Join(data, "snapshots", "snapshot-x"+partialMark+"123")
+	os.MkdirAll(busy, 0o755)
+	os.MkdirAll(filepath.Join(data, "snapshots", "snapshot-20261001T000000Z"), 0o755)
 	var wg sync.WaitGroup
 	errs := make([]error, 4)
 	for i := range errs {
@@ -261,15 +263,15 @@ func TestConcurrentPulls(t *testing.T) {
 			t.Errorf("pull %d: %v", i, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(data, "snapshots", id, "manifest.json")); err != nil {
-		t.Error("unpacked snapshot missing")
+	if got, err := s.Latest(ctx); err != nil || got != id {
+		t.Errorf("Latest = %q, %v", got, err)
 	}
 	entries, _ := os.ReadDir(filepath.Join(data, "snapshots"))
 	var names []string
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	if strings.Join(names, ",") != id+",snapshot-x"+partialMark+"123" {
+	if strings.Join(names, ",") != "snapshot-x"+partialMark+"123" {
 		t.Errorf("snapshot dirs = %v", names)
 	}
 }
@@ -286,7 +288,7 @@ func TestPruneDirsRemovesOnlyStalePartials(t *testing.T) {
 	}
 	old := time.Now().Add(-2 * StalePartial)
 	os.Chtimes(stale, old, old)
-	p.pruneDirs(context.Background())
+	p.pruneDirs()
 	if _, err := os.Stat(fresh); err != nil {
 		t.Error("an in-progress pull's directory was removed")
 	}

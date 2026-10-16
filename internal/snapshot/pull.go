@@ -23,8 +23,8 @@ const FailBackoff = 5 * time.Minute
 type Puller struct {
 	Store   *store.Store
 	GitHub  *GitHub
-	DataDir string // unpacked snapshots and pull stamps live here
-	Keep    int    // snapshots kept in the store (default store.DefaultKeep)
+	DataDir string // pull stamps and in-progress unpacks live here
+	Keep    int    // snapshots kept per workspace in the store (default store.DefaultKeep)
 }
 
 // Result says what a pull did.
@@ -62,39 +62,29 @@ func (p *Puller) Pull(ctx context.Context, source string) (res *Result, err erro
 	}
 	defer body.Close()
 	snaps := filepath.Join(p.DataDir, "snapshots")
-	dir := filepath.Join(snaps, newest.Tag)
 	if err := os.MkdirAll(snaps, 0o755); err != nil {
 		return nil, err
 	}
-	// A unique temp dir per pull: concurrent pulls never share one, and
-	// pruneDirs leaves anything marked partial alone.
+	// The archive is unpacked only to be imported. A unique temp dir per
+	// pull: concurrent pulls never share one, and pruneDirs leaves anything
+	// marked partial alone until it is stale.
 	tmp, err := os.MkdirTemp(snaps, newest.Tag+partialMark+"*")
 	if err != nil {
 		return nil, err
 	}
+	defer os.RemoveAll(tmp)
 	if err := bundle.Unpack(body, tmp); err != nil {
-		os.RemoveAll(tmp)
 		return nil, fmt.Errorf("%s: unpack: %w", newest.Tag, err)
 	}
 	b, err := bundle.Read(tmp)
 	if err != nil {
-		os.RemoveAll(tmp)
 		return nil, err
 	}
 	if b.Manifest.ID != newest.Tag {
-		os.RemoveAll(tmp)
 		return nil, fmt.Errorf("release %s holds snapshot %s", newest.Tag, b.Manifest.ID)
 	}
 	if err := p.Store.ImportBundle(ctx, b); err != nil {
-		os.RemoveAll(tmp)
 		return nil, err
-	}
-	if err := os.Rename(tmp, dir); err != nil {
-		// A concurrent pull of the same snapshot may have renamed first.
-		os.RemoveAll(tmp)
-		if _, serr := os.Stat(filepath.Join(dir, "manifest.json")); serr != nil {
-			return nil, err
-		}
 	}
 	keep := p.Keep
 	if keep == 0 {
@@ -103,7 +93,7 @@ func (p *Puller) Pull(ctx context.Context, source string) (res *Result, err erro
 	if err := p.Store.Prune(ctx, keep); err != nil {
 		return nil, err
 	}
-	p.pruneDirs(ctx)
+	p.pruneDirs()
 	return &Result{Source: source, Snapshot: newest.Tag, Imported: true}, nil
 }
 
@@ -143,28 +133,19 @@ func (p *Puller) stamp(source string, ok bool) {
 	os.WriteFile(path, []byte(status+" "+time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
 }
 
-// pruneDirs removes unpacked snapshot directories no longer in the store.
-func (p *Puller) pruneDirs(ctx context.Context) {
-	have, err := p.Store.Snapshots(ctx)
-	if err != nil {
-		return
-	}
-	keep := map[string]bool{}
-	for _, s := range have {
-		keep[s.ID] = true
-	}
-	entries, _ := os.ReadDir(filepath.Join(p.DataDir, "snapshots"))
+// pruneDirs removes unpack directories abandoned by a crash, and snapshot
+// directories that older versions kept after import.
+func (p *Puller) pruneDirs() {
+	snaps := filepath.Join(p.DataDir, "snapshots")
+	entries, _ := os.ReadDir(snaps)
 	for _, e := range entries {
 		partial := strings.Contains(e.Name(), partialMark) || strings.HasSuffix(e.Name(), ".partial")
-		switch {
-		case partial:
-			// In-progress pulls are left alone; ones abandoned by a crash
-			// are removed once stale.
-			if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > StalePartial {
-				os.RemoveAll(filepath.Join(p.DataDir, "snapshots", e.Name()))
+		if partial {
+			// In-progress pulls are left alone until stale.
+			if fi, err := e.Info(); err != nil || time.Since(fi.ModTime()) <= StalePartial {
+				continue
 			}
-		case !keep[e.Name()]:
-			os.RemoveAll(filepath.Join(p.DataDir, "snapshots", e.Name()))
 		}
+		os.RemoveAll(filepath.Join(snaps, e.Name()))
 	}
 }
