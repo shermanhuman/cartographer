@@ -182,6 +182,14 @@ func TestLoadRejectsUnknownKeysAndPlugins(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsNegativeContextDepth(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, FileName), "name = \"x\"\n[contexts]\ndepth = -1\n")
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "contexts.depth") {
+		t.Errorf("negative depth: %v", err)
+	}
+}
+
 func TestTemplateLoads(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, FileName), Template)

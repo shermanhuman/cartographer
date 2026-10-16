@@ -126,6 +126,9 @@ func Read(dir string) (*Bundle, error) {
 	if tag := IDWorkspaceTag(m.ID); tag != "" && tag != WorkspaceTag(m.Workspace) {
 		return nil, fmt.Errorf("bundle: id %s names another workspace, not workspace %q", m.ID, m.Workspace)
 	}
+	if m.Contexts.Depth < 0 {
+		return nil, fmt.Errorf("bundle: manifest contexts.depth must not be negative, got %d", m.Contexts.Depth)
+	}
 	if m.Contexts.Depth == 0 {
 		m.Contexts.Depth = 2
 	}

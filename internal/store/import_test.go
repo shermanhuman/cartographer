@@ -217,6 +217,26 @@ func TestImportRejectsHugeArity(t *testing.T) {
 	}
 }
 
+// An unvalidated negative context depth is an error, not a panic.
+func TestImportRejectsNegativeContextDepth(t *testing.T) {
+	if got := contextName(facts.Module{Name: "A.B.C"}, -1); got != "" {
+		t.Errorf("contextName(-1) = %q", got)
+	}
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	b, err := bundle.Read(mini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Manifest.Contexts.Depth = -1
+	if err := s.ImportBundle(context.Background(), b); err == nil || !strings.Contains(err.Error(), "contexts.depth") {
+		t.Errorf("got %v", err)
+	}
+}
+
 func TestAnnotationExtraFieldsPreserved(t *testing.T) {
 	s, _ := imported(t)
 	var body string

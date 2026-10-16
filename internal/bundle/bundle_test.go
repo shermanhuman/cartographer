@@ -131,3 +131,11 @@ func TestReadRejectsIDOfAnotherWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReadRejectsNegativeContextDepth(t *testing.T) {
+	dir := copyMini(t)
+	edit(t, filepath.Join(dir, "manifest.json"), `"depth": 2`, `"depth": -1`)
+	if _, err := Read(dir); err == nil || !strings.Contains(err.Error(), "contexts.depth") {
+		t.Fatalf("got %v", err)
+	}
+}

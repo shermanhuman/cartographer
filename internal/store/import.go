@@ -171,6 +171,9 @@ func (im *importer) definitions(d *facts.Doc) error {
 		}
 	}
 	depth := im.b.Manifest.Contexts.Depth
+	if depth < 0 { // bundle.Read rejects this; ImportBundle may get unread input
+		return fmt.Errorf("manifest contexts.depth must not be negative, got %d", depth)
+	}
 	contexts := map[string]string{}
 	for _, mo := range d.Modules {
 		ctxName := contextName(mo, depth)
@@ -262,7 +265,7 @@ func contextName(mo facts.Module, depth int) string {
 		ns = strings.Split(mo.Name, ".")
 	}
 	if len(ns) > depth {
-		ns = ns[:depth]
+		ns = ns[:max(depth, 0)]
 	}
 	return strings.Join(ns, ".")
 }

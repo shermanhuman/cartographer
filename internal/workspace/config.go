@@ -94,6 +94,9 @@ func Load(path string) (*Config, error) {
 	} else if c.Keep < 1 {
 		return nil, fmt.Errorf("workspace: %s: keep must be at least 1, got %d", path, c.Keep)
 	}
+	if c.Contexts.Depth < 0 {
+		return nil, fmt.Errorf("workspace: %s: contexts.depth must not be negative, got %d", path, c.Contexts.Depth)
+	}
 	if c.Contexts.Depth == 0 {
 		c.Contexts.Depth = 2
 	}
