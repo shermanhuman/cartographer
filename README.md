@@ -103,7 +103,10 @@ In CI, call the reusable workflows: `build-snapshot.yml` from the workspace
 repository (on dispatch and weekly), and `pr-impact.yml` from each product
 repository's pull requests for a sticky impact comment. Pin both the
 workflow ref (`@v0.1.0`) and its `cartographer-version` input to the same
-release; the workflows install exactly that binary.
+release; the workflows install exactly that binary. In your own CI, keep
+the token away from plugin code: `cartographer build --fetch-only` clones or
+fetches the repositories without running plugins or schema `prepare`, so
+only that step needs `GH_TOKEN`; build in a later step without it.
 
 ## How it works
 

@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -107,23 +108,31 @@ func schemaPluginsDigest(command []string, pluginsDir string) (string, error) {
 	h := sha256.New()
 	fmt.Fprintf(h, "schema-plugins:%q\n", dirs)
 	for _, d := range dirs {
-		root := filepath.Join(pluginsDir, d)
-		err := filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
-			if err != nil || e.IsDir() {
-				return err
-			}
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return err
-			}
-			rel, _ := filepath.Rel(pluginsDir, p)
-			fmt.Fprintf(h, "%s\x00%d\x00", filepath.ToSlash(rel), len(b))
-			h.Write(b)
-			return nil
-		})
-		if err != nil && !os.IsNotExist(err) {
+		sum, err := dirDigest(filepath.Join(pluginsDir, d))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return "", fmt.Errorf("build: schema plugin digest: %w", err)
 		}
+		fmt.Fprintf(h, "%s=%s\n", d, sum)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// dirDigest hashes the relative paths and contents of every file under dir.
+// TODO(merge fix/r3-build): replace with workspace.DirDigest.
+func dirDigest(dir string) (string, error) {
+	h := sha256.New()
+	err := filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		fmt.Fprintf(h, "%s\x00%d\x00", filepath.ToSlash(rel), len(b))
+		h.Write(b)
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil)), err
 }
