@@ -14,13 +14,26 @@ import (
 )
 
 // Cancelling a plugin or prepare command ends its whole process group:
-// a grandchild (sh -c '… &') doesn't outlive the build.
+// a grandchild (sh -c '… &') doesn't outlive the build, even one that
+// ignores SIGTERM (killed once the command has been waited for), and the
+// group is forgotten.
 func TestCancelKillsTheCommandsProcessGroup(t *testing.T) {
+	for _, script := range []string{"sleep 600 & echo $! > \"$1\"; wait", "trap '' TERM; sleep 600 & echo $! > \"$1\"; wait"} {
+		t.Run(script[:5], func(t *testing.T) { cancelGroup(t, script) })
+	}
+	n := 0
+	groups.Range(func(any, any) bool { n++; return true })
+	if n != 0 {
+		t.Errorf("%d groups still registered", n)
+	}
+}
+
+func cancelGroup(t *testing.T, script string) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := runCmd(ctx, t.TempDir(), nil, []string{"sh", "-c", "sleep 600 & echo $! > '" + pidFile + "'; wait"}, nil)
+		_, err := runCmd(ctx, t.TempDir(), nil, []string{"sh", "-c", script, "sh", pidFile}, nil)
 		done <- err
 	}()
 	var pid int

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -32,8 +33,8 @@ var shutdownWait = 10 * time.Second
 
 // rebuildEnabled: local rebuilds are on unless --no-rebuild,
 // $CARTOGRAPHER_NO_REBUILD or `auto_rebuild = false` in the user config.
-// A config that doesn't load (e.g. a relative local_workspaces entry)
-// disables them, and the error goes to log.
+// A config that doesn't load turns them off; entries Load dropped are
+// reported (Warnings) and the rest applies. Problems go to log.
 func rebuildEnabled(c *common, log io.Writer) bool {
 	if c.noRebuild {
 		return false
@@ -45,17 +46,46 @@ func rebuildEnabled(c *common, log io.Writer) bool {
 		}
 		return false
 	}
+	for _, w := range cfg.Warnings {
+		if log != nil {
+			fmt.Fprintln(log, "cartographer:", w)
+		}
+	}
 	return cfg.AutoRebuildOn()
 }
 
 // withSignals cancels ctx on SIGINT/SIGTERM, so commands that run plugins
 // (in their own process groups) or rebuild in the background stop them and
-// clean up before exiting. After the first signal the default behaviour is
-// back: a second one kills at once.
+// clean up before exiting. A second signal exits at once, killing the
+// plugins' process groups first (they don't get the terminal's signals).
 func withSignals(ctx context.Context) (context.Context, context.CancelFunc) {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	go func() { <-ctx.Done(); stop() }()
-	return ctx, stop
+	ctx, cancel := context.WithCancel(ctx)
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-sigs:
+			cancel()
+		case <-done:
+			return
+		}
+		select {
+		case sig := <-sigs:
+			workspace.KillGroups()
+			code := 130 // 128 + SIGINT
+			if sig == syscall.SIGTERM {
+				code = 143
+			}
+			os.Exit(code)
+		case <-done:
+		}
+	}()
+	var once sync.Once
+	return ctx, func() {
+		once.Do(func() { signal.Stop(sigs); close(done) })
+		cancel()
+	}
 }
 
 // spawnRebuild is the Session.Rebuild of a one-shot command: it starts
@@ -160,8 +190,13 @@ func localBuild(ctx context.Context, w io.Writer, c *common, s *store.Store) err
 		// A build cut short by shutdown (killed plugins and all) is
 		// cancelled, not failed: Run doesn't stamp it.
 		defer func() {
-			if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+			switch {
+			case err == nil:
+			case errors.Is(ctx.Err(), context.Canceled):
 				err = fmt.Errorf("%w (%v)", context.Canceled, err)
+			case c.background && errors.Is(ctx.Err(), context.DeadlineExceeded):
+				// Run backs off for TimeoutBackoff on this.
+				err = fmt.Errorf("automatic rebuild stopped after %s; run `cartographer build --local --import` by hand, or set `auto_rebuild = false` (%w: %v)", strings.TrimSuffix(rebuild.Timeout.String(), "0s"), context.DeadlineExceeded, err)
 			}
 		}()
 		if !c.background {

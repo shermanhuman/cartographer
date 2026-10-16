@@ -32,6 +32,11 @@ const Stale = 30 * time.Minute
 // one, so a broken plugin isn't rerun on every query.
 const FailBackoff = 5 * time.Minute
 
+// TimeoutBackoff is the minimum time before another rebuild after one that
+// Timeout stopped: a build that can't finish in time would otherwise burn
+// Timeout of CPU every few minutes.
+const TimeoutBackoff = 6 * time.Hour
+
 // Timeout bounds an automatic rebuild (the detached child, or the MCP
 // server's and serve's goroutine).
 var Timeout = 15 * time.Minute
@@ -262,23 +267,29 @@ func stale(path string, content []byte, maxAge time.Duration) bool {
 	return err == nil && !alive(pid)
 }
 
-// Running reports whether a rebuild of ws holds the lock, and since when.
+// Running reports whether a rebuild of ws holds the lock, and since when
+// it started (recorded in the lock; its mtime is the last heartbeat).
 func (d Dir) Running(ws string) (since time.Time, ok bool) {
 	path := d.lockPath(ws)
 	b, err := os.ReadFile(path)
 	if err != nil || stale(path, b, Stale) {
 		return time.Time{}, false
 	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		return time.Time{}, false
+	if f := strings.Fields(string(b)); len(f) >= 2 {
+		if since, err = time.Parse(time.RFC3339Nano, f[1]); err == nil {
+			return since, true
+		}
 	}
-	return fi.ModTime(), true
+	if fi, err := os.Stat(path); err == nil {
+		return fi.ModTime(), true
+	}
+	return time.Time{}, false
 }
 
 // Due reports whether ws may be rebuilt: not within FailBackoff of a failed
-// rebuild. A successful one never backs off; the next evidence of a
-// checkout ahead of the snapshot rebuilds again.
+// rebuild, nor within TimeoutBackoff of one Timeout stopped. A successful
+// one never backs off; the next evidence of a checkout ahead of the
+// snapshot rebuilds again.
 func (d Dir) Due(ws string) bool {
 	path := d.stampPath(ws)
 	fi, err := os.Stat(path)
@@ -286,10 +297,15 @@ func (d Dir) Due(ws string) bool {
 		return true
 	}
 	b, err := os.ReadFile(path)
-	if err != nil || !strings.HasPrefix(string(b), "failed") {
+	switch {
+	case err != nil:
 		return true
+	case strings.HasPrefix(string(b), "timeout"):
+		return time.Since(fi.ModTime()) > TimeoutBackoff
+	case strings.HasPrefix(string(b), "failed"):
+		return time.Since(fi.ModTime()) > FailBackoff
 	}
-	return time.Since(fi.ModTime()) > FailBackoff
+	return true
 }
 
 // Built returns the revisions the last rebuild imported into the store at
@@ -371,6 +387,9 @@ func (d Dir) stamp(ws string, res Result, err error) {
 	status := "ok"
 	if err != nil {
 		status = "failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = "timeout"
+		}
 		os.WriteFile(d.errorPath(ws), []byte(err.Error()+"\n"), 0o644)
 	} else {
 		os.Remove(d.errorPath(ws))

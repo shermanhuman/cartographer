@@ -206,13 +206,22 @@ func workspaceDir(t *testing.T) string {
 }
 
 // A relative local_workspaces entry would trust whatever directory a query
-// runs in: Load rejects it, and returns entries absolute (~ expanded).
-func TestLoadRejectsRelativeLocalWorkspaces(t *testing.T) {
+// runs in: Load drops it with a warning naming the file to edit, keeps the
+// rest of the config, and returns entries absolute (~ expanded).
+func TestLoadSkipsRelativeLocalWorkspaces(t *testing.T) {
 	for _, entry := range []string{".", "map", "../map", "~user/map"} {
-		use(t, "local_workspaces = ["+strconv.Quote(entry)+"]\n")
-		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "absolute") {
-			t.Errorf("%q: Load = %v", entry, err)
+		p := use(t, "workspaces = [\"acme/map\"]\nlocal_workspaces = ["+strconv.Quote(entry)+", \"/abs/map\"]\n[checkouts]\nshop-app = \"/src/shop-app\"\n")
+		c, err := Load()
+		if err != nil || !slices.Equal(c.LocalWorkspaces, []string{"/abs/map"}) || len(c.Workspaces) != 1 || c.Checkouts["shop-app"] != "/src/shop-app" {
+			t.Fatalf("%q: Load = %+v, %v", entry, c, err)
 		}
+		if len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "edit "+p) || !strings.Contains(c.Warnings[0], strconv.Quote(entry)) {
+			t.Errorf("%q: warnings %q", entry, c.Warnings)
+		}
+	}
+	// The other commands that load the config keep working.
+	if err := AddWorkspace("acme/other"); err != nil {
+		t.Errorf("AddWorkspace with a bad entry: %v", err)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -220,7 +229,7 @@ func TestLoadRejectsRelativeLocalWorkspaces(t *testing.T) {
 	}
 	use(t, "local_workspaces = [\"~/src/map/\", \"/abs/map\"]\n")
 	c, err := Load()
-	if err != nil || !slices.Equal(c.LocalWorkspaces, []string{filepath.Join(home, "src", "map"), "/abs/map"}) {
+	if err != nil || !slices.Equal(c.LocalWorkspaces, []string{filepath.Join(home, "src", "map"), "/abs/map"}) || len(c.Warnings) != 0 {
 		t.Errorf("Load = %v, %v", c, err)
 	}
 }

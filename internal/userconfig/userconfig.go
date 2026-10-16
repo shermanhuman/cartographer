@@ -31,6 +31,8 @@ type Config struct {
 	// Checkouts maps repository names to local paths when they aren't
 	// siblings of the current repository.
 	Checkouts map[string]string `toml:"checkouts"`
+	// Warnings are problems Load worked around (entries it dropped).
+	Warnings []string `toml:"-"`
 }
 
 // AutoRebuildOn reports whether local rebuilds are enabled (the default).
@@ -53,21 +55,25 @@ func Path() string {
 }
 
 // Load returns the config, or an empty one when the file doesn't exist.
-// local_workspaces entries come back absolute and clean (~ expanded); a
-// relative one is an error, since it would trust whichever directory a
-// command runs in.
+// local_workspaces entries come back absolute and clean (~ expanded). A
+// relative one would trust whichever directory a command runs in: it is
+// dropped with a warning (Warnings), and the rest of the config still
+// applies.
 func Load() (*Config, error) {
 	var c Config
 	if _, err := toml.DecodeFile(Path(), &c); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("userconfig: %w", err)
 	}
-	for i, dir := range c.LocalWorkspaces {
+	var keep []string
+	for _, dir := range c.LocalWorkspaces {
 		abs := fresh.ExpandHome(dir)
 		if !filepath.IsAbs(abs) {
-			return nil, fmt.Errorf("userconfig: %s: local_workspaces entry %q must be an absolute path (or start with ~/); register workspaces with `cartographer workspace add <dir>`", Path(), dir)
+			c.Warnings = append(c.Warnings, fmt.Sprintf("local_workspaces entry %q is not an absolute path and is ignored: edit %s to make it absolute (or start it with ~/) or remove it", dir, Path()))
+			continue
 		}
-		c.LocalWorkspaces[i] = filepath.Clean(abs)
+		keep = append(keep, filepath.Clean(abs))
 	}
+	c.LocalWorkspaces = keep
 	return &c, nil
 }
 

@@ -523,15 +523,21 @@ func runCmd(ctx context.Context, dir string, env, argv []string, stdout io.Write
 	cmd.Dir = dir
 	cmd.Env = append(childEnv(os.Environ()), env...)
 	// Cancelling ends the command's whole process group (ownGroup); after
-	// WaitDelay the group is killed and its output pipes closed.
+	// WaitDelay the command is killed and its output pipes closed.
 	cmd.WaitDelay = 5 * time.Second
-	ownGroup(cmd)
+	g := ownGroup(cmd)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	if stdout != nil {
 		cmd.Stdout = stdout
 	}
-	if err := cmd.Run(); err != nil {
+	err := cmd.Start()
+	if err == nil {
+		g.started()
+		err = cmd.Wait()
+		g.done()
+	}
+	if err != nil {
 		return "", fmt.Errorf("%s: %w\n%s", argv[0], err, tail(errb.String()))
 	}
 	return errb.String(), nil

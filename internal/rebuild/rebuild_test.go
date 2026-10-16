@@ -388,3 +388,41 @@ func TestLeftoversOfADeadTakeoverAreSwept(t *testing.T) {
 	}
 	unlock()
 }
+
+// "rebuilding since" is when the build started, not its last heartbeat.
+func TestRunningReportsTheStartTime(t *testing.T) {
+	old := Heartbeat
+	Heartbeat = 20 * time.Millisecond
+	t.Cleanup(func() { Heartbeat = old })
+	d := Dir{t.TempDir()}
+	start := time.Now()
+	d.Run("mini", func() (Result, error) {
+		time.Sleep(300 * time.Millisecond)
+		since, ok := d.Running("mini")
+		if !ok || since.Sub(start).Abs() > 100*time.Millisecond {
+			t.Errorf("since = %v, started %v", since, start)
+		}
+		return Result{}, nil
+	})
+}
+
+// A rebuild stopped by its time bound backs off for TimeoutBackoff, not
+// FailBackoff: rerunning a build that can't finish in time every few
+// minutes would only burn CPU.
+func TestTimeoutBacksOffLonger(t *testing.T) {
+	d := Dir{t.TempDir()}
+	d.Run("mini", func() (Result, error) { return Result{}, fmt.Errorf("stopped: %w", context.DeadlineExceeded) })
+	aged := time.Now().Add(-FailBackoff - time.Minute)
+	os.Chtimes(d.stampPath("mini"), aged, aged)
+	if d.Due("mini") {
+		t.Error("due after FailBackoff following a timeout")
+	}
+	aged = time.Now().Add(-TimeoutBackoff - time.Minute)
+	os.Chtimes(d.stampPath("mini"), aged, aged)
+	if !d.Due("mini") {
+		t.Error("not due after TimeoutBackoff")
+	}
+	if !strings.HasPrefix(d.Status("mini"), "last rebuild failed") {
+		t.Errorf("status %q", d.Status("mini"))
+	}
+}

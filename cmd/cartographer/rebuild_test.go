@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -482,8 +483,13 @@ func TestBackgroundBuildTimesOut(t *testing.T) {
 	var out bytes.Buffer
 	err := run(context.Background(), []string{"build", "--local", "--import", "--background", "--workspace", ws, "--db", db}, &out)
 	d := rebuild.Dir{Path: filepath.Dir(db)}
-	if err == nil || time.Since(begun) > 10*time.Second || !strings.Contains(d.Status("mini"), "last rebuild failed") {
-		t.Errorf("err %v after %v; status %q", err, time.Since(begun), d.Status("mini"))
+	st := d.Status("mini")
+	if err == nil || time.Since(begun) > 10*time.Second || !strings.Contains(st, "last rebuild failed") ||
+		!strings.Contains(st, "automatic rebuild stopped after 300ms; run `cartographer build --local --import` by hand, or set `auto_rebuild = false`") {
+		t.Errorf("err %v after %v; status %q", err, time.Since(begun), st)
+	}
+	if d.Due("mini") {
+		t.Error("a timed-out rebuild must back off")
 	}
 }
 
@@ -506,14 +512,23 @@ func TestBackgroundBuildRefusesAChangedWorkspace(t *testing.T) {
 	}
 }
 
-// A config that can't be trusted (a relative local_workspaces entry) turns
-// rebuilds off and says why.
-func TestRelativeLocalWorkspaceDisablesRebuilds(t *testing.T) {
+// One bad local_workspaces entry (relative) is skipped with a warning that
+// names the file to edit; the rest of the config keeps working: rebuilds,
+// [checkouts] for freshness, workspace add.
+func TestRelativeLocalWorkspaceIsSkippedWithAWarning(t *testing.T) {
+	_, repo, ws := localWorkspace(t)
+	db := filepath.Join(t.TempDir(), "carto.db")
+	cli(t, db, "build", "--local", "--import", "--workspace", ws)
 	cfg := filepath.Join(t.TempDir(), "config.toml")
-	os.WriteFile(cfg, []byte("local_workspaces = [\".\"]\n"), 0o644)
+	os.WriteFile(cfg, []byte("local_workspaces = [\".\"]\n[checkouts]\nshop-app = "+strconv.Quote(repo)+"\n"), 0o644)
 	t.Setenv("CARTOGRAPHER_CONFIG", cfg)
 	var log bytes.Buffer
-	if rebuildEnabled(&common{}, &log) || !strings.Contains(log.String(), "must be an absolute path") {
+	if !rebuildEnabled(&common{}, &log) || !strings.Contains(log.String(), "edit "+cfg) {
 		t.Errorf("log %q", log.String())
 	}
+	t.Chdir(t.TempDir()) // outside git: only [checkouts] can find the checkout
+	if st := cli(t, db, "status", "--no-pull"); !strings.Contains(st, "current ("+repo+")") {
+		t.Errorf("[checkouts] ignored:\n%s", st)
+	}
+	cli(t, "", "workspace", "add", "acme/map")
 }
