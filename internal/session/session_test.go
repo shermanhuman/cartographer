@@ -372,3 +372,28 @@ func TestWithoutCacheSeesEditsInsideTTL(t *testing.T) {
 		t.Error("WithoutCache must recompute freshness")
 	}
 }
+
+// A cancelled call must not poison the memo for the next CacheTTL.
+func TestCancelledCallIsNotCached(t *testing.T) {
+	t.Setenv("CARTOGRAPHER_CONFIG", filepath.Join(t.TempDir(), "none.toml"))
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	importAs(t, s, "mini", "snapshot-20261015T120000Z", "")
+	importAs(t, s, "other", "snapshot-20261015T130000Z", "zz-")
+	app := filepath.Join(t.TempDir(), "x")
+	gitInit(t, app, "git@github.com:example/shop-app.git")
+	sess := &Session{Store: s, Cwd: app}
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := sess.Choose(cctx); err == nil {
+		t.Fatal("cancelled Choose succeeded")
+	}
+	if id, err := sess.Choose(context.Background()); err != nil || id != "snapshot-20261015T120000Z" {
+		t.Errorf("live Choose after a cancelled one: %q, %v", id, err)
+	}
+	sess = &Session{Store: s, Cwd: app}
+	sess.Query(cctx)
+	if q, _, err := sess.Query(context.Background()); err != nil || q.Snapshot != "snapshot-20261015T120000Z" {
+		t.Errorf("live Query after a cancelled one: %v", err)
+	}
+}
