@@ -213,6 +213,11 @@ func TestLocateOriginOutranksExplicit(t *testing.T) {
 	if got["shop-app"] != co.Root {
 		t.Errorf("shop-app located at %q, want cwd %q", got["shop-app"], co.Root)
 	}
+	// An entry for another repo still applies alongside the origin match.
+	wide := []Repo{repos[0], {Name: "shop-worker", URL: "https://github.com/example/shop-worker"}}
+	if got := LocateFrom(ctx, wide, co, map[string]string{"shop-app": elsewhere, "shop-worker": elsewhere}); got["shop-app"] != co.Root || got["shop-worker"] != elsewhere {
+		t.Errorf("origin match for one repo dropped another's entry: %v", got)
+	}
 	// Without an origin match the explicit entry still decides.
 	other := Find(ctx, t.TempDir())
 	if got := LocateFrom(ctx, repos, other, map[string]string{"shop-app": elsewhere}); got["shop-app"] != elsewhere {

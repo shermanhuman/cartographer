@@ -116,8 +116,9 @@ func (c Checkout) MatchOrigin(repos []Repo) string {
 	return ""
 }
 
-// Locate finds local checkouts for repos: explicit paths first, then the
-// repository containing cwd and its siblings, matched by origin URL or name.
+// Locate finds local checkouts for repos: the repository containing cwd when
+// its origin matches, then explicit [checkouts] paths, then cwd and its
+// siblings matched by origin URL or name.
 func Locate(ctx context.Context, repos []Repo, cwd string, explicit map[string]string) map[string]string {
 	return LocateFrom(ctx, repos, Find(ctx, cwd), explicit)
 }
