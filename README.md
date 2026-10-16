@@ -62,21 +62,26 @@ cd ~/src && git clone git@github.com:my-org/my-project-map.git   # beside my-app
 cd my-project-map
 cartographer init                  # first time: writes a commented cartographer.toml
 cartographer build --local --import   # every sibling checkout at its HEAD, plugins, import
+cartographer workspace add .       # trust it: queries rebuild it when checkouts move on
 cartographer status                # snapshot, freshness against your checkouts
 ```
 
 `build --local` needs no network and no token: each repository is taken at
 the `HEAD` of its checkout (a sibling of the workspace, or a path under
-`[checkouts]` in the user config). From then on the map keeps itself fresh:
-when you query from a checkout with commits past the snapshot, cartographer
+`[checkouts]` in the user config). With `--import` it keeps the newest 10
+snapshots per workspace in the store (as `import` and `pull` do).
+
+`workspace add <dir>` registers the workspace once, so the map keeps itself
+fresh. Registering is the trust step, like `mise trust`: a rebuild runs the
+workspace's plugin commands, so cartographer rebuilds only workspaces you
+added, never one it merely finds beside your repository (`status` suggests
+the command when it sees one). From then on, when you query from a checkout
+whose workspace checkout has commits past the snapshot, cartographer
 rebuilds in the background (a detached `build --local --import`; the MCP
 server builds in-process) and the header says `rebuilding since 10:42` until
-the next query answers from the new snapshot. It finds the workspace as a
-sibling of the repository you are in, or wherever you recorded it:
-
-```sh
-cartographer workspace add ~/src/my-project-map   # a directory: rebuild from it
-```
+the next query answers from the new snapshot. Rebuilds map the checkouts the
+workspace lists, so a second clone or a worktree that is ahead is reported
+(`status` names the checkout the workspace builds) but rebuilds nothing.
 
 Uncommitted edits are never built; their files stay marked ⚠. A failed
 rebuild shows `last rebuild failed 10:42: … (log: …)` and is retried after
@@ -109,7 +114,7 @@ and where checkouts live when they aren't siblings of the repository you
 are in:
 
 ```toml
-local_workspaces = ["~/src/my-project-map"]   # workspace add <dir>
+local_workspaces = ["~/src/my-project-map"]   # workspace add <dir>: rebuilt automatically
 workspaces = ["my-org/my-project-map"]        # workspace add <owner/name>, pull
 # auto_rebuild = false
 

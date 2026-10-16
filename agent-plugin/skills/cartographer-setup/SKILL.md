@@ -23,13 +23,15 @@ disable-model-invocation: true
    (migrations) so it reruns only when they change.
 5. **Build locally:** `cartographer build --local --import` in the
    workspace maps every sibling checkout at its HEAD (no fetch, no token),
-   then `cartographer status` and `cartographer serve --open`. From then on
-   the map stays fresh by itself: a query from a checkout with commits past
-   the snapshot rebuilds in the background ("rebuilding since …" in the
-   header) when the workspace is a sibling of the repository or recorded
-   with `cartographer workspace add <dir>`. Uncommitted edits stay ⚠.
-   Off switches: `--no-rebuild`, `CARTOGRAPHER_NO_REBUILD=1`,
-   `auto_rebuild = false` in `~/.config/cartographer/config.toml`.
+   then `cartographer status` and `cartographer serve --open`. To keep it
+   fresh, register it once: `cartographer workspace add <dir>`. That is the
+   trust step (like `mise trust`): rebuilds run the workspace's plugin
+   commands, so only registered workspaces are rebuilt. Then a query from a
+   checkout whose workspace checkout has commits past the snapshot
+   rebuilds in the background ("rebuilding since …" in the header).
+   Uncommitted edits stay ⚠. Off switches: `--no-rebuild`,
+   `CARTOGRAPHER_NO_REBUILD=1`, `auto_rebuild = false` in
+   `~/.config/cartographer/config.toml`.
 6. **Publish from CI (optional,** for teammates without the checkouts and
    for PR impact comments): set `publish = "owner/map-repo"`, then call
    `shermanhuman/cartographer/.github/workflows/build-snapshot.yml@v0.1.2`
@@ -64,8 +66,8 @@ disable-model-invocation: true
    `cartographer-version: v0.1.2` (same release as the ref), `workspace`,
    `repo` and the `repo-token` or App secrets for a sticky impact comment.
 8. **Teammates:** with the checkouts and the workspace cloned side by side,
-   `cartographer build --local --import` once; the map then rebuilds
-   itself. Without them, `cartographer pull <owner/workspace>` once; queries
+   `cartographer build --local --import` and `cartographer workspace add
+   <dir>` once; the map then rebuilds itself. Without them, `cartographer pull <owner/workspace>` once; queries
    and the MCP server then pull newer snapshots at most hourly. Both can
    coexist: the newest snapshot of the workspace answers.
 9. **Annotations:** journeys cite entity ids; after reviewing one, run
