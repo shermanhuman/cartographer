@@ -231,16 +231,20 @@ type Asset struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 	URL  string `json:"url"`
+	// State is "uploaded" once the upload finished; a failed upload can
+	// leave an empty "starter" asset behind.
+	State string `json:"state"`
+	Size  int64  `json:"size"`
 }
 
-// Complete reports whether r is a published (non-draft) release holding the
-// snapshot asset.
+// Complete reports whether r is a published (non-draft) release holding a
+// fully uploaded, non-empty snapshot asset.
 func (r Release) Complete() bool {
 	if r.Draft {
 		return false
 	}
 	for _, a := range r.Assets {
-		if a.Name == AssetName {
+		if a.Name == AssetName && a.State == "uploaded" && a.Size > 0 {
 			return true
 		}
 	}
@@ -293,7 +297,9 @@ func (g *GitHub) snapshotReleases(ctx context.Context, repo string) ([]Release, 
 // asset, then publishes the release. Readers skip drafts, so a run killed
 // part-way (e.g. a cancelled CI job) never leaves a published release without
 // its asset. GitHub creates the tag (from the default branch) only when the
-// draft is published. On failure the draft is deleted.
+// draft is published. On failure the draft is deleted; if the publish request
+// fails, the release is re-read first, and a release that is already
+// published (or whose state can't be read: ErrPublishUncertain) is kept.
 func (g *GitHub) Publish(ctx context.Context, repo, id, notes string, asset []byte) (*Release, error) {
 	var r Release
 	err := g.json(ctx, "POST", fmt.Sprintf("%s/repos/%s/releases", g.api(), repo), map[string]any{
@@ -323,7 +329,20 @@ func (g *GitHub) Publish(ctx context.Context, repo, id, notes string, asset []by
 		"draft": false, "make_latest": "true",
 	}, &pub)
 	if err != nil {
-		return nil, fail(fmt.Errorf("publish draft release %s: %w", id, err))
+		// GitHub may have applied the PATCH and only the response was lost:
+		// check before deleting anything.
+		var cur Release
+		gerr := g.json(context.WithoutCancel(ctx), "GET", fmt.Sprintf("%s/repos/%s/releases/%d", g.api(), repo, r.ID), nil, &cur)
+		switch {
+		case gerr != nil:
+			return nil, fmt.Errorf("%w: release %s (id %d) left in place: publish: %w; checking it: %v", ErrPublishUncertain, id, r.ID, err, gerr)
+		case cur.Complete():
+			return &cur, nil
+		case cur.Draft:
+			return nil, fail(fmt.Errorf("publish draft release %s: %w", id, err))
+		default:
+			return nil, fmt.Errorf("%w: release %s (id %d) is published without a complete asset; left in place: %w", ErrPublishUncertain, id, r.ID, err)
+		}
 	}
 	return &pub, nil
 }
@@ -407,6 +426,11 @@ func (g *GitHub) deleteRelease(ctx context.Context, repo string, r Release) erro
 	}
 	return nil
 }
+
+// ErrPublishUncertain means the publish request failed and the release's
+// state could not be checked afterwards: it may or may not be published, so
+// it was left in place.
+var ErrPublishUncertain = errors.New("publish outcome uncertain")
 
 // ErrNoReleases means the workspace repo has no snapshot releases yet.
 var ErrNoReleases = errors.New("no snapshot releases published yet")

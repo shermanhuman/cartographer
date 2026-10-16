@@ -39,6 +39,11 @@ type fakeGitHub struct {
 	refStatus  int
 	// onUpload runs inside the upload handler.
 	onUpload func()
+	// publishLost applies the publish PATCH, then loses its response:
+	// "truncate" sends a cut-off body, "drop" closes the connection.
+	publishLost string
+	// failGet makes GET of a single release fail.
+	failGet bool
 }
 
 func newFake(t *testing.T) *fakeGitHub {
@@ -67,6 +72,19 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 			out = append(out, *rel)
 		}
 		json.NewEncoder(w).Encode(out)
+	case r.Method == "GET" && strings.Contains(p, "/releases/"):
+		var id int64
+		fmt.Sscanf(p[strings.LastIndex(p, "/")+1:], "%d", &id)
+		f.calls = append(f.calls, "get")
+		if f.failGet {
+			http.Error(w, "boom", 502)
+			return
+		}
+		if f.releases[id] == nil {
+			http.Error(w, `{"message":"Not Found"}`, 404)
+			return
+		}
+		json.NewEncoder(w).Encode(f.releases[id])
 	case r.Method == "POST" && strings.HasSuffix(p, "/releases"):
 		var in struct {
 			Tag   string `json:"tag_name"`
@@ -95,6 +113,15 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		if in.Draft != nil {
 			rel.Draft = *in.Draft
 		}
+		switch f.publishLost {
+		case "truncate":
+			w.Write([]byte(`{"id":`))
+			return
+		case "drop":
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			conn.Close()
+			return
+		}
 		json.NewEncoder(w).Encode(rel)
 	case r.Method == "POST" && strings.HasSuffix(p, "/assets"):
 		var id int64
@@ -111,7 +138,7 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		aid := f.next
 		f.next++
 		f.assets[aid] = b
-		f.releases[id].Assets = append(f.releases[id].Assets, Asset{ID: aid, Name: r.URL.Query().Get("name"), URL: fmt.Sprintf("%s/assets/%d", f.srv.URL, aid)})
+		f.releases[id].Assets = append(f.releases[id].Assets, Asset{ID: aid, Name: r.URL.Query().Get("name"), URL: fmt.Sprintf("%s/assets/%d", f.srv.URL, aid), State: "uploaded", Size: int64(len(b))})
 		w.WriteHeader(201)
 		w.Write([]byte(`{}`))
 	case r.Method == "GET" && strings.HasPrefix(p, "/assets/"):
@@ -144,18 +171,22 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// add stores a release directly, with the snapshot asset when withAsset.
-func (f *fakeGitHub) add(t *testing.T, tag string, draft, withAsset bool) int64 {
+// add stores a release directly. asset is the snapshot asset's state:
+// "" for none, "uploaded" for a complete one, "starter" for the empty asset
+// a failed upload leaves behind.
+func (f *fakeGitHub) add(t *testing.T, tag string, draft bool, asset string) int64 {
 	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	rel := &Release{ID: f.next, Tag: tag, Draft: draft}
 	f.next++
-	if withAsset {
+	if asset != "" {
 		aid := f.next
 		f.next++
-		f.assets[aid] = packFixture(t, tag)
-		rel.Assets = []Asset{{ID: aid, Name: AssetName, URL: fmt.Sprintf("%s/assets/%d", f.srv.URL, aid)}}
+		if asset == "uploaded" {
+			f.assets[aid] = packFixture(t, tag)
+		}
+		rel.Assets = []Asset{{ID: aid, Name: AssetName, URL: fmt.Sprintf("%s/assets/%d", f.srv.URL, aid), State: asset, Size: int64(len(f.assets[aid]))}}
 	}
 	f.releases[rel.ID] = rel
 	return rel.ID
@@ -435,7 +466,7 @@ func TestPublishDraftFirst(t *testing.T) {
 		want  string
 	}{
 		{"upload fails", func() { f.failUpload = true }, "create draft=true,upload,delete"},
-		{"publish fails", func() { f.failUpload, f.failPublish = false, true }, "create draft=true,upload,update draft=false latest=true,delete"},
+		{"publish fails", func() { f.failUpload, f.failPublish = false, true }, "create draft=true,upload,update draft=false latest=true,get,delete"},
 	} {
 		f.calls, f.deleted = nil, nil
 		tc.setup()
@@ -458,9 +489,9 @@ func TestSnapshotsSkipIncomplete(t *testing.T) {
 	ctx := context.Background()
 	f := newFake(t)
 	gh := f.client()
-	f.add(t, "snapshot-20261015T100000Z", false, true)
-	f.add(t, "snapshot-20261015T110000Z", true, true)   // leftover draft
-	f.add(t, "snapshot-20261015T120000Z", false, false) // published, no asset
+	f.add(t, "snapshot-20261015T100000Z", false, "uploaded")
+	f.add(t, "snapshot-20261015T110000Z", true, "uploaded") // leftover draft
+	f.add(t, "snapshot-20261015T120000Z", false, "")        // published, no asset
 	rs, err := gh.Snapshots(ctx, "o/map")
 	if err != nil {
 		t.Fatal(err)
@@ -481,8 +512,8 @@ func TestSnapshotsSkipIncomplete(t *testing.T) {
 
 	// Only incomplete releases: nothing to pull.
 	g := newFake(t)
-	g.add(t, "snapshot-20261015T110000Z", true, true)
-	g.add(t, "snapshot-20261015T120000Z", false, false)
+	g.add(t, "snapshot-20261015T110000Z", true, "uploaded")
+	g.add(t, "snapshot-20261015T120000Z", false, "")
 	p.GitHub = g.client()
 	if _, err := p.Pull(ctx, "o/map"); err == nil || !strings.Contains(err.Error(), "no snapshot releases") {
 		t.Errorf("incomplete only: %v", err)
@@ -511,13 +542,13 @@ func TestPruneIncomplete(t *testing.T) {
 		c2         = tagAgo(10 * time.Second)
 		newDraft   = tagAgo(0) // newer than every complete one
 	)
-	f.add(t, oldBare, false, false)
-	f.add(t, c1, false, true)
-	f.add(t, staleDraft, true, true)
-	f.add(t, busyDraft, true, false)
-	f.add(t, c2, false, true)
-	f.add(t, newDraft, true, false)
-	f.add(t, "notes-1", false, false) // not a snapshot
+	f.add(t, oldBare, false, "")
+	f.add(t, c1, false, "uploaded")
+	f.add(t, staleDraft, true, "uploaded")
+	f.add(t, busyDraft, true, "")
+	f.add(t, c2, false, "uploaded")
+	f.add(t, newDraft, true, "")
+	f.add(t, "notes-1", false, "") // not a snapshot
 	tags := func(ts ...string) string { sort.Strings(ts); return strings.Join(ts, ",") }
 	n, err := gh.Prune(ctx, "o/map", 2)
 	if err != nil || n != 2 {
@@ -536,7 +567,7 @@ func TestPruneIncomplete(t *testing.T) {
 
 	// No complete snapshot yet: incomplete releases are left alone.
 	g := newFake(t)
-	g.add(t, tagAgo(5*time.Hour), true, false)
+	g.add(t, tagAgo(5*time.Hour), true, "")
 	if n, err := g.client().Prune(ctx, "o/map", 1); err != nil || n != 0 {
 		t.Errorf("prune with nothing complete = %d, %v", n, err)
 	}
@@ -586,7 +617,7 @@ func TestDeleteReleaseStatuses(t *testing.T) {
 		ok     bool
 	}{{404, true}, {422, true}, {500, false}, {502, false}} {
 		f.refStatus = tc.status
-		id := f.add(t, tag, false, false)
+		id := f.add(t, tag, false, "")
 		err := gh.deleteRelease(ctx, "o/map", Release{ID: id, Tag: tag})
 		if (err == nil) != tc.ok {
 			t.Errorf("ref DELETE %d: err = %v", tc.status, err)
@@ -599,5 +630,79 @@ func TestDeleteReleaseStatuses(t *testing.T) {
 	f.refStatus, f.failDelete = 0, true
 	if err := gh.deleteRelease(ctx, "o/map", Release{ID: 1, Tag: tag}); err == nil {
 		t.Error("release DELETE 500 swallowed")
+	}
+}
+
+// A publish PATCH that GitHub applied but whose response was lost must not
+// delete the now-published release: Publish checks the release's state and
+// reports success. If it can't check, it reports an uncertain outcome and
+// deletes nothing.
+func TestPublishReconcilesLostResponse(t *testing.T) {
+	ctx := context.Background()
+	for _, lost := range []string{"truncate", "drop"} {
+		for _, getFails := range []bool{false, true} {
+			name := fmt.Sprintf("%s/getFails=%v", lost, getFails)
+			f := newFake(t)
+			f.publishLost, f.failGet = lost, getFails
+			id := "snapshot-20261015T120000Z"
+			r, err := f.client().Publish(ctx, "o/map", id, "", packFixture(t, id))
+			if getFails {
+				if !errors.Is(err, ErrPublishUncertain) {
+					t.Errorf("%s: err = %v, want ErrPublishUncertain", name, err)
+				}
+			} else if err != nil || r == nil || r.Draft || !r.Complete() {
+				t.Errorf("%s: Publish = %+v, %v; want the published release", name, r, err)
+			}
+			if len(f.deleted) != 0 || strings.Contains(strings.Join(f.calls, ","), "delete") {
+				t.Errorf("%s: deleted a published release: %v", name, f.calls)
+			}
+			if rs, _ := f.client().Snapshots(ctx, "o/map"); len(rs) != 1 || rs[0].Tag != id {
+				t.Errorf("%s: snapshots = %+v", name, rs)
+			}
+		}
+	}
+}
+
+// An asset GitHub left in the "starter" state (an upload that failed with
+// 502) is not a snapshot: the release is incomplete for listing, Pull and
+// Prune's keep count.
+func TestStarterAssetIsIncomplete(t *testing.T) {
+	ctx := context.Background()
+	f := newFake(t)
+	gh := f.client()
+	good := tagAgo(3 * time.Hour)
+	starter := tagAgo(2 * time.Hour)
+	f.add(t, good, false, "uploaded")
+	f.add(t, starter, false, "starter")
+	rs, err := gh.Snapshots(ctx, "o/map")
+	if err != nil || len(rs) != 1 || rs[0].Tag != good {
+		t.Fatalf("snapshots = %+v, %v", rs, err)
+	}
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	p := &Puller{Store: s, GitHub: gh, DataDir: t.TempDir()}
+	if res, err := p.Pull(ctx, "o/map"); err != nil || res.Snapshot != good {
+		t.Errorf("pull = %+v, %v", res, err)
+	}
+	// Newer than every complete snapshot: left alone, and it never takes the
+	// one keep slot.
+	if n, err := gh.Prune(ctx, "o/map", 1); err != nil || n != 0 {
+		t.Errorf("prune = %d, %v", n, err)
+	}
+	want := strings.Join([]string{good, starter}, ",")
+	if got := strings.Join(f.tags(), ","); got != want {
+		t.Errorf("after prune: %s, want %s", got, want)
+	}
+	// Once older than a complete snapshot and stale, it is deleted.
+	f.add(t, tagAgo(time.Hour/2), false, "uploaded")
+	if n, err := gh.Prune(ctx, "o/map", 1); err != nil || n != 2 {
+		t.Errorf("prune = %d, %v (want the starter and the older good one)", n, err)
+	}
+	if got := f.tags(); len(got) != 1 || got[0] == good || got[0] == starter {
+		t.Errorf("after second prune: %v", got)
+	}
+	// A size-0 asset marked uploaded is not complete either.
+	if (Release{Assets: []Asset{{Name: AssetName, State: "uploaded"}}}).Complete() {
+		t.Error("empty asset counted as complete")
 	}
 }
