@@ -351,6 +351,9 @@ func (g *GitHub) Download(ctx context.Context, r Release) (io.ReadCloser, error)
 // than StalePartial. A newer or recent one may be a publish still in
 // progress: tags are stamped when a build starts, so an overlapping run's
 // draft can be older than a release another run just published.
+// A publish must therefore finish within StalePartial of its build start;
+// runs that may take longer should queue (a concurrency group) rather than
+// overlap.
 func (g *GitHub) Prune(ctx context.Context, repo string, keep int) (int, error) {
 	if keep < 1 {
 		return 0, fmt.Errorf("prune: keep must be at least 1, got %d", keep)

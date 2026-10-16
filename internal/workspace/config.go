@@ -158,7 +158,7 @@ const Template = `# cartographer workspace: the repositories one system map cove
 name = "my-project"
 # GitHub repository whose releases hold published snapshots (owner/name).
 publish = "my-org/my-project-map"
-# Complete snapshot releases publish retains.
+# How many complete snapshot releases publish keeps (newest first).
 keep = 30
 
 [contexts]
