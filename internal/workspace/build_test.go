@@ -654,3 +654,56 @@ func TestIsDocPatterns(t *testing.T) {
 		}
 	}
 }
+
+// Local resolves every repo to a checkout and its HEAD: a [checkouts] entry
+// from the user config, else the configured path, else a sibling of the
+// workspace matched by origin URL or name. The checkout's HEAD wins over
+// the configured ref, so a developer's branch is what gets mapped; a
+// missing checkout is a clear error.
+func TestLocalBuildsCheckoutHeads(t *testing.T) {
+	ws, repo, _ := setup(t)
+	run(t, ws, "git", "init", "-q", "-b", "main") // the workspace is a repo; its siblings are scanned
+	c, _ := Load(ws)
+	c.Schema = nil
+	c.Repos[0].Ref = "origin/main" // as CI configures it; locally HEAD is a branch
+	head := commit(t, repo, "lib/shop/billing.ex")
+	write(t, filepath.Join(repo, "docs/dirty.md"), "uncommitted\n")
+
+	paths, refs, err := Local(context.Background(), c, nil)
+	if err != nil || paths["shop-app"] != repo || refs["shop-app"] != "HEAD" {
+		t.Fatalf("Local = %v, %v, %v", paths, refs, err)
+	}
+	out := filepath.Join(t.TempDir(), "s")
+	m, err := Build(context.Background(), c, BuildOptions{Out: out, CacheDir: t.TempDir(), Paths: paths, Refs: refs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Repos[0].Revision != head {
+		t.Errorf("revision = %s, want HEAD %s", m.Repos[0].Revision, head)
+	}
+	if _, err := os.Stat(filepath.Join(out, "docs/shop-app/docs/dirty.md")); err == nil {
+		t.Error("an uncommitted file was snapshotted")
+	}
+
+	// The configured path is gone: a sibling with the repo's origin is found.
+	moved := filepath.Join(filepath.Dir(repo), "renamed-app")
+	os.Rename(repo, moved)
+	run(t, moved, "git", "remote", "add", "origin", "https://github.com/example/shop-app")
+	paths, _, err = Local(context.Background(), c, nil)
+	if real, _ := filepath.EvalSymlinks(moved); err != nil || paths["shop-app"] != real {
+		t.Errorf("sibling by origin: %v, %v", paths, err)
+	}
+	// A [checkouts] entry outranks both.
+	elsewhere := filepath.Join(t.TempDir(), "x")
+	run(t, filepath.Dir(elsewhere), "cp", "-R", moved, elsewhere)
+	paths, _, err = Local(context.Background(), c, map[string]string{"shop-app": elsewhere})
+	if err != nil || paths["shop-app"] != elsewhere {
+		t.Errorf("explicit checkout: %v, %v", paths, err)
+	}
+	// Nothing anywhere: say where we looked.
+	os.RemoveAll(moved)
+	_, _, err = Local(context.Background(), c, nil)
+	if err == nil || !strings.Contains(err.Error(), "shop-app") || !strings.Contains(err.Error(), c.RepoPath(c.Repos[0])) {
+		t.Errorf("missing checkout: %v", err)
+	}
+}

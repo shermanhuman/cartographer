@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shermanhuman/cartographer/internal/rebuild"
 	"github.com/shermanhuman/cartographer/internal/snapshot"
 	"github.com/shermanhuman/cartographer/internal/store"
 )
@@ -493,5 +494,107 @@ func TestHasCode(t *testing.T) {
 		if got := sess.HasCode(ctx); got != tc.hasCode {
 			t.Errorf("%s: HasCode = %v", filepath.Base(tc.cwd), got)
 		}
+	}
+}
+
+// aheadRepo makes a checkout whose HEAD is one commit past the revision the
+// mini snapshot records for shop-app, beside a local workspace named mini.
+func aheadRepo(t *testing.T, s *store.Store) (parent, app, ws string) {
+	t.Helper()
+	parent = t.TempDir()
+	app = filepath.Join(parent, "shop-app")
+	gitInit(t, app, "https://github.com/example/shop-app")
+	first := commitFile(t, app, "a.ex")
+	commitFile(t, app, "b.ex")
+	importAs(t, s, "mini", "snapshot-20261015T120000Z", "")
+	s.DB.Exec(`UPDATE repos SET revision = ? WHERE name = 'shop-app'`, first)
+	ws = filepath.Join(parent, "mini-map")
+	os.MkdirAll(ws, 0o755)
+	os.WriteFile(filepath.Join(ws, "cartographer.toml"), []byte("name = \"mini\"\n"), 0o644)
+	return parent, app, ws
+}
+
+func commitFile(t *testing.T, repo, name string) string {
+	t.Helper()
+	os.WriteFile(filepath.Join(repo, name), []byte(name), 0o644)
+	for _, args := range [][]string{{"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", name}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+	}
+	rev, _ := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	return strings.TrimSpace(string(rev))
+}
+
+// A checkout ahead of the snapshot, with its workspace beside it, starts a
+// rebuild once per freshness computation; a lock or a recent failure
+// holds it back, and the report says so.
+func TestRebuildStartsWhenACheckoutIsAhead(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("CARTOGRAPHER_CONFIG", filepath.Join(t.TempDir(), "none.toml"))
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	_, app, ws := aheadRepo(t, s)
+	var calls []string
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Rebuild: func(_ context.Context, name, dir string) {
+		calls = append(calls, name+" "+dir)
+	}}
+	for range 3 { // a burst shares one freshness computation and one start
+		if _, rep, err := sess.Query(ctx); err != nil || rep.Rebuild != "" {
+			t.Fatalf("query: %v, %+v", err, rep)
+		}
+	}
+	if real, _ := filepath.EvalSymlinks(ws); len(calls) != 1 || calls[0] != "mini "+real {
+		t.Fatalf("rebuild calls = %q, want one for %s", calls, ws)
+	}
+	// Running (the lock is held): no second start, and the header says so.
+	d := rebuild.Dir{Path: sess.DataDir}
+	unlock, _ := d.Lock("mini")
+	_, rep, _ := sess.Query(WithoutCache(ctx))
+	if len(calls) != 1 || !strings.HasPrefix(rep.Rebuild, "rebuilding since ") || !strings.Contains(rep.Summary(), "rebuilding since") {
+		t.Errorf("under a lock: calls %d, rebuild note %q", len(calls), rep.Rebuild)
+	}
+	unlock()
+	// A recent failure backs off; its message is reported.
+	d.Run("mini", func() error { return errors.New("plugin exploded") })
+	_, rep, _ = sess.Query(WithoutCache(ctx))
+	if len(calls) != 1 || !strings.Contains(rep.Rebuild, "last rebuild failed") || !strings.Contains(rep.Rebuild, "plugin exploded") {
+		t.Errorf("after a failure: calls %d, rebuild note %q", len(calls), rep.Rebuild)
+	}
+	// Nothing to do without a callback (--no-rebuild) or when current.
+	sess = &Session{Store: s, DataDir: t.TempDir(), Cwd: app}
+	if _, rep, err := sess.Query(ctx); err != nil || rep.Summary() == "" {
+		t.Errorf("without Rebuild: %v %q", err, rep.Summary())
+	}
+}
+
+// Only committed work triggers: uncommitted edits stay ⚠ until committed,
+// and a checkout without a local workspace (none beside it, none
+// configured) is left alone; a configured local_workspaces entry finds one
+// that lives elsewhere.
+func TestRebuildNeedsCommitsAndALocalWorkspace(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	_, app, ws := aheadRepo(t, s)
+	elsewhere := filepath.Join(t.TempDir(), "map")
+	os.Rename(ws, elsewhere)
+	calls := 0
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("CARTOGRAPHER_CONFIG", cfg)
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Rebuild: func(context.Context, string, string) { calls++ }}
+	if _, _, err := sess.Query(ctx); err != nil || calls != 0 {
+		t.Fatalf("no workspace anywhere: %v, %d calls", err, calls)
+	}
+	os.WriteFile(cfg, []byte("local_workspaces = ["+strconv.Quote(elsewhere)+"]\n"), 0o644)
+	if _, _, err := sess.Query(WithoutCache(ctx)); err != nil || calls != 1 {
+		t.Fatalf("configured workspace: %v, %d calls", err, calls)
+	}
+	// Current but dirty: no rebuild.
+	head, _ := exec.Command("git", "-C", app, "rev-parse", "HEAD").Output()
+	s.DB.Exec(`UPDATE repos SET revision = ? WHERE name = 'shop-app'`, strings.TrimSpace(string(head)))
+	os.WriteFile(filepath.Join(app, "c.ex"), []byte("c"), 0o644)
+	if _, rep, err := sess.Query(WithoutCache(ctx)); err != nil || calls != 1 || !rep.Changed("shop-app", "c.ex") {
+		t.Errorf("dirty checkout: %v, %d calls, %+v", err, calls, rep.Repos)
 	}
 }

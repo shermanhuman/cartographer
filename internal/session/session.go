@@ -1,6 +1,7 @@
 // Package session prepares a query for the current directory: pull newer
 // snapshots when due, pick the snapshot whose workspace covers the current
-// repository, and mark results against local changes.
+// repository, mark results against local changes, and start a local rebuild
+// when a checkout has moved past the snapshot.
 package session
 
 import (
@@ -15,6 +16,7 @@ import (
 
 	"github.com/shermanhuman/cartographer/internal/fresh"
 	"github.com/shermanhuman/cartographer/internal/query"
+	"github.com/shermanhuman/cartographer/internal/rebuild"
 	"github.com/shermanhuman/cartographer/internal/snapshot"
 	"github.com/shermanhuman/cartographer/internal/store"
 	"github.com/shermanhuman/cartographer/internal/userconfig"
@@ -56,6 +58,11 @@ type Session struct {
 	Background bool
 	Log        io.Writer // warnings (pull failures); nil discards
 	GitHub     *snapshot.GitHub
+	// Rebuild starts a local rebuild of the workspace at dir (whose
+	// cartographer.toml names ws) when a checkout is ahead of the snapshot
+	// and no rebuild is running or recently failed (rebuild.Dir in DataDir).
+	// It must return at once (spawn or go). nil never rebuilds.
+	Rebuild func(ctx context.Context, ws, dir string)
 
 	ghMu   sync.Mutex // guards GitHub's lazy creation
 	pullMu sync.Mutex // one auto-pull at a time; guards warned
@@ -72,6 +79,7 @@ type memo struct {
 	co      fresh.Checkout
 	chosen  string                   // snapshot chosen by cwd ("" not yet)
 	reports map[string]*fresh.Report // snapshot id -> freshness
+	local   map[string]string        // workspace name -> local workspace dir ("" none)
 }
 
 // DataDir is $CARTOGRAPHER_DATA, else $XDG_DATA_HOME/cartographer or
@@ -151,6 +159,9 @@ func (s *Session) pullDue(ctx context.Context) {
 	}
 }
 
+// Forget drops the cached choice and freshness (a new snapshot arrived).
+func (s *Session) Forget() { s.forget() }
+
 // forget drops the cached choice and freshness (a new snapshot arrived).
 func (s *Session) forget() {
 	s.mu.Lock()
@@ -165,7 +176,7 @@ func (s *Session) current(ctx context.Context) *memo {
 	if m := s.memo; m != nil && m.cwd == s.Cwd && time.Since(m.at) < CacheTTL {
 		return m
 	}
-	m := &memo{at: time.Now(), cwd: s.Cwd, co: fresh.Find(ctx, s.Cwd), reports: map[string]*fresh.Report{}}
+	m := &memo{at: time.Now(), cwd: s.Cwd, co: fresh.Find(ctx, s.Cwd), reports: map[string]*fresh.Report{}, local: map[string]string{}}
 	if ctx.Err() == nil {
 		s.memo = m
 	}
@@ -220,7 +231,10 @@ func (s *Session) Fresh(ctx context.Context, id string) (*fresh.Report, error) {
 	return s.freshFrom(ctx, s.current(ctx), id)
 }
 
-// freshFrom computes (or reuses) id's report. The caller holds s.mu.
+// freshFrom computes (or reuses) id's report. A freshly computed report
+// that shows a checkout ahead of the snapshot starts a rebuild (once per
+// computation: a burst, or a lock held by the build, never starts two).
+// The caller holds s.mu.
 func (s *Session) freshFrom(ctx context.Context, m *memo, id string) (*fresh.Report, error) {
 	if rep, ok := m.reports[id]; ok {
 		return rep, nil
@@ -230,15 +244,36 @@ func (s *Session) freshFrom(ctx context.Context, m *memo, id string) (*fresh.Rep
 		return nil, err
 	}
 	cfg, _ := userconfig.Load()
-	var explicit map[string]string
-	if cfg != nil {
-		explicit = cfg.Checkouts
+	if cfg == nil {
+		cfg = &userconfig.Config{}
 	}
-	rep := fresh.Check(ctx, repos, fresh.LocateFrom(ctx, repos, m.co, explicit))
+	rep := fresh.Check(ctx, repos, fresh.LocateFrom(ctx, repos, m.co, cfg.Checkouts))
 	if ctx.Err() == nil { // a cancelled call's git execs failed; don't keep its answer
 		m.reports[id] = rep
 	}
+	if s.DataDir != "" {
+		ws, _ := s.Store.Workspace(ctx, id)
+		d := rebuild.Dir{Path: s.DataDir}
+		rep.Rebuild = d.Status(ws)
+		if s.Rebuild != nil && ws != "" && rebuild.Needed(rep) && d.Due(ws) {
+			if _, running := d.Running(ws); !running {
+				if dir := s.localWorkspace(m, ws, cfg.LocalWorkspaces); dir != "" {
+					s.Rebuild(ctx, ws, dir)
+				}
+			}
+		}
+	}
 	return rep, nil
+}
+
+// localWorkspace finds (once per memo) the local workspace named ws.
+func (s *Session) localWorkspace(m *memo, ws string, configured []string) string {
+	dir, ok := m.local[ws]
+	if !ok {
+		dir = rebuild.FindWorkspace(ws, m.co, configured)
+		m.local[ws] = dir
+	}
+	return dir
 }
 
 func (s *Session) repos(ctx context.Context, id string) ([]fresh.Repo, error) {

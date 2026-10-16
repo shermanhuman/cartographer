@@ -57,6 +57,7 @@ func TestMain(m *testing.M) {
 	dir, _ := os.MkdirTemp("", "carto-cli-")
 	os.Setenv("CARTOGRAPHER_CONFIG", filepath.Join(dir, "config.toml"))
 	os.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	os.Setenv("CARTOGRAPHER_NO_REBUILD", "1") // tests opt in to rebuilds explicitly
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

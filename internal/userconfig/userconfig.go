@@ -1,5 +1,6 @@
 // Package userconfig reads ~/.config/cartographer/config.toml: which
-// workspace repositories to pull snapshots from, and where checkouts live.
+// workspace repositories to pull snapshots from, which local workspaces to
+// rebuild from, and where checkouts live.
 package userconfig
 
 import (
@@ -17,9 +18,20 @@ import (
 type Config struct {
 	// Workspaces are GitHub repositories (owner/name) publishing snapshots.
 	Workspaces []string `toml:"workspaces"`
+	// LocalWorkspaces are directories holding a cartographer.toml, rebuilt
+	// from local checkouts when they are ahead of the snapshot (in addition
+	// to workspaces found beside the current repository).
+	LocalWorkspaces []string `toml:"local_workspaces"`
+	// AutoRebuild turns local rebuilds off when false; unset means on.
+	AutoRebuild *bool `toml:"auto_rebuild"`
 	// Checkouts maps repository names to local paths when they aren't
 	// siblings of the current repository.
 	Checkouts map[string]string `toml:"checkouts"`
+}
+
+// AutoRebuildOn reports whether local rebuilds are enabled (the default).
+func (c *Config) AutoRebuildOn() bool {
+	return c.AutoRebuild == nil || *c.AutoRebuild
 }
 
 // Path is $CARTOGRAPHER_CONFIG, else $XDG_CONFIG_HOME/cartographer/config.toml
@@ -53,32 +65,45 @@ func AddWorkspace(src string) error {
 	if !source.MatchString(src) {
 		return fmt.Errorf("workspace source must be owner/name, got %q", src)
 	}
+	return addItem("workspaces", src, func(c *Config) []string { return c.Workspaces })
+}
+
+// AddLocalWorkspace records the directory of a local workspace (absolute).
+func AddLocalWorkspace(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("local workspace must be an absolute path, got %q", dir)
+	}
+	return addItem("local_workspaces", filepath.Clean(dir), func(c *Config) []string { return c.LocalWorkspaces })
+}
+
+// addItem appends item to the top-level array key, editing the file in
+// place; get reads the array back from a decoded config.
+func addItem(key, item string, get func(*Config) []string) error {
 	c, err := Load()
 	if err != nil {
 		return err
 	}
-	if slices.Contains(c.Workspaces, src) {
+	if slices.Contains(get(c), item) {
 		return nil
 	}
 	old, err := os.ReadFile(Path())
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	next := withWorkspace(string(old), src)
+	next := withItem(string(old), key, item)
 	var check Config
-	if _, err := toml.Decode(next, &check); err != nil || !slices.Contains(check.Workspaces, src) {
-		return fmt.Errorf("userconfig: could not add %s to %s; add it to `workspaces` by hand", src, Path())
+	if _, err := toml.Decode(next, &check); err != nil || !slices.Contains(get(&check), item) {
+		return fmt.Errorf("userconfig: could not add %s to %s; add it to `%s` by hand", item, Path(), key)
 	}
 	return write([]byte(next))
 }
 
-var workspacesKey = regexp.MustCompile(`(?m)^[ \t]*workspaces[ \t]*=[ \t]*\[`)
-
-// withWorkspace returns body with src appended to its top-level workspaces
-// array, or with the array added before the first table when there is none.
-func withWorkspace(body, src string) string {
+// withItem returns body with src appended to its top-level key array, or
+// with the array added before the first table when there is none.
+func withItem(body, key, src string) string {
 	item := strconv.Quote(src)
-	if loc := workspacesKey.FindStringIndex(body); loc != nil && loc[0] < firstTable(body) {
+	arrayKey := regexp.MustCompile(`(?m)^[ \t]*` + key + `[ \t]*=[ \t]*\[`)
+	if loc := arrayKey.FindStringIndex(body); loc != nil && loc[0] < firstTable(body) {
 		if end, last := arrayEnd(body, loc[1]); end >= 0 {
 			if last >= 0 && strings.Contains(body[last:end], "\n") {
 				// Multi-line: the entry goes on its own line before the
@@ -102,7 +127,7 @@ func withWorkspace(body, src string) string {
 			return body[:last+1] + sep + item + body[last+1:]
 		}
 	}
-	return "workspaces = [" + item + "]\n" + body
+	return key + " = [" + item + "]\n" + body
 }
 
 // firstTable is the offset of the first [table] header (len(body) if none).

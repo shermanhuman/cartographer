@@ -27,8 +27,17 @@ type State struct {
 	Note     string // why the state is unknown
 }
 
+// NoteRevisionMissing is the State.Note for a snapshot revision the local
+// clone doesn't have (fetched elsewhere, or rewritten).
+const NoteRevisionMissing = "snapshot revision not in local clone (git fetch)"
+
 // Report covers every repository in a snapshot.
-type Report struct{ Repos []State }
+type Report struct {
+	Repos []State
+	// Rebuild notes a local rebuild in progress or the last one's failure
+	// ("" when neither); see package rebuild.
+	Rebuild string
+}
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	out, err := gitRaw(ctx, dir, args...)
@@ -240,7 +249,7 @@ func Check(ctx context.Context, repos []Repo, paths map[string]string) *Report {
 			// rev-list fails when the revision isn't in the local clone.
 			n, err := git(ctx, st.Path, "rev-list", "--count", "--end-of-options", r.Revision+"..HEAD")
 			if err != nil {
-				st.Note = "snapshot revision not in local clone (git fetch)"
+				st.Note = NoteRevisionMissing
 				break
 			}
 			fmt.Sscanf(n, "%d", &st.Behind)
@@ -289,6 +298,9 @@ func (r *Report) Summary() string {
 			parts = append(parts, fmt.Sprintf("%s %d files changed locally", s.Name, len(s.Changed)))
 		}
 	}
+	if r.Rebuild != "" {
+		parts = append(parts, r.Rebuild)
+	}
 	return strings.Join(parts, "; ")
 }
 
@@ -308,6 +320,9 @@ func (r *Report) Lines() []string {
 		default:
 			out = append(out, fmt.Sprintf("%s@%s: %d commits behind, %d files changed ⚠ (%s)", s.Name, rev, s.Behind, len(s.Changed), s.Path))
 		}
+	}
+	if r.Rebuild != "" {
+		out = append(out, r.Rebuild)
 	}
 	return out
 }

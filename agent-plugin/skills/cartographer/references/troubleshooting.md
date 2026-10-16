@@ -7,6 +7,7 @@
 | "no map snapshot is available yet" | `cartographer pull <owner/name>` with the workspace repository that publishes this project's snapshots. |
 | Answers come from another project | `cartographer status` shows the snapshot in use; the map is chosen by the repository you're in. |
 | Pull fails with 401/404 | The workspace repository is private: `gh auth login` (or set `GH_TOKEN`) with access to it. |
-| Many ⚠ marks | Your checkout is far from the snapshot; `cartographer pull`, or rebuild the workspace (`cartographer build --import`). |
+| Many ⚠ marks, "N commits behind" | Committed work past the snapshot rebuilds the map by itself when the workspace is a sibling of the repo (or added with `cartographer workspace add <dir>`): the header says "rebuilding since …" and a later call answers from the new snapshot. Otherwise `cartographer pull`, or `cartographer build --local --import` in the workspace. Uncommitted edits stay ⚠ until committed. |
+| "last rebuild failed …" in the header | Read the log it names (`<data dir>/rebuild/<workspace>.log`); a plugin runtime is usually missing in the workspace's `mise.toml`. Fix and run `cartographer build --local --import`, or rebuild again by querying after 5 minutes. `--no-rebuild`, `CARTOGRAPHER_NO_REBUILD=1` or `auto_rebuild = false` in the user config turn rebuilds off. |
 | Codex `exec` refuses map tools ("approval policy is never") | Allow the server's tools in Codex config (per-server tool approval) or answer with grep in non-interactive runs. |
 | Codex hooks don't fire | Codex runs plugin hooks only after you trust them in `/hooks`; `codex exec` skips them. The map tools still work. |

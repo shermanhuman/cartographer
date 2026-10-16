@@ -50,11 +50,47 @@ from the plugin:
 codex plugin marketplace add shermanhuman/cartographer  # Codex
 ```
 
-## Use a published map
+## Map your project
+
+A workspace is a directory (usually its own repository) holding
+`cartographer.toml`, which lists the repositories one map covers and their
+extractor plugins, and `annotations/` (reviewed journeys). Clone it next to
+the repositories it maps and build from what you have checked out:
 
 ```sh
-cartographer pull my-org/my-project-map   # once; later pulls are automatic (hourly)
-cartographer status                        # snapshot, freshness against your checkouts
+cd ~/src && git clone git@github.com:my-org/my-project-map.git   # beside my-app, my-worker…
+cd my-project-map
+cartographer init                  # first time: writes a commented cartographer.toml
+cartographer build --local --import   # every sibling checkout at its HEAD, plugins, import
+cartographer status                # snapshot, freshness against your checkouts
+```
+
+`build --local` needs no network and no token: each repository is taken at
+the `HEAD` of its checkout (a sibling of the workspace, or a path under
+`[checkouts]` in the user config). From then on the map keeps itself fresh:
+when you query from a checkout with commits past the snapshot, cartographer
+rebuilds in the background (a detached `build --local --import`; the MCP
+server builds in-process) and the header says `rebuilding since 10:42` until
+the next query answers from the new snapshot. It finds the workspace as a
+sibling of the repository you are in, or wherever you recorded it:
+
+```sh
+cartographer workspace add ~/src/my-project-map   # a directory: rebuild from it
+```
+
+Uncommitted edits are never built; their files stay marked ⚠. A failed
+rebuild shows `last rebuild failed 10:42: … (log: …)` and is retried after
+five minutes. Turn rebuilds off with `--no-rebuild`,
+`CARTOGRAPHER_NO_REBUILD=1`, or `auto_rebuild = false` in the user config.
+
+Bundled extractor plugins: `extract-elixir` (AST, precise calls with default
+arguments, pipes, captures, delegates), `extract-javascript` (inventory) and
+`extract-postgres-schema` (catalog capture from a disposable database). Any
+executable that prints [facts v1](docs/facts-format.md) JSON is a plugin.
+
+## Query it
+
+```sh
 cartographer find billing charge
 cartographer callers Shop.Orders.total/1 --depth 2
 cartographer impact public.orders          # code that mentions a table, and its callers
@@ -62,21 +98,20 @@ cartographer serve --open                  # the map in your browser (127.0.0.1)
 cartographer embed Shop.Billing.charge/2   # Markdown + Mermaid for an issue
 ```
 
-Private workspaces need a GitHub token: `GH_TOKEN`/`GITHUB_TOKEN`, else
-`gh auth token` (a `gh` on PATH, or one installed globally with mise).
-
 `cartographer help` lists every command and `cartographer <command> --help`
 its flags. The queries (`status`, `find`, `show`, `callers`, `callees`,
 `impact`, `path`, `table`, `context`) take `--budget` and `--format json`;
 `find`, `callers`, `callees` and `impact` also page with `--limit`/`--offset`.
 
-`pull` and `workspace add` record workspaces in `~/.config/cartographer/config.toml`
-(`$CARTOGRAPHER_CONFIG`, or under `$XDG_CONFIG_HOME`). Freshness looks for each
-repository's checkout next to the one you are in; list checkouts that live
-elsewhere under `[checkouts]`:
+The user config, `~/.config/cartographer/config.toml` (`$CARTOGRAPHER_CONFIG`,
+or under `$XDG_CONFIG_HOME`), records local workspaces and published ones,
+and where checkouts live when they aren't siblings of the repository you
+are in:
 
 ```toml
-workspaces = ["my-org/my-project-map"]
+local_workspaces = ["~/src/my-project-map"]   # workspace add <dir>
+workspaces = ["my-org/my-project-map"]        # workspace add <owner/name>, pull
+# auto_rebuild = false
 
 [checkouts]
 shop-worker = "~/src/shop-worker"   # repository name = local path
@@ -86,35 +121,47 @@ A checkout whose `origin` is a fork or mirror (a URL no workspace lists)
 maps only through its `[checkouts]` entry; otherwise cartographer never
 guesses across projects by directory name.
 
-## Map your project
+## Publish snapshots from CI (optional)
 
-A workspace repository holds `cartographer.toml` (the repositories and their
-extractor plugins), `annotations/` (reviewed journeys) and a workflow that
-publishes snapshots as releases:
+Teammates without every checkout, and pull-request impact comments, use
+snapshots published as releases of the workspace repository. Set
+`publish = "my-org/my-project-map"` in `cartographer.toml` and call the
+reusable workflows: `build-snapshot.yml` from the workspace repository (on
+dispatch and weekly), and `pr-impact.yml` from each product repository's
+pull requests for a sticky impact comment. Pin both the workflow ref
+(`@v0.1.2`) and its `cartographer-version` input to the same release; the
+workflows install exactly that binary.
+
+The workflows need a token that can read every repository in the workspace.
+Simplest: a `repo-token` secret holding a fine-grained personal access token
+with *Contents: read* on each repository. Or a GitHub App (`app-id`,
+`app-private-key`); its permissions apply to the whole installation, so
+scope each token: the reusable workflows mint theirs with
+`permission-contents: read`, and a product repository that dispatches a
+rebuild on push mints its token with `repositories: <workspace repo>` and
+`permission-contents: write`. To publish by hand:
 
 ```sh
-cartographer init               # writes a commented cartographer.toml
-cartographer build --import     # snapshot sibling checkouts, run plugins, import
+cartographer build --fetch --import       # origin's revisions, needs GH_TOKEN for private repos
 cartographer publish .cartographer/snapshots/build-1234
 ```
 
-Bundled extractor plugins: `extract-elixir` (AST, precise calls with default
-arguments, pipes, captures, delegates), `extract-javascript` (inventory) and
-`extract-postgres-schema` (catalog capture from a disposable database). Any
-executable that prints [facts v1](docs/facts-format.md) JSON is a plugin.
+In your own CI, keep the token away from plugin code: `cartographer build
+--fetch-only` clones or fetches the repositories without running plugins or
+schema `prepare`, so only that step needs `GH_TOKEN`; build in a later step
+without it.
 
-In CI, call the reusable workflows: `build-snapshot.yml` from the workspace
-repository (on dispatch and weekly), and `pr-impact.yml` from each product
-repository's pull requests for a sticky impact comment. App permissions
-apply to the whole installation, so scope each token: the reusable
-workflows mint theirs with `permission-contents: read`, and a product
-repository that dispatches a rebuild on push mints its token with
-`repositories: <workspace repo>` and `permission-contents: write`. Pin both the
-workflow ref (`@v0.1.0`) and its `cartographer-version` input to the same
-release; the workflows install exactly that binary. In your own CI, keep
-the token away from plugin code: `cartographer build --fetch-only` clones or
-fetches the repositories without running plugins or schema `prepare`, so
-only that step needs `GH_TOKEN`; build in a later step without it.
+## Use a published map
+
+```sh
+cartographer pull my-org/my-project-map   # once; later pulls are automatic (hourly)
+cartographer status                        # snapshot, freshness against your checkouts
+```
+
+Private workspaces need a GitHub token: `GH_TOKEN`/`GITHUB_TOKEN`, else
+`gh auth token` (a `gh` on PATH, or one installed globally with mise).
+Pulled and locally built snapshots coexist: the newest one of the
+workspace answers.
 
 ## How it works
 

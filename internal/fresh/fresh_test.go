@@ -224,3 +224,17 @@ func TestLocateOriginOutranksExplicit(t *testing.T) {
 		t.Errorf("explicit entry ignored: %q", got["shop-app"])
 	}
 }
+
+// A rebuild note rides along in the summary and the status lines.
+func TestReportCarriesRebuildNote(t *testing.T) {
+	rep := &Report{Repos: []State{{Name: "shop-app", Revision: "aaaaaaaaaa", Behind: 1, Changed: map[string]bool{}, Path: "/x"}}, Rebuild: "rebuilding since 10:00"}
+	if got := rep.Summary(); got != "shop-app 1 commits behind; rebuilding since 10:00" {
+		t.Errorf("summary = %q", got)
+	}
+	if lines := rep.Lines(); len(lines) != 2 || lines[1] != "rebuilding since 10:00" {
+		t.Errorf("lines = %q", lines)
+	}
+	if got := (&Report{Rebuild: ""}).Summary(); got != "" {
+		t.Errorf("empty summary = %q", got)
+	}
+}

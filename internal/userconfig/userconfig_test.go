@@ -128,3 +128,58 @@ func TestAddWorkspaceMultiLineArrayKeepsCommentPlacement(t *testing.T) {
 		t.Errorf("no trailing comma, got:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestAddLocalWorkspaceRecordsADirectory(t *testing.T) {
+	const orig = `# my cartographer config
+workspaces = ["acme/map"] # published
+
+[checkouts]
+shop-app = "~/src/shop-app"
+`
+	p := use(t, orig)
+	dir := filepath.Join(t.TempDir(), "map")
+	os.MkdirAll(dir, 0o755)
+	if err := AddLocalWorkspace(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddLocalWorkspace(dir); err != nil { // idempotent
+		t.Fatal(err)
+	}
+	got := read(t, p)
+	for _, want := range []string{"# my cartographer config", "# published", "[checkouts]"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("lost %q:\n%s", want, got)
+		}
+	}
+	c, err := Load()
+	if err != nil || !slices.Equal(c.LocalWorkspaces, []string{dir}) || !slices.Equal(c.Workspaces, []string{"acme/map"}) || c.Checkouts["shop-app"] != "~/src/shop-app" {
+		t.Fatalf("Load = %+v, %v\n%s", c, err, got)
+	}
+	// A second directory joins the array; a relative one is rejected.
+	other := filepath.Join(t.TempDir(), "other")
+	if err := AddLocalWorkspace(other); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := Load(); !slices.Equal(c.LocalWorkspaces, []string{dir, other}) {
+		t.Errorf("second add: %v\n%s", c.LocalWorkspaces, read(t, p))
+	}
+	if err := AddLocalWorkspace("map"); err == nil {
+		t.Error("a relative path was recorded")
+	}
+}
+
+// auto_rebuild is a tri-state: unset means on.
+func TestLoadAutoRebuild(t *testing.T) {
+	use(t, "")
+	if c, _ := Load(); !c.AutoRebuildOn() {
+		t.Error("unset auto_rebuild must be on")
+	}
+	use(t, "auto_rebuild = false\n")
+	if c, _ := Load(); c.AutoRebuildOn() {
+		t.Error("auto_rebuild = false ignored")
+	}
+	use(t, "auto_rebuild = true\n")
+	if c, _ := Load(); !c.AutoRebuildOn() {
+		t.Error("auto_rebuild = true ignored")
+	}
+}

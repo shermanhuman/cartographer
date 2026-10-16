@@ -35,6 +35,9 @@ func serve(ctx context.Context, w io.Writer, s *store.Store, c *common) error {
 	}
 	sess := newSession(c, s, os.Stderr)
 	sess.Background = true
+	if sess.Rebuild != nil {
+		sess.Rebuild = backgroundRebuild(c, sess, s)
+	}
 	if sess.AutoPull {
 		sess.PullDue(ctx)
 	}

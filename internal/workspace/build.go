@@ -3,6 +3,7 @@ package workspace
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/shermanhuman/cartographer/internal/bundle"
 	"github.com/shermanhuman/cartographer/internal/facts"
+	"github.com/shermanhuman/cartographer/internal/fresh"
 )
 
 type BuildOptions struct {
@@ -37,6 +39,8 @@ type BuildOptions struct {
 	CacheDir string
 	// Refs overrides repo refs: name -> revision (e.g. a PR head).
 	Refs map[string]string
+	// Paths overrides repo checkouts: name -> directory (see Local).
+	Paths map[string]string
 	// Now is the build time (tests); zero means time.Now.
 	Now time.Time
 	// Log receives progress lines; nil discards them.
@@ -90,6 +94,49 @@ func Fetch(ctx context.Context, c *Config, refs map[string]string, log io.Writer
 		logf("%s @ %s: fetched", r.Name, rev[:min(12, len(rev))])
 	}
 	return nil
+}
+
+// Local resolves the checkouts a local build (build --local) snapshots at
+// their HEAD: a [checkouts] entry from the user config (explicit), else the
+// configured path when it is a git checkout, else a sibling of the workspace
+// directory matched by origin URL or name, as freshness locates them. No
+// fetch and no credentials: the map covers what the developer has. Every
+// repo must be found.
+func Local(ctx context.Context, c *Config, explicit map[string]string) (paths, refs map[string]string, err error) {
+	paths, refs = map[string]string{}, map[string]string{}
+	var rest []fresh.Repo
+	for _, r := range c.Repos {
+		switch p, ok := explicit[r.Name]; {
+		case ok:
+			paths[r.Name] = fresh.ExpandHome(p)
+		case isCheckout(c.RepoPath(r)):
+			paths[r.Name] = c.RepoPath(r)
+		default:
+			rest = append(rest, fresh.Repo{Name: r.Name, URL: r.URL})
+		}
+	}
+	if len(rest) > 0 {
+		for name, p := range fresh.LocateFrom(ctx, rest, fresh.Find(ctx, c.dir), nil) {
+			paths[name] = p
+		}
+	}
+	var missing []string
+	for _, r := range c.Repos {
+		if p := paths[r.Name]; p == "" || !isCheckout(p) {
+			missing = append(missing, fmt.Sprintf("%s (looked at %s)", r.Name, cmp.Or(p, c.RepoPath(r))))
+			continue
+		}
+		refs[r.Name] = "HEAD"
+	}
+	if len(missing) > 0 {
+		return nil, nil, fmt.Errorf("build --local: no checkout for %s; clone it beside the workspace or list it under [checkouts] in the user config", strings.Join(missing, ", "))
+	}
+	return paths, refs, nil
+}
+
+func isCheckout(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
 }
 
 // Build snapshots every repo with git archive, runs the plugins and writes a
@@ -157,6 +204,9 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 	var cos []checkout
 	for _, r := range c.Repos {
 		src := c.RepoPath(r)
+		if p, ok := o.Paths[r.Name]; ok {
+			src = p
+		}
 		if o.Fetch {
 			if err := fetchRepo(ctx, r, src, o.Refs[r.Name]); err != nil {
 				return nil, fmt.Errorf("build: %s: fetch: %w", r.Name, err)
