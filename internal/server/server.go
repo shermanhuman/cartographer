@@ -112,11 +112,6 @@ func New(o Options) http.Handler {
 	mux.HandleFunc("GET /api/embed", a.text(func(r *http.Request, q *query.Q) (string, error) {
 		return render.Embed(r.Context(), q, r.URL.Query().Get("id"))
 	}))
-	mux.HandleFunc("GET /api/mermaid", a.text(func(r *http.Request, q *query.Q) (string, error) {
-		depth, _ := strconv.Atoi(r.URL.Query().Get("depth"))
-		max, _ := strconv.Atoi(r.URL.Query().Get("max"))
-		return render.Mermaid(r.Context(), q, r.URL.Query().Get("id"), depth, max)
-	}))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown API endpoint "+r.URL.Path)
 	})

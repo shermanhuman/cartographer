@@ -588,7 +588,7 @@ func Dispatch(ctx context.Context, q *query.Q, cmd string, pos []string, o Opts)
 		if err := need(1, "a ref"); err != nil {
 			return nil, err
 		}
-		return q.Impact(ctx, pos[0], o.Depth)
+		return q.Impact(ctx, pos[0], o.Depth, o.Limit, o.Offset)
 	case "path":
 		if err := need(2, "two refs"); err != nil {
 			return nil, err

@@ -138,3 +138,15 @@ func TestConcurrentCalls(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestImpactPages(t *testing.T) {
+	cs := session(t, true)
+	out, isErr := call(t, cs, "map_impact", map[string]any{"ref": "Shop.Orders.total/1", "limit": 1})
+	if isErr || !strings.Contains(out, "+3 more: offset=1") || strings.Contains(out, "Worker.Nightly.run") {
+		t.Errorf("limit 1: (%v)\n%s", isErr, out)
+	}
+	out, isErr = call(t, cs, "map_impact", map[string]any{"ref": "Shop.Orders.total/1", "offset": 3})
+	if isErr || !strings.Contains(out, "test_total/1") || strings.Contains(out, "d1 FN shop-app:Shop.Billing.charge/2") {
+		t.Errorf("offset 3: (%v)\n%s", isErr, out)
+	}
+}

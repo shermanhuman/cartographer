@@ -299,10 +299,7 @@ func TestEmbedMermaidGraph(t *testing.T) {
 	if !strings.HasPrefix(h.Get("Content-Type"), "text/markdown") || !strings.Contains(md, "```mermaid\ngraph LR") || !strings.Contains(md, "map "+snap) {
 		t.Errorf("embed:\n%s", md)
 	}
-	mm, _ := get(t, srv, "/api/mermaid?max=2&id="+url.QueryEscape("Shop.Orders.total/1"), 200)
-	if !strings.HasPrefix(mm, "graph LR") || !strings.Contains(mm, "+1 more") {
-		t.Errorf("mermaid:\n%s", mm)
-	}
+	get(t, srv, "/api/mermaid?id="+url.QueryEscape("Shop.Orders.total/1"), 404) // no consumer; the CLI renders Mermaid
 	get(t, srv, "/api/embed?id=zzzz", 404)
 	g := getJSON[obj](t, srv, "/api/graph?depth=2&id="+url.QueryEscape("Shop.Billing.charge/2"))
 	depths := map[string]float64{}

@@ -27,16 +27,6 @@ func nonNil[T any](s []T) []T {
 	return s
 }
 
-// jsonString is s as a JSON string literal, without HTML escaping, the way
-// it appears in authored annotation JSON.
-func jsonString(s string) string {
-	var b strings.Builder
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	enc.Encode(s)
-	return strings.TrimSuffix(b.String(), "\n")
-}
-
 func decodeJSON[T any](raw string) T {
 	var v T
 	json.Unmarshal([]byte(raw), &v)
@@ -700,20 +690,15 @@ func docsFor(ctx context.Context, q *query.Q, ri repoIndex, ids ...string) ([]ob
 
 // annotationsCiting lists annotations whose body cites id.
 func annotationsCiting(ctx context.Context, q *query.Q, id string) ([]obj, error) {
-	// The id as a JSON string, matched exactly (LIKE would treat _ and % in
-	// ids as wildcards).
-	rows, err := q.S.DB.QueryContext(ctx, `SELECT id, kind, title, status FROM annotations WHERE snapshot_id = ? AND instr(body, ?) > 0 ORDER BY id`, q.Snapshot, jsonString(id))
+	cites, err := q.AnnotationsCiting(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := []obj{}
-	for rows.Next() {
-		var aid, kind, title, status string
-		rows.Scan(&aid, &kind, &title, &status)
-		out = append(out, obj{"id": "ann:" + aid, "annotation": aid, "kind": kind, "title": title, "status": status})
+	for _, c := range cites {
+		out = append(out, obj{"id": "ann:" + c.ID, "annotation": c.ID, "kind": c.Kind, "title": c.Title, "status": c.Status})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func files(ctx context.Context, q *query.Q) (any, error) {

@@ -44,7 +44,7 @@ type Ref struct {
 type Traverse struct {
 	Ref    string `json:"ref" jsonschema:"id, label or search words"`
 	Depth  int    `json:"depth,omitempty" jsonschema:"levels to follow (callers/callees default 1, impact default 3)"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"max results"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"max listed callers/callees (impact: code first, then tests); a footer gives the next offset"`
 	Offset int    `json:"offset,omitempty" jsonschema:"skip results (paging)"`
 	Budget int    `json:"budget,omitempty" jsonschema:"output budget in tokens, default 2000"`
 }
@@ -79,11 +79,8 @@ func New(o Options) *mcp.Server {
 		}
 		d, err := f(q)
 		if err != nil {
-			var amb *query.ErrAmbiguous
-			var nf *query.ErrNotFound
-			if errors.As(err, &amb) || errors.As(err, &nf) {
-				return text(err.Error(), true), nil, nil // agent-correctable: show candidates/vocabulary
-			}
+			// Ambiguous refs list candidates and misses list vocabulary, so the
+			// agent can correct the call; other errors are shown as-is.
 			return text(err.Error(), true), nil, nil
 		}
 		return text(d.Render(budget), false), nil, nil
@@ -121,7 +118,7 @@ func New(o Options) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "map_impact", Description: "Blast radius / what breaks if this changes: transitive callers grouped by repo, context and tests."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in Traverse) (*mcp.CallToolResult, any, error) {
 			nonNegative(&in.Depth, &in.Limit, &in.Offset)
-			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) { return q.Impact(ctx, in.Ref, in.Depth) })
+			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) { return q.Impact(ctx, in.Ref, in.Depth, in.Limit, in.Offset) })
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "map_path", Description: "Shortest call path between two functions (how A reaches B)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in PathIn) (*mcp.CallToolResult, any, error) {
