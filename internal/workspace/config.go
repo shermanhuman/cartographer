@@ -18,7 +18,7 @@ type Config struct {
 	Name string `toml:"name"`
 	// Publish is the GitHub repository (owner/name) whose releases hold snapshots.
 	Publish string `toml:"publish"`
-	// Keep is how many snapshot releases publish retains (default 30).
+	// Keep is how many complete snapshot releases publish retains (default 30).
 	Keep        int               `toml:"keep"`
 	Contexts    Contexts          `toml:"contexts"`
 	Annotations string            `toml:"annotations"` // dir, default "annotations"
@@ -42,6 +42,8 @@ type Repo struct {
 	Ref     string   `toml:"ref"`
 	Plugins []string `toml:"plugins"`
 	// Docs are glob patterns for Markdown to include (default every tracked *.md).
+	// "docs/" includes everything under docs/; "docs/*.md" only its top
+	// level; ** isn't recursive (it acts like *).
 	Docs []string `toml:"docs"`
 }
 
@@ -156,6 +158,7 @@ const Template = `# cartographer workspace: the repositories one system map cove
 name = "my-project"
 # GitHub repository whose releases hold published snapshots (owner/name).
 publish = "my-org/my-project-map"
+# Complete snapshot releases publish retains.
 keep = 30
 
 [contexts]
@@ -167,6 +170,9 @@ name = "my-app"
 url = "https://github.com/my-org/my-app"
 path = "../my-app"
 plugins = ["elixir"]
+# Markdown to include (default every tracked *.md). "docs/" includes everything
+# under docs/; "docs/*.md" only its top level; ** isn't recursive.
+# docs = ["README.md", "docs/"]
 
 [plugins.elixir]
 version = "0.1.0"

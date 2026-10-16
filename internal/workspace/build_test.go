@@ -629,3 +629,28 @@ func TestFetchOnlyRejectsStaleUserCheckout(t *testing.T) {
 		t.Fatalf("stale checkout: err = %v, want a differs-from-origin error", err)
 	}
 }
+
+// A trailing-slash pattern takes the whole subtree; a glob's * stops at "/";
+// only Markdown counts.
+func TestIsDocPatterns(t *testing.T) {
+	for _, tc := range []struct {
+		file     string
+		patterns []string
+		want     bool
+	}{
+		{"docs/a.md", []string{"docs/"}, true},
+		{"docs/x/y/b.md", []string{"docs/"}, true},
+		{"docs/x/c.txt", []string{"docs/"}, false},
+		{"docsextra/a.md", []string{"docs/"}, false},
+		{"README.md", []string{"docs/"}, false},
+		{"docs/a.md", []string{"docs/*.md"}, true},
+		{"docs/x/b.md", []string{"docs/*.md"}, false},
+		{"docs/x/b.md", []string{"docs/**/*.md"}, true}, // ** acts like *
+		{"docs/x/y/b.md", []string{"docs/**/*.md"}, false},
+		{"notes/n.md", nil, true},
+	} {
+		if got := isDoc(tc.file, tc.patterns); got != tc.want {
+			t.Errorf("isDoc(%q, %q) = %v, want %v", tc.file, tc.patterns, got, tc.want)
+		}
+	}
+}
