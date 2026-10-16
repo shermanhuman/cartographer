@@ -1,7 +1,6 @@
 name: Release
 on:
   push:
-    # Full versions only: the moving major tag (v0) must not trigger a release.
     tags: ["v*.*.*"]
 permissions:
   contents: write
