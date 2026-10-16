@@ -197,6 +197,7 @@ func (g *GitHub) json(ctx context.Context, method, u string, in, out any) error 
 type Release struct {
 	ID     int64   `json:"id"`
 	Tag    string  `json:"tag_name"`
+	Draft  bool    `json:"draft"`
 	Assets []Asset `json:"assets"`
 }
 
@@ -206,8 +207,41 @@ type Asset struct {
 	URL  string `json:"url"`
 }
 
-// Snapshots lists snapshot releases in repo (owner/name), newest first.
+// Complete reports whether r is a published (non-draft) release holding the
+// snapshot asset.
+func (r Release) Complete() bool {
+	if r.Draft {
+		return false
+	}
+	for _, a := range r.Assets {
+		if a.Name == AssetName {
+			return true
+		}
+	}
+	return false
+}
+
+// Snapshots lists complete snapshot releases in repo (owner/name), newest
+// first. Drafts and releases without the snapshot asset (an interrupted or
+// in-progress publish) are skipped, so they never shadow a usable snapshot.
 func (g *GitHub) Snapshots(ctx context.Context, repo string) ([]Release, error) {
+	all, err := g.snapshotReleases(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	var out []Release
+	for _, r := range all {
+		if r.Complete() {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// snapshotReleases lists every snapshot-tagged release in repo, drafts and
+// incomplete ones included, newest first. Drafts are listed only for tokens
+// with push access.
+func (g *GitHub) snapshotReleases(ctx context.Context, repo string) ([]Release, error) {
 	var all []Release
 	for page := 1; page <= 10; page++ {
 		var rs []Release
@@ -229,26 +263,39 @@ func (g *GitHub) Snapshots(ctx context.Context, repo string) ([]Release, error) 
 	return all, nil
 }
 
-// Publish creates a release tagged with the snapshot id and uploads the asset.
+// Publish creates a draft release tagged with the snapshot id, uploads the
+// asset, then publishes the release. Readers skip drafts, so a run killed
+// part-way (e.g. a cancelled CI job) never leaves a published release without
+// its asset. GitHub creates the tag (from the default branch) only when the
+// draft is published. On failure the draft is deleted.
 func (g *GitHub) Publish(ctx context.Context, repo, id, notes string, asset []byte) (*Release, error) {
 	var r Release
 	err := g.json(ctx, "POST", fmt.Sprintf("%s/repos/%s/releases", g.api(), repo), map[string]any{
-		"tag_name": id, "name": id, "body": notes, "draft": false, "prerelease": false, "make_latest": "true",
+		"tag_name": id, "name": id, "body": notes, "draft": true, "prerelease": false,
 	}, &r)
 	if err != nil {
 		return nil, err
 	}
+	// Clean up even if ctx was cancelled; g.json bounds each call.
+	cleanup := func() { g.deleteRelease(context.WithoutCancel(ctx), repo, r) }
 	u := fmt.Sprintf("%s/repos/%s/releases/%d/assets?name=%s", g.uploads(), repo, r.ID, url.QueryEscape(AssetName))
 	uctx, cancel := context.WithTimeout(ctx, g.transferTimeout())
 	defer cancel()
 	resp, err := g.do(uctx, "POST", u, bytes.NewReader(asset), "application/gzip", "")
 	if err != nil {
-		// Don't leave a release without its asset behind.
-		g.deleteRelease(ctx, repo, r)
+		cleanup()
 		return nil, err
 	}
 	resp.Body.Close()
-	return &r, nil
+	var pub Release
+	err = g.json(ctx, "PATCH", fmt.Sprintf("%s/repos/%s/releases/%d", g.api(), repo, r.ID), map[string]any{
+		"draft": false, "make_latest": "true",
+	}, &pub)
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("publish draft release %s: %w", id, err)
+	}
+	return &pub, nil
 }
 
 // Download opens the snapshot asset of a release.
@@ -267,19 +314,30 @@ func (g *GitHub) Download(ctx context.Context, r Release) (io.ReadCloser, error)
 	return nil, fmt.Errorf("release %s has no %s asset", r.Tag, AssetName)
 }
 
-// Prune deletes snapshot releases (and their tags) beyond the newest keep,
-// which must be at least 1.
+// Prune deletes complete snapshot releases (and their tags) beyond the
+// newest keep, which must be at least 1, and incomplete ones (drafts, or
+// releases without the asset) older than the newest complete snapshot.
+// Incomplete releases never count toward keep; newer ones are left alone,
+// since a publish may still be in progress.
 func (g *GitHub) Prune(ctx context.Context, repo string, keep int) (int, error) {
 	if keep < 1 {
 		return 0, fmt.Errorf("prune: keep must be at least 1, got %d", keep)
 	}
-	rs, err := g.Snapshots(ctx, repo)
+	rs, err := g.snapshotReleases(ctx, repo)
 	if err != nil {
 		return 0, err
 	}
-	n := 0
-	for i := keep; i < len(rs); i++ {
-		if err := g.deleteRelease(ctx, repo, rs[i]); err != nil {
+	n, complete := 0, 0
+	for _, r := range rs {
+		if r.Complete() {
+			complete++
+			if complete <= keep {
+				continue
+			}
+		} else if complete == 0 {
+			continue // newer than every complete snapshot
+		}
+		if err := g.deleteRelease(ctx, repo, r); err != nil {
 			return n, err
 		}
 		n++
