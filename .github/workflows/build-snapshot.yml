@@ -45,6 +45,8 @@ jobs:
       CARTOGRAPHER_NO_PULL: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: app
         if: env.HAS_APP == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -52,6 +54,8 @@ jobs:
           app-id: ${{ secrets.app-id }}
           private-key: ${{ secrets.app-private-key }}
           owner: ${{ github.repository_owner }}
+          # Revoked by the "Revoke token" step, before any build code runs.
+          skip-token-revoke: true
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           working_directory: ${{ inputs.workspace-path }}
@@ -60,8 +64,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.cartographer-version }}
-        # Inline (not the setup action) so the binary version is exactly the
-        # cartographer-version input; pin both this workflow and that input.
+        # Inline so the binary version is exactly the cartographer-version
+        # input; pin both this workflow and that input.
         run: |
           set -euo pipefail
           case "$(uname -s)/$(uname -m)" in
@@ -89,12 +93,23 @@ jobs:
           path: _cartographer-cache/cartographer/schema
           key: cartographer-schema-${{ hashFiles(format('{0}/cartographer.toml', inputs.workspace-path)) }}-
           restore-keys: cartographer-schema-${{ hashFiles(format('{0}/cartographer.toml', inputs.workspace-path)) }}-
-      - name: Build
+      # Only the fetch holds the read token (step-level env); `prepare` and
+      # the plugins run in "Build", without it.
+      - name: Fetch repositories
         working-directory: ${{ inputs.workspace-path }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.repo-token || github.token }}
+        run: cartographer build --fetch-only
+      - name: Revoke token
+        if: always() && steps.app.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: gh api --method DELETE /installation/token
+      - name: Build
+        working-directory: ${{ inputs.workspace-path }}
+        env:
           XDG_CACHE_HOME: ${{ github.workspace }}/_cartographer-cache
-        run: cartographer build --fetch --out "$RUNNER_TEMP/snapshot"
+        run: cartographer build --out "$RUNNER_TEMP/snapshot"
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: success() && hashFiles('_cartographer-cache/cartographer/schema/*.json') != ''
         with:

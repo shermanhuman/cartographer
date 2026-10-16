@@ -74,16 +74,14 @@ jobs:
           app-id: ${{ secrets.app-id }}
           private-key: ${{ secrets.app-private-key }}
           owner: ${{ github.repository_owner }}
-      - name: Token
-        if: steps.creds.outputs.ok == 'true'
-        env:
-          TOKEN: ${{ steps.app.outputs.token || secrets.repo-token }}
-        run: echo "GH_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          # Revoked by the "Revoke token" step, before any build code runs.
+          skip-token-revoke: true
       - if: steps.creds.outputs.ok == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.workspace }}
           token: ${{ steps.app.outputs.token || secrets.repo-token }}
+          persist-credentials: false
           path: workspace
       - if: steps.creds.outputs.ok == 'true'
         uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
@@ -95,8 +93,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.cartographer-version }}
-        # Inline (not the setup action) so the binary version is exactly the
-        # cartographer-version input; pin both this workflow and that input.
+        # Inline so the binary version is exactly the cartographer-version
+        # input; pin both this workflow and that input.
         run: |
           set -euo pipefail
           case "$(uname -s)/$(uname -m)" in
@@ -125,14 +123,32 @@ jobs:
           path: _cartographer-cache/cartographer/schema
           key: cartographer-schema-${{ hashFiles(format('workspace/{0}/cartographer.toml', inputs.workspace-path)) }}-
           restore-keys: cartographer-schema-${{ hashFiles(format('workspace/{0}/cartographer.toml', inputs.workspace-path)) }}-
+      # The token reaches only the steps below that run no PR code (step-level
+      # env, never $GITHUB_ENV). The PR head's `prepare` and plugins run in
+      # "Head snapshot", after the App token is revoked; a repo-token secret
+      # cannot be revoked here, so prefer the App.
       - name: Base snapshot
         id: base
         if: steps.creds.outputs.ok == 'true'
         env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.repo-token }}
           WORKSPACE: ${{ inputs.workspace }}
         run: |
           cartographer pull "$WORKSPACE"
           echo "id=$(cartographer snapshots | head -1 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Fetch repositories
+        if: steps.creds.outputs.ok == 'true'
+        working-directory: workspace/${{ inputs.workspace-path }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.repo-token }}
+          REPO: ${{ inputs.repo }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cartographer build --fetch-only --ref "$REPO=$HEAD_SHA"
+      - name: Revoke token
+        if: always() && steps.app.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: gh api --method DELETE /installation/token
       - name: Head snapshot
         id: head
         if: steps.creds.outputs.ok == 'true'
@@ -142,7 +158,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           XDG_CACHE_HOME: ${{ github.workspace }}/_cartographer-cache
         run: |
-          out=$(cartographer build --fetch --import --out "$RUNNER_TEMP/head" --ref "$REPO=$HEAD_SHA")
+          out=$(cartographer build --import --out "$RUNNER_TEMP/head" --ref "$REPO=$HEAD_SHA")
           echo "$out"
           echo "id=$(echo "$out" | sed -n 's/^imported //p')" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
