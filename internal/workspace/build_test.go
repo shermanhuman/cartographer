@@ -707,3 +707,22 @@ func TestLocalBuildsCheckoutHeads(t *testing.T) {
 		t.Errorf("missing checkout: %v", err)
 	}
 }
+
+// A relocated checkout (Paths, as build --local resolves it) builds with a
+// schema: the cache key reads the checkout that is archived, not the
+// configured path.
+func TestSchemaKeyUsesTheResolvedCheckout(t *testing.T) {
+	ws, repo, log := setup(t)
+	moved := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.Rename(repo, moved); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := Load(ws)
+	m, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: t.TempDir(), Paths: map[string]string{"shop-app": moved}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Repos[0].Revision != run(t, moved, "git", "rev-parse", "HEAD") || !strings.Contains(mustRead(t, log), "prepared") {
+		t.Errorf("manifest %+v", m.Repos)
+	}
+}

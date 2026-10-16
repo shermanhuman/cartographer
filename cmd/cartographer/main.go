@@ -316,6 +316,9 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		if c.local && (c.fetch || c.fetchOnly) {
 			return errors.New("build: --local builds what is checked out; drop --fetch/--fetch-only")
 		}
+		// Ctrl-C stops the plugins (own process groups) and cleans up.
+		ctx, stop := withSignals(ctx)
+		defer stop()
 		if c.local {
 			return localBuild(ctx, w, &c, nil)
 		}
@@ -463,9 +466,10 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		// stdout carries the MCP protocol; warnings go to stderr.
 		sess := newSession(&c, s, os.Stderr)
 		sess.Background = true // long-lived: never hold a tool call for a pull
-		// A client that closes stdin ends Serve: cancel a running rebuild
-		// and let it clean up (lock, scratch) before exiting.
-		ctx, cancel := context.WithCancel(ctx)
+		// A client that closes stdin ends Serve, and SIGINT/SIGTERM cancel
+		// ctx: either way a running rebuild is cancelled and cleans up (lock,
+		// scratch, plugin processes) before exiting.
+		ctx, cancel := withSignals(ctx)
 		if sess.Rebuild != nil {
 			start, wait := backgroundRebuild(ctx, &c, sess, s)
 			sess.Rebuild = start
@@ -598,8 +602,9 @@ var errNotMapped = errors.New("not in a mapped repository")
 // backgroundRebuild.
 func newSession(c *common, s *store.Store, log io.Writer) *session.Session {
 	cwd, _ := os.Getwd()
-	sess := &session.Session{Store: s, DataDir: filepath.Dir(c.db), Cwd: cwd, Snapshot: c.snapshot, AutoPull: !c.noPull, Log: log}
-	if rebuildEnabled(c) {
+	db, _ := filepath.Abs(c.db)
+	sess := &session.Session{Store: s, DataDir: filepath.Dir(c.db), DB: db, Cwd: cwd, Snapshot: c.snapshot, AutoPull: !c.noPull, Log: log}
+	if rebuildEnabled(c, log) {
 		sess.Rebuild = spawnRebuild(c, log)
 	}
 	return sess

@@ -208,12 +208,12 @@ func TestRunStampsAndBacksOff(t *testing.T) {
 		t.Fatal("a never-built workspace is due")
 	}
 	boom := errors.New("plugin elixir: exit status 1\nmore detail")
-	if err := d.Run("mini", func() (map[string]string, error) {
+	if err := d.Run("mini", func() (Result, error) {
 		os.WriteFile(d.LogPath("mini"), []byte("building…\n"), 0o644) // the caller writes the log
 		if _, err := d.Lock("mini"); !errors.Is(err, ErrRunning) {
 			t.Errorf("not locked during build: %v", err)
 		}
-		return nil, boom
+		return Result{}, boom
 	}); !errors.Is(err, boom) {
 		t.Fatalf("Run = %v", err)
 	}
@@ -231,14 +231,19 @@ func TestRunStampsAndBacksOff(t *testing.T) {
 		t.Error("not due after the backoff")
 	}
 	revs := map[string]string{"shop-app": "aaaa", "shop-worker": "bbbb"}
-	if err := d.Run("mini", func() (map[string]string, error) { return revs, nil }); err != nil {
+	db := filepath.Join(d.Path, "carto.db")
+	if err := d.Run("mini", func() (Result, error) { return Result{DB: db, Revisions: revs}, nil }); err != nil {
 		t.Fatal(err)
 	}
 	if st := d.Status("mini"); st != "" {
 		t.Errorf("Status after success = %q", st)
 	}
-	if got := d.Built("mini"); !maps.Equal(got, revs) {
-		t.Errorf("Built = %v", got)
+	if got, at := d.Built("mini", db); !maps.Equal(got, revs) || time.Since(at) > time.Minute {
+		t.Errorf("Built = %v, %v", got, at)
+	}
+	// Only an import into the same store counts as built.
+	if got, _ := d.Built("mini", filepath.Join(d.Path, "other.db")); got != nil {
+		t.Errorf("Built for another db = %v", got)
 	}
 	if !d.Due("mini") { // success never backs off: the next evidence triggers again
 		t.Error("not due after a success")
@@ -246,7 +251,7 @@ func TestRunStampsAndBacksOff(t *testing.T) {
 	// A held lock: Run reports it without building or stamping.
 	unlock, _ := d.Lock("mini")
 	ran := false
-	if err := d.Run("mini", func() (map[string]string, error) { ran = true; return nil, nil }); !errors.Is(err, ErrRunning) || ran {
+	if err := d.Run("mini", func() (Result, error) { ran = true; return Result{}, nil }); !errors.Is(err, ErrRunning) || ran {
 		t.Errorf("Run under a lock: %v, ran %v", err, ran)
 	}
 	if st := d.Status("mini"); !strings.HasPrefix(st, "rebuilding since ") {
@@ -254,15 +259,15 @@ func TestRunStampsAndBacksOff(t *testing.T) {
 	}
 	unlock()
 	// A cancelled build (shutdown) is not a failure.
-	if err := d.Run("mini", func() (map[string]string, error) { return nil, context.Canceled }); !errors.Is(err, context.Canceled) {
+	if err := d.Run("mini", func() (Result, error) { return Result{}, context.Canceled }); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	if !d.Due("mini") || d.Status("mini") != "" || !maps.Equal(d.Built("mini"), revs) {
+	if got, _ := d.Built("mini", db); !d.Due("mini") || d.Status("mini") != "" || !maps.Equal(got, revs) {
 		t.Errorf("a cancelled build was stamped: due %v, status %q", d.Due("mini"), d.Status("mini"))
 	}
 	// A rebuild that never started (spawn failed) backs off like a failure.
 	d.Fail("mini", errors.New("start: exec format error"))
-	if d.Due("mini") || !strings.Contains(d.Status("mini"), "start: exec format error") || d.Built("mini") != nil {
+	if got, _ := d.Built("mini", db); d.Due("mini") || !strings.Contains(d.Status("mini"), "start: exec format error") || got != nil {
 		t.Errorf("Fail: due %v, status %q", d.Due("mini"), d.Status("mini"))
 	}
 }
@@ -279,11 +284,107 @@ func TestStatusCutsOnARuneBoundary(t *testing.T) {
 
 func utf8Valid(s string) bool { return strings.ToValidUTF8(s, "�") == s }
 
-// Workspace names become file names safely.
-func TestFileNames(t *testing.T) {
+// Each workspace's state lives in its own directory, named safely and
+// distinctly: no workspace's cleanup or lock touches another's.
+func TestWorkspacesDoNotShareState(t *testing.T) {
 	d := Dir{t.TempDir()}
-	p := d.LogPath("my org/map name")
-	if filepath.Dir(p) != filepath.Join(d.Path, "rebuild") || strings.ContainsAny(filepath.Base(p), "/ ") {
-		t.Errorf("LogPath = %q", p)
+	for _, pair := range [][2]string{{"shop", "shop.build-api"}, {"a/b", "a_b"}, {"my org/map", "my_org_map"}} {
+		a, b := d.StateDir(pair[0]), d.StateDir(pair[1])
+		if a == b || filepath.Dir(a) != filepath.Join(d.Path, "rebuild") || strings.ContainsAny(filepath.Base(a), "/ ") {
+			t.Errorf("%q, %q -> %q, %q", pair[0], pair[1], a, b)
+		}
 	}
+	unlockB, err := d.Lock("shop.build-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlockB()
+	d.Fail("shop.build-api", errors.New("boom"))
+	os.WriteFile(d.LogPath("shop.build-api"), []byte("log"), 0o644)
+	scratchB, _ := d.Scratch("shop.build-api")
+	unlockA, err := d.Lock("shop")
+	if err != nil {
+		t.Fatalf("shop blocked by shop.build-api: %v", err)
+	}
+	defer unlockA()
+	if _, err := d.Scratch("shop"); err != nil {
+		t.Fatal(err)
+	}
+	if _, running := d.Running("shop.build-api"); !running {
+		t.Error("shop's cleanup removed shop.build-api's lock")
+	}
+	if _, err := os.Stat(scratchB); err != nil {
+		t.Error("shop's cleanup removed shop.build-api's scratch")
+	}
+	if !strings.Contains(d.Status("shop.build-api"), "rebuilding") || d.Due("shop.build-api") {
+		t.Errorf("shop.build-api state lost: %q", d.Status("shop.build-api"))
+	}
+	if _, err := os.Stat(d.LogPath("shop.build-api")); err != nil {
+		t.Error("log lost")
+	}
+	if !d.Due("shop") {
+		t.Error("shop shares shop.build-api's stamp")
+	}
+}
+
+// A rebuild whose lock was taken over (it outlived it) records nothing:
+// its outcome would overwrite the newer owner's.
+func TestLostLockIsNotStamped(t *testing.T) {
+	d := Dir{t.TempDir()}
+	err := d.Run("mini", func() (Result, error) {
+		os.WriteFile(d.lockPath("mini"), []byte("1 2000-01-01T00:00:00Z other\n"), 0o644) // taken over
+		return Result{}, errors.New("late failure")
+	})
+	if !errors.Is(err, ErrLost) {
+		t.Errorf("Run = %v", err)
+	}
+	if _, err := os.Stat(d.stampPath("mini")); err == nil {
+		t.Error("an old owner stamped its outcome")
+	}
+	if b, _ := os.ReadFile(d.lockPath("mini")); !strings.Contains(string(b), "other") {
+		t.Error("an old owner removed the new owner's lock")
+	}
+}
+
+// A live build keeps its lock fresh, so it never ages out while running.
+func TestHeartbeatKeepsALiveLockFresh(t *testing.T) {
+	old := Heartbeat
+	Heartbeat = 20 * time.Millisecond
+	t.Cleanup(func() { Heartbeat = old })
+	d := Dir{t.TempDir()}
+	err := d.Run("mini", func() (Result, error) {
+		aged := time.Now().Add(-Stale - time.Minute)
+		os.Chtimes(d.lockPath("mini"), aged, aged)
+		time.Sleep(200 * time.Millisecond)
+		if _, running := d.Running("mini"); !running {
+			t.Error("a live build's lock aged out")
+		}
+		return Result{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Scratch also sweeps what a takeover that died left behind: moved-aside
+// locks, and a takeover guard whose process is gone (no minute's wait).
+func TestLeftoversOfADeadTakeoverAreSwept(t *testing.T) {
+	d := Dir{t.TempDir()}
+	dir := d.StateDir("mini")
+	os.MkdirAll(dir, 0o755)
+	aside := filepath.Join(dir, "lock.stale-abc")
+	os.WriteFile(aside, []byte("1 x y\n"), 0o644)
+	if _, err := d.Scratch("mini"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(aside); err == nil {
+		t.Error("a moved-aside lock was left")
+	}
+	os.WriteFile(d.lockPath("mini"), []byte(fmt.Sprintf("%d 2000-01-01T00:00:00Z x\n", deadPid(t))), 0o644)
+	os.WriteFile(d.lockPath("mini")+".takeover", []byte(fmt.Sprintf("%d\n", deadPid(t))), 0o644)
+	unlock, err := d.Lock("mini")
+	if err != nil {
+		t.Fatalf("a dead takeover's guard blocked the lock: %v", err)
+	}
+	unlock()
 }

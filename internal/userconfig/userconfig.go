@@ -4,6 +4,8 @@
 package userconfig
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,10 +53,20 @@ func Path() string {
 }
 
 // Load returns the config, or an empty one when the file doesn't exist.
+// local_workspaces entries come back absolute and clean (~ expanded); a
+// relative one is an error, since it would trust whichever directory a
+// command runs in.
 func Load() (*Config, error) {
 	var c Config
 	if _, err := toml.DecodeFile(Path(), &c); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("userconfig: %w", err)
+	}
+	for i, dir := range c.LocalWorkspaces {
+		abs := fresh.ExpandHome(dir)
+		if !filepath.IsAbs(abs) {
+			return nil, fmt.Errorf("userconfig: %s: local_workspaces entry %q must be an absolute path (or start with ~/); register workspaces with `cartographer workspace add <dir>`", Path(), dir)
+		}
+		c.LocalWorkspaces[i] = filepath.Clean(abs)
 	}
 	return &c, nil
 }
@@ -70,22 +82,84 @@ func AddWorkspace(src string) error {
 	return addItem("workspaces", src, func(c *Config) []string { return c.Workspaces })
 }
 
-// AddLocalWorkspace records the directory of a local workspace (absolute).
+// AddLocalWorkspace registers the directory of a local workspace (absolute,
+// symlinks resolved) and records the digest of its cartographer.toml, which
+// Trust checks: registering trusts that file's commands as they are now.
+// Adding it again refreshes the digest after a reviewed change.
 func AddLocalWorkspace(dir string) error {
 	if !filepath.IsAbs(dir) {
 		return fmt.Errorf("local workspace must be an absolute path, got %q", dir)
 	}
-	dir = filepath.Clean(dir)
+	dir = resolve(dir)
 	c, err := Load()
 	if err != nil {
 		return err
 	}
-	for _, have := range c.LocalWorkspaces {
-		if filepath.Clean(fresh.ExpandHome(have)) == dir {
-			return nil
+	if !slices.ContainsFunc(c.LocalWorkspaces, func(have string) bool { return resolve(have) == dir }) {
+		if err := addItem("local_workspaces", dir, func(c *Config) []string { return c.LocalWorkspaces }); err != nil {
+			return err
 		}
 	}
-	return addItem("local_workspaces", dir, func(c *Config) []string { return c.LocalWorkspaces })
+	sum, err := digest(dir)
+	if err != nil {
+		return err
+	}
+	p := trustPath(dir)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(dir+"\n"+sum+"\n"), 0o644)
+}
+
+// TrustState is whether a local workspace's cartographer.toml is the one
+// registered.
+type TrustState int
+
+const (
+	TrustUnknown TrustState = iota // never registered (no digest recorded)
+	Trusted                        // unchanged since `workspace add`
+	TrustChanged                   // edited (or replaced) since
+)
+
+// Trust compares dir's cartographer.toml with the digest recorded when it
+// was registered (symlinks resolved, so a retargeted link is unknown).
+func Trust(dir string) TrustState {
+	dir = resolve(dir)
+	b, err := os.ReadFile(trustPath(dir))
+	if err != nil {
+		return TrustUnknown
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 2 || lines[0] != dir {
+		return TrustUnknown
+	}
+	if sum, err := digest(dir); err != nil || sum != lines[1] {
+		return TrustChanged
+	}
+	return Trusted
+}
+
+// resolve cleans dir and resolves symlinks when it can.
+func resolve(dir string) string {
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		return r
+	}
+	return filepath.Clean(dir)
+}
+
+func digest(dir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "cartographer.toml"))
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// trustPath holds dir's registered digest, beside the config file.
+func trustPath(dir string) string {
+	sum := sha256.Sum256([]byte(dir))
+	return filepath.Join(filepath.Dir(Path()), "trusted", hex.EncodeToString(sum[:8]))
 }
 
 // addItem appends item to the top-level array key, editing the file in

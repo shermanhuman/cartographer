@@ -52,6 +52,7 @@ func WithoutCache(ctx context.Context) context.Context {
 type Session struct {
 	Store    *store.Store
 	DataDir  string
+	DB       string // the store's database file; a rebuild imported there counts as built
 	Cwd      string
 	Snapshot string // explicit snapshot id; "" selects by cwd
 	AutoPull bool
@@ -266,13 +267,24 @@ func (s *Session) freshFrom(ctx context.Context, m *memo, id string) (*fresh.Rep
 	return rep, nil
 }
 
+// recentlyBuilt reports whether a rebuild imported exactly heads into db
+// within FailBackoff: a guard against a tight loop when a newer snapshot
+// at older revisions (a pull, an import) is in use, which a later rebuild
+// may still replace.
+func recentlyBuilt(d rebuild.Dir, ws, db string, heads map[string]string) (time.Time, bool) {
+	revs, at := d.Built(ws, db)
+	return at, revs != nil && maps.Equal(revs, heads) && time.Since(at) < rebuild.FailBackoff
+}
+
 // rebuildDue starts a rebuild of ws when the report shows a checkout ahead
 // of the snapshot and the checkouts the registered workspace builds (the
 // ones workspace.Local resolves, which may not be the one the query runs
 // in: a second clone, a worktree) are ahead too, so the new snapshot will
-// answer the evidence. It never starts one for a pinned snapshot, while
-// one runs, within FailBackoff of a failure, or again for the HEADs the
-// last rebuild built. A workspace that can't be resolved still starts one:
+// answer the evidence. It never starts one for a workspace whose
+// cartographer.toml changed since it was registered (userconfig.Trust), for
+// a pinned snapshot, while one runs, within FailBackoff of a failure, or
+// right after a rebuild of the same HEADs. A workspace that can't be
+// resolved still starts one:
 // the build records why, and that backs off. Advice goes to rep.Hints.
 func (s *Session) rebuildDue(ctx context.Context, m *memo, ws string, repos []fresh.Repo, rep *fresh.Report, cfg *userconfig.Config) {
 	dir, ok := m.local[ws]
@@ -289,6 +301,14 @@ func (s *Session) rebuildDue(ctx context.Context, m *memo, ws string, repos []fr
 		if sib != "" {
 			rep.Hints = append(rep.Hints, "to keep this map fresh automatically: cartographer workspace add "+sib)
 		}
+		return
+	}
+	switch userconfig.Trust(dir) {
+	case userconfig.TrustChanged:
+		rep.Hints = append(rep.Hints, "cartographer.toml changed since you registered it: review, then cartographer workspace add "+dir)
+		return
+	case userconfig.TrustUnknown: // listed by hand, never added
+		rep.Hints = append(rep.Hints, "to keep this map fresh automatically: cartographer workspace add "+dir)
 		return
 	}
 	d := rebuild.Dir{Path: s.DataDir}
@@ -319,6 +339,7 @@ func (s *Session) rebuildDue(ctx context.Context, m *memo, ws string, repos []fr
 			ahead = true
 		}
 	}
+	at, recent := recentlyBuilt(d, ws, s.DB, heads)
 	switch {
 	case !ahead:
 		for _, st := range rep.Repos {
@@ -326,8 +347,8 @@ func (s *Session) rebuildDue(ctx context.Context, m *memo, ws string, repos []fr
 				rep.Hints = append(rep.Hints, fmt.Sprintf("checkout here differs from the one the workspace builds: %s at %s", st.Name, paths[st.Name]))
 			}
 		}
-	case maps.Equal(d.Built(ws), heads):
-		rep.Hints = append(rep.Hints, "the last rebuild already built these checkouts; this snapshot is another (pinned, or newer)")
+	case recent:
+		rep.Hints = append(rep.Hints, fmt.Sprintf("rebuilt these checkouts at %s, but a newer snapshot came in since; rebuilds again after %s", at.Local().Format("15:04"), at.Add(rebuild.FailBackoff).Local().Format("15:04")))
 	default:
 		s.Rebuild(ws, dir)
 	}

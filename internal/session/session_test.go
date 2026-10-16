@@ -21,6 +21,7 @@ import (
 	"github.com/shermanhuman/cartographer/internal/rebuild"
 	"github.com/shermanhuman/cartographer/internal/snapshot"
 	"github.com/shermanhuman/cartographer/internal/store"
+	"github.com/shermanhuman/cartographer/internal/userconfig"
 )
 
 func gitInit(t *testing.T, dir, origin string) {
@@ -502,7 +503,7 @@ func TestHasCode(t *testing.T) {
 // mini that builds it. register records the workspace in the user config.
 func aheadRepo(t *testing.T, s *store.Store, register bool) (parent, app, ws string) {
 	t.Helper()
-	parent = t.TempDir()
+	parent, _ = filepath.EvalSymlinks(t.TempDir()) // registered paths are resolved
 	app = filepath.Join(parent, "shop-app")
 	gitInit(t, app, "https://github.com/example/shop-app")
 	first := commitFile(t, app, "a.ex")
@@ -512,11 +513,12 @@ func aheadRepo(t *testing.T, s *store.Store, register bool) (parent, app, ws str
 	ws = filepath.Join(parent, "mini-map")
 	os.MkdirAll(ws, 0o755)
 	os.WriteFile(filepath.Join(ws, "cartographer.toml"), []byte("name = \"mini\"\n[[repos]]\nname = \"shop-app\"\nurl = \"https://github.com/example/shop-app\"\npath = \"../shop-app\"\n"), 0o644)
-	cfg := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("CARTOGRAPHER_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	if register {
-		os.WriteFile(cfg, []byte("local_workspaces = ["+strconv.Quote(ws)+"]\n"), 0o644)
+		if err := userconfig.AddLocalWorkspace(ws); err != nil {
+			t.Fatal(err)
+		}
 	}
-	t.Setenv("CARTOGRAPHER_CONFIG", cfg)
 	return parent, app, ws
 }
 
@@ -579,7 +581,7 @@ func TestRebuildStartsWhenACheckoutIsAhead(t *testing.T) {
 	}
 	unlock()
 	// A recent failure backs off; its message is reported.
-	d.Run("mini", func() (map[string]string, error) { return nil, errors.New("plugin exploded") })
+	d.Run("mini", func() (rebuild.Result, error) { return rebuild.Result{}, errors.New("plugin exploded") })
 	_, rep, _ = sess.Query(WithoutCache(ctx))
 	if len(r.calls) != 1 || !strings.Contains(rep.Rebuild, "last rebuild failed") || !strings.Contains(rep.Rebuild, "plugin exploded") {
 		t.Errorf("after a failure: calls %d, rebuild note %q", len(r.calls), rep.Rebuild)
@@ -687,21 +689,62 @@ func TestRebuildMeasuresWhatTheWorkspaceBuilds(t *testing.T) {
 	}
 }
 
-// Safety net: when the snapshot in use stays behind after a rebuild built
-// exactly the workspace's checkouts (a newer pulled snapshot, a collision),
-// the same rebuild is not run again.
-func TestRebuildNotRepeatedForTheSameHeads(t *testing.T) {
+// Safety net against a tight loop: right after a rebuild imported exactly
+// the workspace's HEADs, a snapshot still behind them (a newer one built
+// from an older revision: a CI pull, an import) doesn't rebuild again at
+// once, but does after FailBackoff; an import into another store doesn't
+// count at all.
+func TestSameHeadsBackstopIsTimeBound(t *testing.T) {
 	ctx := context.Background()
 	s, _ := store.Open(":memory:")
 	defer s.Close()
 	_, app, _ := aheadRepo(t, s, true)
 	var r recorder
-	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Rebuild: r.rebuild}
+	data := t.TempDir()
+	sess := &Session{Store: s, DataDir: data, DB: filepath.Join(data, "carto.db"), Cwd: app, Rebuild: r.rebuild}
 	d := rebuild.Dir{Path: sess.DataDir}
-	d.Run("mini", func() (map[string]string, error) { return map[string]string{"shop-app": head(t, app)}, nil })
+	built := map[string]string{"shop-app": head(t, app)}
+	d.Run("mini", func() (rebuild.Result, error) {
+		return rebuild.Result{DB: filepath.Join(data, "other.db"), Revisions: built}, nil
+	})
+	if sess.Query(WithoutCache(ctx)); len(r.calls) != 1 {
+		t.Fatalf("an import into another store suppressed the rebuild: %q", r.calls)
+	}
+	d.Run("mini", func() (rebuild.Result, error) { return rebuild.Result{DB: sess.DB, Revisions: built}, nil })
+	_, rep, _ := sess.Query(WithoutCache(ctx))
+	if len(r.calls) != 1 || len(rep.Hints) != 1 || !strings.Contains(rep.Hints[0], "rebuilt these checkouts at") || strings.Contains(rep.Hints[0], "pinned") {
+		t.Errorf("right after the rebuild: calls %q, hints %q", r.calls, rep.Hints)
+	}
+	aged := time.Now().Add(-rebuild.FailBackoff - time.Minute)
+	os.Chtimes(d.StampPath("mini"), aged, aged)
+	if _, rep, _ := sess.Query(WithoutCache(ctx)); len(r.calls) != 2 || len(rep.Hints) != 0 {
+		t.Errorf("after the backoff: calls %q, hints %q", r.calls, rep.Hints)
+	}
+}
+
+// Registering trusts cartographer.toml as it was: once it changes (a pull
+// of the map repo, a swapped directory), nothing is rebuilt until it is
+// reviewed and added again.
+func TestRebuildNeedsTheRegisteredFileUnchanged(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	_, app, ws := aheadRepo(t, s, true)
+	toml := filepath.Join(ws, "cartographer.toml")
+	b, _ := os.ReadFile(toml)
+	os.WriteFile(toml, append(b, []byte("# pulled\n")...), 0o644)
+	var r recorder
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Rebuild: r.rebuild}
 	_, rep, _ := sess.Query(ctx)
-	if len(r.calls) != 0 || len(rep.Hints) != 1 || !strings.Contains(rep.Hints[0], "already built") {
-		t.Errorf("calls %q, hints %q", r.calls, rep.Hints)
+	want := "cartographer.toml changed since you registered it: review, then cartographer workspace add " + ws
+	if len(r.calls) != 0 || len(rep.Hints) != 1 || rep.Hints[0] != want {
+		t.Fatalf("changed file: calls %q, hints %q", r.calls, rep.Hints)
+	}
+	if err := userconfig.AddLocalWorkspace(ws); err != nil {
+		t.Fatal(err)
+	}
+	if _, rep, _ := sess.Query(WithoutCache(ctx)); len(r.calls) != 1 || len(rep.Hints) != 0 {
+		t.Errorf("after re-adding: calls %q, hints %q", r.calls, rep.Hints)
 	}
 }
 
@@ -736,12 +779,15 @@ func TestRebuildStartsWhenTheWorkspaceCannotBeResolved(t *testing.T) {
 	_, app, ws := aheadRepo(t, s, true)
 	toml, _ := os.ReadFile(filepath.Join(ws, "cartographer.toml"))
 	os.WriteFile(filepath.Join(ws, "cartographer.toml"), append(toml, []byte("[[repos]]\nname = \"missing-app\"\npath = \"../missing-app\"\n")...), 0o644)
+	if err := userconfig.AddLocalWorkspace(ws); err != nil { // reviewed and re-added
+		t.Fatal(err)
+	}
 	var r recorder
 	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app}
 	d := rebuild.Dir{Path: sess.DataDir}
 	sess.Rebuild = func(name, dir string) {
 		r.rebuild(name, dir)
-		d.Run(name, func() (map[string]string, error) { return nil, errors.New("no checkout for missing-app") })
+		d.Run(name, func() (rebuild.Result, error) { return rebuild.Result{}, errors.New("no checkout for missing-app") })
 	}
 	for range 3 {
 		sess.Query(WithoutCache(ctx))

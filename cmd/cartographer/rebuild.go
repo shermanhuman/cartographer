@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/shermanhuman/cartographer/internal/bundle"
@@ -30,12 +32,30 @@ var shutdownWait = 10 * time.Second
 
 // rebuildEnabled: local rebuilds are on unless --no-rebuild,
 // $CARTOGRAPHER_NO_REBUILD or `auto_rebuild = false` in the user config.
-func rebuildEnabled(c *common) bool {
+// A config that doesn't load (e.g. a relative local_workspaces entry)
+// disables them, and the error goes to log.
+func rebuildEnabled(c *common, log io.Writer) bool {
 	if c.noRebuild {
 		return false
 	}
 	cfg, err := userconfig.Load()
-	return err == nil && cfg.AutoRebuildOn()
+	if err != nil {
+		if log != nil {
+			fmt.Fprintln(log, "cartographer: local rebuilds off:", err)
+		}
+		return false
+	}
+	return cfg.AutoRebuildOn()
+}
+
+// withSignals cancels ctx on SIGINT/SIGTERM, so commands that run plugins
+// (in their own process groups) or rebuild in the background stop them and
+// clean up before exiting. After the first signal the default behaviour is
+// back: a second one kills at once.
+func withSignals(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	go func() { <-ctx.Done(); stop() }()
+	return ctx, stop
 }
 
 // spawnRebuild is the Session.Rebuild of a one-shot command: it starts
@@ -47,6 +67,9 @@ func rebuildEnabled(c *common) bool {
 func spawnRebuild(c *common, log io.Writer) func(ws, dir string) {
 	return func(ws, dir string) {
 		err := func() error {
+			if !filepath.IsAbs(dir) { // registered entries are absolute (userconfig.Load)
+				return fmt.Errorf("workspace path %q is not absolute", dir)
+			}
 			exe, err := selfExe()
 			if err != nil {
 				return err
@@ -88,13 +111,11 @@ func backgroundRebuild(ctx context.Context, c *common, sess *session.Session, s 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(ctx, rebuild.Timeout)
-			defer cancel()
 			cc := *c
 			cc.local, cc.doImport, cc.background, cc.workspace, cc.out = true, true, true, dir, ""
 			err := localBuild(ctx, io.Discard, &cc, s)
 			switch {
-			case errors.Is(err, rebuild.ErrRunning), errors.Is(err, context.Canceled):
+			case errors.Is(err, rebuild.ErrRunning), errors.Is(err, rebuild.ErrLost), errors.Is(err, context.Canceled):
 			case err != nil:
 				if sess.Log != nil {
 					fmt.Fprintf(sess.Log, "cartographer: local rebuild of %s failed (log: %s): %v\n", ws, rebuild.Dir{Path: filepath.Dir(c.db)}.LogPath(ws), err)
@@ -118,9 +139,15 @@ func backgroundRebuild(ctx context.Context, c *common, sess *session.Session, s 
 // localBuild is `build --local`: every checkout at its HEAD (no fetch, no
 // token), all of it under the workspace's rebuild lock, so a failure at any
 // step (a checkout missing, a plugin) is stamped, backs off and shows in
-// status. With --background the output goes to the rebuild log, opened
-// once the lock is held. s is an open store to import into (nil opens --db).
+// status. With --background (an automatic rebuild) it is bounded by
+// rebuild.Timeout and the output goes to the rebuild log, opened once the
+// lock is held. s is an open store to import into (nil opens --db).
 func localBuild(ctx context.Context, w io.Writer, c *common, s *store.Store) error {
+	if c.background {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, rebuild.Timeout)
+		defer cancel()
+	}
 	name := workspace.Name(c.workspace)
 	if name == "" {
 		if _, err := workspace.Load(c.workspace); err != nil {
@@ -129,7 +156,7 @@ func localBuild(ctx context.Context, w io.Writer, c *common, s *store.Store) err
 		return fmt.Errorf("build --local: %s names no workspace", c.workspace)
 	}
 	d := rebuild.Dir{Path: filepath.Dir(c.db)}
-	err := d.Run(name, func() (revs map[string]string, err error) {
+	err := d.Run(name, func() (res rebuild.Result, err error) {
 		// A build cut short by shutdown (killed plugins and all) is
 		// cancelled, not failed: Run doesn't stamp it.
 		defer func() {
@@ -142,36 +169,42 @@ func localBuild(ctx context.Context, w io.Writer, c *common, s *store.Store) err
 		}
 		f, err := os.Create(d.LogPath(name)) // the lock makes this the only writer
 		if err != nil {
-			return nil, err
+			return res, err
 		}
 		defer f.Close()
-		revs, err = localBuildLocked(ctx, f, f, c, s, d, name)
+		res, err = localBuildLocked(ctx, f, f, c, s, d, name)
 		if err != nil {
 			fmt.Fprintln(f, "cartographer:", err)
 		}
-		return revs, err
+		return res, err
 	})
 	if errors.Is(err, rebuild.ErrRunning) {
 		since, _ := d.Running(name)
-		return fmt.Errorf("build --local: %w: %s, running since %s (log: %s); wait for it, or remove its lock in %s", rebuild.ErrRunning, name, since.Local().Format("15:04:05"), d.LogPath(name), filepath.Join(d.Path, "rebuild"))
+		return fmt.Errorf("build --local: %w: %s, running since %s (log: %s); wait for it, or remove its lock in %s", rebuild.ErrRunning, name, since.Local().Format("15:04:05"), d.LogPath(name), d.StateDir(name))
 	}
 	return err
 }
 
-// localBuildLocked does localBuild's work; the caller holds the lock. It
-// returns the revisions built.
-func localBuildLocked(ctx context.Context, w, log io.Writer, c *common, s *store.Store, d rebuild.Dir, name string) (map[string]string, error) {
+// localBuildLocked does localBuild's work; the caller holds the lock. With
+// --import it returns the revisions imported and the store's database (a
+// build left in --out changes nothing queries see).
+func localBuildLocked(ctx context.Context, w, log io.Writer, c *common, s *store.Store, d rebuild.Dir, name string) (rebuild.Result, error) {
+	var res rebuild.Result
+	if c.background && userconfig.Trust(filepath.Dir(workspacePath(c.workspace))) != userconfig.Trusted {
+		// Checked again here: the file may have changed since the query.
+		return res, fmt.Errorf("cartographer.toml changed since you registered it (or was never registered): review, then `cartographer workspace add %s`", c.workspace)
+	}
 	cfg, err := workspace.Load(c.workspace)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	ucfg, err := userconfig.Load()
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	paths, refs, err := workspace.Local(ctx, cfg, ucfg.Checkouts)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	for repo, rev := range c.refs { // an explicit --ref still wins
 		refs[repo] = rev
@@ -182,20 +215,35 @@ func localBuildLocked(ctx context.Context, w, log io.Writer, c *common, s *store
 		// rebuild that died goes first.
 		scratch, err := d.Scratch(name)
 		if err != nil {
-			return nil, err
+			return res, err
 		}
 		defer os.RemoveAll(scratch)
 		o.Out = filepath.Join(scratch, "snapshot")
 	}
 	m, err := buildImport(ctx, w, c, cfg, o, s)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
-	revs := map[string]string{}
+	if !c.doImport {
+		return res, nil
+	}
+	if res.DB, err = filepath.Abs(c.db); err != nil {
+		return res, err
+	}
+	res.Revisions = map[string]string{}
 	for _, r := range m.Repos {
-		revs[r.Name] = r.Revision
+		res.Revisions[r.Name] = r.Revision
 	}
-	return revs, nil
+	return res, nil
+}
+
+// workspacePath is the cartographer.toml that --workspace names (a file,
+// or a directory holding one).
+func workspacePath(p string) string {
+	if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+		return filepath.Join(p, workspace.FileName)
+	}
+	return p
 }
 
 // buildCmd is `build` without --local (after Load).

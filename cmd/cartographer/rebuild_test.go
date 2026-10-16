@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -68,14 +67,16 @@ command = ["cat", "`+fixture+`"]
 	return root, repo, ws
 }
 
-// register points the user config at a fresh file listing ws (and extra
-// lines).
+// register points the user config at a fresh file (with extra lines) and
+// registers ws in it as `workspace add` does, trusting its toml as it is.
 func register(t *testing.T, ws string, extra ...string) {
 	t.Helper()
 	cfg := filepath.Join(t.TempDir(), "config.toml")
-	body := "local_workspaces = [" + strconv.Quote(ws) + "]\n" + strings.Join(extra, "\n") + "\n"
-	os.WriteFile(cfg, []byte(body), 0o644)
+	os.WriteFile(cfg, []byte(strings.Join(extra, "\n")+"\n"), 0o644)
 	t.Setenv("CARTOGRAPHER_CONFIG", cfg)
+	if err := userconfig.AddLocalWorkspace(ws); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func appendToml(t *testing.T, ws, text string) {
@@ -114,7 +115,7 @@ func realChild(t *testing.T) (spawns func() int) {
 // and no lock.
 func settle(t *testing.T, d rebuild.Dir, ws string, since time.Time) {
 	t.Helper()
-	stamp := filepath.Join(d.Path, "rebuild", ws+".stamp")
+	stamp := d.StampPath(ws)
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		fi, err := os.Stat(stamp)
 		if _, running := d.Running(ws); err == nil && !fi.ModTime().Before(since) && !running {
@@ -133,7 +134,8 @@ func TestWorkspaceAddRecordsALocalDirectory(t *testing.T) {
 	}
 	cli(t, "", "workspace", "add", "acme/map") // owner/name still pulls
 	cfg, err := userconfig.Load()
-	if err != nil || len(cfg.LocalWorkspaces) != 1 || cfg.LocalWorkspaces[0] != ws || len(cfg.Workspaces) != 1 {
+	real, _ := filepath.EvalSymlinks(ws) // recorded with symlinks resolved
+	if err != nil || len(cfg.LocalWorkspaces) != 1 || cfg.LocalWorkspaces[0] != real || len(cfg.Workspaces) != 1 || userconfig.Trust(ws) != userconfig.Trusted {
 		t.Errorf("config = %+v, %v", cfg, err)
 	}
 	// A directory without cartographer.toml is not a source of either kind;
@@ -168,7 +170,7 @@ func TestBuildLocalImportsCheckoutHeads(t *testing.T) {
 	if m, _ := filepath.Glob(filepath.Join(ws, ".cartographer", "snapshots", "build-*")); len(m) != 0 {
 		t.Errorf("a --local --import build left its snapshot in the workspace: %v", m)
 	}
-	if m, _ := filepath.Glob(filepath.Join(filepath.Dir(db), "rebuild", "mini.build-*")); len(m) != 0 {
+	if m := scratch(rebuild.Dir{Path: filepath.Dir(db)}); len(m) != 0 {
 		t.Errorf("scratch left behind: %v", m)
 	}
 	head := gitIn(t, repo, "rev-parse", "HEAD")
@@ -195,6 +197,7 @@ func TestBuildLocalImportsCheckoutHeads(t *testing.T) {
 func TestBuildLocalRecordsSetupFailures(t *testing.T) {
 	_, _, ws := localWorkspace(t)
 	appendToml(t, ws, "[[repos]]\nname = \"missing-app\"\npath = \"../missing-app\"\n")
+	register(t, ws) // --background builds only a registered workspace
 	db := filepath.Join(t.TempDir(), "carto.db")
 	d := rebuild.Dir{Path: filepath.Dir(db)}
 	for _, bg := range []bool{false, true} {
@@ -354,12 +357,12 @@ func TestBackgroundRebuildImportsANewSnapshot(t *testing.T) {
 // A failing rebuild is reported once in the session log and in status.
 func TestBackgroundRebuildFailureIsVisible(t *testing.T) {
 	_, repo, ws := localWorkspace(t)
-	register(t, ws)
 	db := filepath.Join(t.TempDir(), "carto.db")
 	cli(t, db, "build", "--local", "--import", "--workspace", ws)
 	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "ahead")
 	toml, _ := os.ReadFile(filepath.Join(ws, "cartographer.toml"))
 	os.WriteFile(filepath.Join(ws, "cartographer.toml"), bytes.Replace(toml, []byte(`["cat", "`), []byte(`["false", "`), 1), 0o644)
+	register(t, ws)
 	s, _ := store.Open(db)
 	defer s.Close()
 	c := &common{db: db}
@@ -394,12 +397,12 @@ func TestBackgroundRebuildFailureIsVisible(t *testing.T) {
 // and scratch go, and the cancellation is not recorded as a failure.
 func TestShutdownCancelsABackgroundRebuild(t *testing.T) {
 	_, repo, ws := localWorkspace(t)
-	register(t, ws)
 	db := filepath.Join(t.TempDir(), "carto.db")
 	cli(t, db, "build", "--local", "--import", "--workspace", ws)
 	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "ahead")
 	toml, _ := os.ReadFile(filepath.Join(ws, "cartographer.toml"))
 	os.WriteFile(filepath.Join(ws, "cartographer.toml"), bytes.Replace(toml, []byte(`["cat", "`), []byte(`["sh", "-c", "sleep 30", "`), 1), 0o644)
+	register(t, ws)
 	s, _ := store.Open(db)
 	defer s.Close()
 	c := &common{db: db}
@@ -414,7 +417,7 @@ func TestShutdownCancelsABackgroundRebuild(t *testing.T) {
 	}
 	d := rebuild.Dir{Path: filepath.Dir(db)}
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if m, _ := filepath.Glob(filepath.Join(d.Path, "rebuild", "mini.build-*")); len(m) > 0 {
+		if len(scratch(d)) > 0 {
 			break
 		}
 	}
@@ -430,10 +433,87 @@ func TestShutdownCancelsABackgroundRebuild(t *testing.T) {
 	if _, running := d.Running("mini"); running {
 		t.Error("lock left behind")
 	}
-	if m, _ := filepath.Glob(filepath.Join(d.Path, "rebuild", "mini.build-*")); len(m) != 0 {
+	if m := scratch(d); len(m) != 0 {
 		t.Errorf("scratch left behind: %v", m)
 	}
 	if !d.Due("mini") || d.Status("mini") != "" {
 		t.Errorf("a cancelled rebuild was recorded: due %v, status %q", d.Due("mini"), d.Status("mini"))
+	}
+}
+
+// scratch lists the scratch directories of workspace mini's rebuilds.
+func scratch(d rebuild.Dir) []string {
+	m, _ := filepath.Glob(filepath.Join(d.StateDir("mini"), "build-*"))
+	return m
+}
+
+// Only an import into the store counts as built: a `build --local --out`
+// of the new HEAD leaves the next query free to rebuild.
+func TestBuildWithoutImportDoesNotSuppressRebuilds(t *testing.T) {
+	_, repo, ws := localWorkspace(t)
+	register(t, ws)
+	db := filepath.Join(t.TempDir(), "carto.db")
+	cli(t, db, "build", "--local", "--import", "--workspace", ws)
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "ahead")
+	cli(t, db, "build", "--local", "--out", filepath.Join(t.TempDir(), "snap"), "--workspace", ws)
+	s, _ := store.Open(db)
+	defer s.Close()
+	t.Chdir(repo)
+	sess := newSession(&common{db: db}, s, nil)
+	calls := 0
+	sess.Rebuild = func(string, string) { calls++ }
+	if _, _, err := sess.Query(context.Background()); err != nil || calls != 1 {
+		t.Errorf("after a build without import: %v, %d rebuilds", err, calls)
+	}
+}
+
+// The detached child bounds itself (rebuild.Timeout): a hung plugin fails
+// the rebuild, which is recorded, instead of holding the lock forever.
+func TestBackgroundBuildTimesOut(t *testing.T) {
+	_, _, ws := localWorkspace(t)
+	toml, _ := os.ReadFile(filepath.Join(ws, "cartographer.toml"))
+	os.WriteFile(filepath.Join(ws, "cartographer.toml"), bytes.Replace(toml, []byte(`["cat", "`), []byte(`["sh", "-c", "sleep 600", "`), 1), 0o644)
+	register(t, ws)
+	old := rebuild.Timeout
+	rebuild.Timeout = 300 * time.Millisecond
+	t.Cleanup(func() { rebuild.Timeout = old })
+	db := filepath.Join(t.TempDir(), "carto.db")
+	begun := time.Now()
+	var out bytes.Buffer
+	err := run(context.Background(), []string{"build", "--local", "--import", "--background", "--workspace", ws, "--db", db}, &out)
+	d := rebuild.Dir{Path: filepath.Dir(db)}
+	if err == nil || time.Since(begun) > 10*time.Second || !strings.Contains(d.Status("mini"), "last rebuild failed") {
+		t.Errorf("err %v after %v; status %q", err, time.Since(begun), d.Status("mini"))
+	}
+}
+
+// The child checks trust itself: a cartographer.toml changed after
+// registering (between the query and the build) is not run, and the
+// refusal shows like a failure.
+func TestBackgroundBuildRefusesAChangedWorkspace(t *testing.T) {
+	_, _, ws := localWorkspace(t)
+	register(t, ws)
+	appendToml(t, ws, "# changed\n")
+	db := filepath.Join(t.TempDir(), "carto.db")
+	var out bytes.Buffer
+	err := run(context.Background(), []string{"build", "--local", "--import", "--background", "--workspace", ws, "--db", db}, &out)
+	d := rebuild.Dir{Path: filepath.Dir(db)}
+	if err == nil || !strings.Contains(err.Error(), "changed since you registered it") || !strings.Contains(d.Status("mini"), "changed since you registered it") {
+		t.Errorf("err %v; status %q", err, d.Status("mini"))
+	}
+	if b, _ := os.ReadFile(d.LogPath("mini")); strings.Contains(string(b), "plugin replay") {
+		t.Error("the changed workspace's plugins ran")
+	}
+}
+
+// A config that can't be trusted (a relative local_workspaces entry) turns
+// rebuilds off and says why.
+func TestRelativeLocalWorkspaceDisablesRebuilds(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	os.WriteFile(cfg, []byte("local_workspaces = [\".\"]\n"), 0o644)
+	t.Setenv("CARTOGRAPHER_CONFIG", cfg)
+	var log bytes.Buffer
+	if rebuildEnabled(&common{}, &log) || !strings.Contains(log.String(), "must be an absolute path") {
+		t.Errorf("log %q", log.String())
 	}
 }

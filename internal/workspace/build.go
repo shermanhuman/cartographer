@@ -197,7 +197,8 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 
 	type checkout struct {
 		repo     Repo
-		root     string
+		src      string // the checkout archived
+		root     string // the archive's extraction
 		revision string
 		files    []string
 	}
@@ -222,7 +223,7 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 			return nil, fmt.Errorf("build: %s: archive: %w", r.Name, err)
 		}
 		logf("%s @ %s: %d files", r.Name, rev[:min(12, len(rev))], len(files))
-		cos = append(cos, checkout{r, root, rev, files})
+		cos = append(cos, checkout{r, src, root, rev, files})
 		m.Repos = append(m.Repos, bundle.Repo{Name: r.Name, URL: r.URL, Revision: rev})
 	}
 
@@ -240,7 +241,7 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 				return nil, fmt.Errorf("build: plugins digest: %w", err)
 			}
 		}
-		key, err := schemaKey(ctx, c, prep.revision, prep.repo, pdigest)
+		key, err := schemaKey(ctx, c, prep.revision, prep.repo, prep.src, pdigest)
 		if err != nil {
 			return nil, err
 		}
@@ -451,7 +452,8 @@ func archive(ctx context.Context, src, rev, dst string) ([]string, error) {
 	return files, nil
 }
 
-func schemaKey(ctx context.Context, c *Config, rev string, r Repo, pluginsDigest string) (string, error) {
+// schemaKey is the schema cache key; src is r's checkout (the one archived).
+func schemaKey(ctx context.Context, c *Config, rev string, r Repo, src, pluginsDigest string) (string, error) {
 	h := sha256.New()
 	fmt.Fprintf(h, "schema-version=%s\ncommand=%q\nprepare=%q\nprepare-repo=%q\nenv=%q\nplugins=%s\n",
 		c.Schema.Version, c.Schema.Command, c.Schema.Prepare, c.Schema.PrepareRepo, mapEnv(c.Schema.Env), pluginsDigest)
@@ -461,7 +463,7 @@ func schemaKey(ctx context.Context, c *Config, rev string, r Repo, pluginsDigest
 	}
 	if r.Name != "" {
 		for _, p := range c.Schema.CacheKey {
-			out, err := git(ctx, c.RepoPath(r), "ls-tree", "-r", rev, "--", p)
+			out, err := git(ctx, src, "ls-tree", "-r", rev, "--", p)
 			if err != nil {
 				return "", err
 			}
@@ -520,9 +522,10 @@ func runCmd(ctx context.Context, dir string, env, argv []string, stdout io.Write
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = append(childEnv(os.Environ()), env...)
-	// Once cancelled, don't wait long for grandchildren (sh -c) that keep
-	// the output pipes open.
+	// Cancelling ends the command's whole process group (ownGroup); after
+	// WaitDelay the group is killed and its output pipes closed.
 	cmd.WaitDelay = 5 * time.Second
+	ownGroup(cmd)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	if stdout != nil {

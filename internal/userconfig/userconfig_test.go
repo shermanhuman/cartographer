@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -137,8 +138,7 @@ workspaces = ["acme/map"] # published
 shop-app = "~/src/shop-app"
 `
 	p := use(t, orig)
-	dir := filepath.Join(t.TempDir(), "map")
-	os.MkdirAll(dir, 0o755)
+	dir := workspaceDir(t)
 	if err := AddLocalWorkspace(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ shop-app = "~/src/shop-app"
 		t.Fatalf("Load = %+v, %v\n%s", c, err, got)
 	}
 	// A second directory joins the array; a relative one is rejected.
-	other := filepath.Join(t.TempDir(), "other")
+	other := workspaceDir(t)
 	if err := AddLocalWorkspace(other); err != nil {
 		t.Fatal(err)
 	}
@@ -184,19 +184,106 @@ func TestLoadAutoRebuild(t *testing.T) {
 	}
 }
 
-// A directory already listed in another spelling (~, trailing slash) is not
+// A directory already listed in another spelling (a trailing slash) is not
 // added twice.
 func TestAddLocalWorkspaceDedupesSpellings(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("no home")
-	}
-	dir := filepath.Join(home, "src", "my-map")
-	p := use(t, "local_workspaces = [\"~/src/my-map/\"]\n")
+	dir := workspaceDir(t)
+	p := use(t, "local_workspaces = ["+strconv.Quote(dir+"/")+"]\n")
 	if err := AddLocalWorkspace(dir); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ := Load(); len(c.LocalWorkspaces) != 1 {
 		t.Errorf("added twice:\n%s", read(t, p))
+	}
+}
+
+// workspaceDir is a directory holding a cartographer.toml, symlinks resolved.
+func workspaceDir(t *testing.T) string {
+	t.Helper()
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	os.WriteFile(filepath.Join(dir, "cartographer.toml"), []byte("name = \"mini\"\n"), 0o644)
+	return dir
+}
+
+// A relative local_workspaces entry would trust whatever directory a query
+// runs in: Load rejects it, and returns entries absolute (~ expanded).
+func TestLoadRejectsRelativeLocalWorkspaces(t *testing.T) {
+	for _, entry := range []string{".", "map", "../map", "~user/map"} {
+		use(t, "local_workspaces = ["+strconv.Quote(entry)+"]\n")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "absolute") {
+			t.Errorf("%q: Load = %v", entry, err)
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home")
+	}
+	use(t, "local_workspaces = [\"~/src/map/\", \"/abs/map\"]\n")
+	c, err := Load()
+	if err != nil || !slices.Equal(c.LocalWorkspaces, []string{filepath.Join(home, "src", "map"), "/abs/map"}) {
+		t.Errorf("Load = %v, %v", c, err)
+	}
+}
+
+// workspace add records a digest of cartographer.toml: trust holds while
+// the file is unchanged, an edit (a pull of the map repo, a swapped
+// directory) needs a fresh add, and a directory never added is unknown.
+func TestTrustFollowsTheWorkspaceFile(t *testing.T) {
+	use(t, "")
+	dir := t.TempDir()
+	toml := filepath.Join(dir, "cartographer.toml")
+	os.WriteFile(toml, []byte("name = \"mini\"\n"), 0o644)
+	if got := Trust(dir); got != TrustUnknown {
+		t.Errorf("before add: %v", got)
+	}
+	if err := AddLocalWorkspace(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := Trust(dir); got != Trusted {
+		t.Errorf("after add: %v", got)
+	}
+	os.WriteFile(toml, []byte("name = \"mini\"\n[plugins.x]\ncommand = [\"evil\"]\n"), 0o644)
+	if got := Trust(dir); got != TrustChanged {
+		t.Errorf("after an edit: %v", got)
+	}
+	if err := AddLocalWorkspace(dir); err != nil { // re-adding refreshes it
+		t.Fatal(err)
+	}
+	if got := Trust(dir); got != Trusted {
+		t.Errorf("after re-adding: %v", got)
+	}
+	if c, _ := Load(); len(c.LocalWorkspaces) != 1 {
+		t.Errorf("re-adding duplicated the entry: %v", c.LocalWorkspaces)
+	}
+}
+
+// A symlink to a registered workspace is the same workspace; a retargeted
+// symlink is not trusted.
+func TestAddLocalWorkspaceResolvesSymlinks(t *testing.T) {
+	use(t, "")
+	real := t.TempDir()
+	os.WriteFile(filepath.Join(real, "cartographer.toml"), []byte("name = \"mini\"\n"), 0o644)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip(err)
+	}
+	if err := AddLocalWorkspace(real); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddLocalWorkspace(link); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := Load(); len(c.LocalWorkspaces) != 1 {
+		t.Errorf("symlink recorded twice: %v", c.LocalWorkspaces)
+	}
+	if got := Trust(link); got != Trusted {
+		t.Errorf("via the link: %v", got)
+	}
+	other := t.TempDir()
+	os.WriteFile(filepath.Join(other, "cartographer.toml"), []byte("name = \"mini\"\n"), 0o644)
+	os.Remove(link)
+	os.Symlink(other, link)
+	if got := Trust(link); got != TrustUnknown {
+		t.Errorf("retargeted link: %v", got)
 	}
 }

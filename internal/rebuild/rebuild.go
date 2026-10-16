@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -31,11 +32,28 @@ const Stale = 30 * time.Minute
 // one, so a broken plugin isn't rerun on every query.
 const FailBackoff = 5 * time.Minute
 
-// Timeout bounds a background rebuild (MCP server, serve).
-const Timeout = 15 * time.Minute
+// Timeout bounds an automatic rebuild (the detached child, or the MCP
+// server's and serve's goroutine).
+var Timeout = 15 * time.Minute
+
+// Heartbeat is how often a running rebuild refreshes its lock, so a live
+// build never ages out (Stale) however long it runs.
+var Heartbeat = time.Minute
 
 // ErrRunning means another rebuild of the workspace holds the lock.
 var ErrRunning = errors.New("a rebuild is already running")
+
+// ErrLost means a rebuild's lock was taken over while it ran (it outlived
+// Stale without a heartbeat); its outcome is not recorded.
+var ErrLost = errors.New("another rebuild took over the lock")
+
+// Result is what a successful rebuild built: the revisions (repo ->
+// commit) and the store they were imported into ("" when not imported).
+// Only an import counts as built (see Built).
+type Result struct {
+	DB        string
+	Revisions map[string]string
+}
 
 // Registered returns the first configured directory (user config
 // local_workspaces, recorded by `workspace add <dir>`) whose cartographer.toml
@@ -93,33 +111,74 @@ func Needed(rep *fresh.Report) bool {
 	return false
 }
 
-// Dir is the data directory holding rebuild state: per workspace a lock
-// file while a rebuild runs, a stamp of the last outcome (with the
-// revisions a successful one built), the last error and the last log.
+// Dir is the data directory holding rebuild state: per workspace, in its
+// own directory (StateDir), a lock file while a rebuild runs, a stamp of
+// the last outcome (with what a successful one imported), the last error,
+// the last log and the running build's scratch.
 type Dir struct{ Path string }
 
-func (d Dir) file(ws, ext string) string {
+// StateDir is ws's state directory: the name made file-safe plus a hash of
+// the exact name, so distinct names ("a/b", "a_b") never share one.
+func (d Dir) StateDir(ws string) string {
 	safe := strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_' {
 			return r
 		}
 		return '_'
 	}, ws)
-	return filepath.Join(d.Path, "rebuild", safe+ext)
+	sum := sha256.Sum256([]byte(ws))
+	return filepath.Join(d.Path, "rebuild", safe+"-"+hex.EncodeToString(sum[:4]))
 }
 
-func (d Dir) lockPath(ws string) string  { return d.file(ws, ".lock") }
-func (d Dir) stampPath(ws string) string { return d.file(ws, ".stamp") }
-func (d Dir) errorPath(ws string) string { return d.file(ws, ".error") }
+func (d Dir) lockPath(ws string) string  { return filepath.Join(d.StateDir(ws), "lock") }
+func (d Dir) stampPath(ws string) string { return filepath.Join(d.StateDir(ws), "stamp") }
+func (d Dir) errorPath(ws string) string { return filepath.Join(d.StateDir(ws), "error") }
 
 // LogPath is where a rebuild of ws writes its output.
-func (d Dir) LogPath(ws string) string { return d.file(ws, ".log") }
+func (d Dir) LogPath(ws string) string { return filepath.Join(d.StateDir(ws), "log") }
+
+// StampPath is the record of ws's last rebuild outcome.
+func (d Dir) StampPath(ws string) string { return d.stampPath(ws) }
 
 // Lock takes ws's lock: an exclusively created file holding the pid, the
 // start time and a token. A stale lock (see Running) is taken over under a
 // short-lived takeover lock, so of several processes finding it stale only
 // one proceeds. ErrRunning when another rebuild holds it.
 func (d Dir) Lock(ws string) (unlock func(), err error) {
+	h, err := d.lock(ws)
+	if err != nil {
+		return nil, err
+	}
+	return h.unlock, nil
+}
+
+// held is a lock this process took.
+type held struct {
+	path    string
+	content []byte
+}
+
+// owned reports whether the lock is still ours (not taken over).
+func (h *held) owned() bool {
+	b, err := os.ReadFile(h.path)
+	return err == nil && bytes.Equal(b, h.content)
+}
+
+// touch refreshes the lock's mtime while it is ours.
+func (h *held) touch() {
+	if h.owned() {
+		now := time.Now()
+		os.Chtimes(h.path, now, now)
+	}
+}
+
+func (h *held) unlock() {
+	if h.owned() { // after a takeover it is another's
+		os.Remove(h.path)
+	}
+}
+
+func (d Dir) lock(ws string) (*held, error) {
 	path := d.lockPath(ws)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -138,12 +197,7 @@ func (d Dir) Lock(ws string) (unlock func(), err error) {
 				os.Remove(path)
 				return nil, err
 			}
-			return func() {
-				// Only our own lock: after a takeover it is another's.
-				if b, err := os.ReadFile(path); err == nil && bytes.Equal(b, content) {
-					os.Remove(path)
-				}
-			}, nil
+			return &held{path, content}, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
@@ -161,25 +215,26 @@ func (d Dir) Lock(ws string) (unlock func(), err error) {
 func (d Dir) takeOver(ws string) bool {
 	path := d.lockPath(ws)
 	guard := path + ".takeover"
-	if fi, err := os.Stat(guard); err == nil && time.Since(fi.ModTime()) > time.Minute {
+	if b, err := os.ReadFile(guard); err == nil && stale(guard, b, time.Minute) {
 		os.Remove(guard) // left by a process that died mid-takeover
 	}
 	g, err := os.OpenFile(guard, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return false
 	}
+	fmt.Fprintf(g, "%d\n", os.Getpid())
 	g.Close()
 	defer os.Remove(guard)
 	seen, err := os.ReadFile(path)
 	if err != nil {
 		return errors.Is(err, os.ErrNotExist) // released meanwhile: try again
 	}
-	if !stale(path, seen) {
+	if !stale(path, seen, Stale) {
 		return false
 	}
 	tok := make([]byte, 8)
 	rand.Read(tok)
-	aside := path + ".stale-" + hex.EncodeToString(tok)
+	aside := path + ".stale-" + hex.EncodeToString(tok) // swept by Scratch if we die here
 	if err := os.Rename(path, aside); err != nil {
 		return errors.Is(err, os.ErrNotExist)
 	}
@@ -191,17 +246,18 @@ func (d Dir) takeOver(ws string) bool {
 	return true
 }
 
-// stale reports whether the lock at path with the given content belongs to
-// no running rebuild: its process is gone, or it is older than Stale.
-func stale(path string, content []byte) bool {
+// stale reports whether the lock (or guard) at path with the given content
+// (starting with a pid) belongs to no live process: its process is gone,
+// or it is older than maxAge.
+func stale(path string, content []byte, maxAge time.Duration) bool {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return true
 	}
-	if time.Since(fi.ModTime()) > Stale {
+	if time.Since(fi.ModTime()) > maxAge {
 		return true
 	}
-	pidField, _, _ := strings.Cut(string(content), " ")
+	pidField, _, _ := strings.Cut(strings.TrimSpace(string(content)), " ")
 	pid, err := strconv.Atoi(pidField)
 	return err == nil && !alive(pid)
 }
@@ -210,7 +266,7 @@ func stale(path string, content []byte) bool {
 func (d Dir) Running(ws string) (since time.Time, ok bool) {
 	path := d.lockPath(ws)
 	b, err := os.ReadFile(path)
-	if err != nil || stale(path, b) {
+	if err != nil || stale(path, b, Stale) {
 		return time.Time{}, false
 	}
 	fi, err := os.Stat(path)
@@ -236,38 +292,69 @@ func (d Dir) Due(ws string) bool {
 	return time.Since(fi.ModTime()) > FailBackoff
 }
 
-// Built returns the revisions (repo -> commit) the last rebuild built when
-// it succeeded, else nil.
-func (d Dir) Built(ws string) map[string]string {
+// Built returns the revisions the last rebuild imported into the store at
+// db when it succeeded, and when that was; nil when it didn't (a build
+// not imported there changed nothing a query from that store sees).
+func (d Dir) Built(ws, db string) (map[string]string, time.Time) {
 	b, err := os.ReadFile(d.stampPath(ws))
-	if err != nil || !strings.HasPrefix(string(b), "ok") {
-		return nil
+	if err != nil || !strings.HasPrefix(string(b), "ok") || db == "" {
+		return nil, time.Time{}
 	}
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")[1:]
+	if len(lines) == 0 || lines[0] != "db "+filepath.Clean(db) {
+		return nil, time.Time{}
+	}
 	revs := map[string]string{}
-	for _, l := range lines {
+	for _, l := range lines[1:] {
 		if name, rev, ok := strings.Cut(l, " "); ok {
 			revs[name] = rev
 		}
 	}
-	return revs
+	var at time.Time
+	if fi, err := os.Stat(d.stampPath(ws)); err == nil {
+		at = fi.ModTime()
+	}
+	return revs, at
 }
 
-// Run performs one rebuild under ws's lock and stamps the outcome: the
-// revisions built on success, the error (kept for Status until the next
-// success) on failure. Everything the rebuild does, its setup included,
-// belongs in build, so any failure backs off. A cancelled build (shutdown)
-// is not stamped. ErrRunning (nothing built or stamped) when the lock is
-// held.
-func (d Dir) Run(ws string, build func() (map[string]string, error)) error {
-	unlock, err := d.Lock(ws)
+// Run performs one rebuild under ws's lock, refreshing it every Heartbeat,
+// and stamps the outcome: what was imported on success, the error (kept
+// for Status until the next success) on failure. Everything the rebuild
+// does, its setup included, belongs in build, so any failure backs off. A
+// cancelled build (shutdown) is not stamped, nor one whose lock was taken
+// over meanwhile (ErrLost). ErrRunning (nothing built or stamped) when the
+// lock is held.
+func (d Dir) Run(ws string, build func() (Result, error)) error {
+	h, err := d.lock(ws)
 	if err != nil {
 		return err
 	}
-	defer unlock()
-	revs, err := build()
+	defer h.unlock()
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(Heartbeat)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				h.touch()
+			}
+		}
+	}()
+	res, err := build()
+	close(stop)
+	<-done
+	if !h.owned() {
+		if err != nil {
+			return fmt.Errorf("%w (its build: %v)", ErrLost, err)
+		}
+		return ErrLost
+	}
 	if !errors.Is(err, context.Canceled) {
-		d.stamp(ws, revs, err)
+		d.stamp(ws, res, err)
 	}
 	return err
 }
@@ -275,11 +362,11 @@ func (d Dir) Run(ws string, build func() (map[string]string, error)) error {
 // Fail records a rebuild that could not start (e.g. the child process), so
 // it backs off and Status reports it like a failed build.
 func (d Dir) Fail(ws string, err error) {
-	os.MkdirAll(filepath.Dir(d.stampPath(ws)), 0o755)
-	d.stamp(ws, nil, err)
+	os.MkdirAll(d.StateDir(ws), 0o755)
+	d.stamp(ws, Result{}, err)
 }
 
-func (d Dir) stamp(ws string, revs map[string]string, err error) {
+func (d Dir) stamp(ws string, res Result, err error) {
 	var b strings.Builder
 	status := "ok"
 	if err != nil {
@@ -289,29 +376,34 @@ func (d Dir) stamp(ws string, revs map[string]string, err error) {
 		os.Remove(d.errorPath(ws))
 	}
 	fmt.Fprintf(&b, "%s %s\n", status, time.Now().UTC().Format(time.RFC3339))
-	names := make([]string, 0, len(revs))
-	for name := range revs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		fmt.Fprintf(&b, "%s %s\n", name, revs[name])
+	if err == nil && res.DB != "" {
+		fmt.Fprintf(&b, "db %s\n", filepath.Clean(res.DB))
+		names := make([]string, 0, len(res.Revisions))
+		for name := range res.Revisions {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Fprintf(&b, "%s %s\n", name, res.Revisions[name])
+		}
 	}
 	os.WriteFile(d.stampPath(ws), []byte(b.String()), 0o644)
 }
 
-// Scratch returns a new scratch directory for a rebuild of ws, first
-// removing any left by a rebuild that died. The caller holds the lock.
+// Scratch returns a new scratch directory for a rebuild of ws in its
+// state directory, first removing what a rebuild or takeover that died
+// left there (scratch, moved-aside locks). The caller holds the lock.
 func (d Dir) Scratch(ws string) (string, error) {
-	base := d.file(ws, ".build-")
-	old, _ := filepath.Glob(base + "*")
-	for _, dir := range old {
-		os.RemoveAll(dir)
+	dir := d.StateDir(ws)
+	old, _ := filepath.Glob(filepath.Join(dir, "build-*"))
+	aside, _ := filepath.Glob(filepath.Join(dir, "lock.stale-*"))
+	for _, p := range append(old, aside...) {
+		os.RemoveAll(p)
 	}
-	if err := os.MkdirAll(filepath.Dir(base), 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	return os.MkdirTemp(filepath.Dir(base), filepath.Base(base)+"*")
+	return os.MkdirTemp(dir, "build-")
 }
 
 // Status is a one-line note for headers and status: "rebuilding since …"
