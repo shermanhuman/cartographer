@@ -118,3 +118,25 @@ func TestLocateScansSiblingsOnlyWhileUnmatched(t *testing.T) {
 		t.Errorf("explicit = %v", got)
 	}
 }
+
+func TestConfiguredCheckoutPaths(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	app := filepath.Join(home, "src", "app")
+	os.MkdirAll(app, 0o755)
+	sh(t, app, "git", "init", "-q", "-b", "main")
+	rev := commit(t, app, "a.txt", "a")
+	repos := []Repo{{Name: "app", Revision: rev}, {Name: "gone", Revision: rev}}
+	found := LocateFrom(ctx, repos, Checkout{}, map[string]string{"app": "~/src/app", "gone": "~/src/gone"})
+	if found["app"] != app {
+		t.Errorf("~ not expanded: %q", found["app"])
+	}
+	rep := Check(ctx, repos, found)
+	if rep.Repos[0].Note != "" || rep.Repos[0].Behind != 0 {
+		t.Errorf("app: %+v", rep.Repos[0])
+	}
+	if want := "configured checkout path not found: " + filepath.Join(home, "src", "gone"); rep.Repos[1].Note != want {
+		t.Errorf("gone: note %q, want %q", rep.Repos[1].Note, want)
+	}
+}
