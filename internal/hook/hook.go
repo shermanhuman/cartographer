@@ -19,15 +19,17 @@ type Input struct {
 	Event     string `json:"hook_event_name"`
 }
 
-// Nudge is the one line added before the first Grep of a session in a mapped repo.
+// Nudge is the one line added before the first Grep of a session in a mapped
+// repo that has code facts.
 const Nudge = "cartographer has a map of this repository: the map_find / map_callers / map_impact tools answer where-defined, who-calls and what-breaks questions with fewer tokens than grep."
 
 var safeID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
-// Grep handles a PreToolUse(Grep) hook. mapped reports whether a directory is
-// inside a mapped repository; it runs at most once per session. Grep writes
-// nothing unless it should nudge.
-func Grep(ctx context.Context, in io.Reader, out io.Writer, dataDir string, mapped func(ctx context.Context, cwd string) bool) {
+// Grep handles a PreToolUse(Grep) hook. hasCode reports whether a directory
+// is inside a mapped repository with code facts (a docs-only repository gets
+// no nudge: map_find has nothing to offer over grep there); it runs at most
+// once per session. Grep writes nothing unless it should nudge.
+func Grep(ctx context.Context, in io.Reader, out io.Writer, dataDir string, hasCode func(ctx context.Context, cwd string) bool) {
 	var h Input
 	if err := json.NewDecoder(io.LimitReader(in, 1<<20)).Decode(&h); err != nil || h.Cwd == "" {
 		return
@@ -40,15 +42,15 @@ func Grep(ctx context.Context, in io.Reader, out io.Writer, dataDir string, mapp
 			return // already checked this session
 		}
 	}
-	// Mark the session either way, so later Greps (mapped or not) skip the
+	// Mark the session either way, so later Greps (nudged or not) skip the
 	// repository scan. Errors are ignored: the hook fails open.
-	isMapped := mapped(ctx, h.Cwd)
+	nudge := hasCode(ctx, h.Cwd)
 	if marker != "" {
 		os.MkdirAll(dir, 0o755)
 		os.WriteFile(marker, nil, 0o644)
 		cleanup(dir)
 	}
-	if !isMapped {
+	if !nudge {
 		return
 	}
 	event := h.Event

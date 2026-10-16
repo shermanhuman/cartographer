@@ -4,7 +4,7 @@
       "command": "sh",
       "args": [
         "-c",
-        "if command -v cartographer >/dev/null 2>&1; then exec cartographer mcp; elif command -v mise >/dev/null 2>&1; then exec mise exec github:shermanhuman/cartographer -- cartographer mcp; else echo \"cartographer not found: install it with  mise use -g github:shermanhuman/cartographer  (or put it on PATH)\" >&2; exit 127; fi"
+        "p=$(command -v cartographer); s=; case \"$p\" in */shims/*) s=$p; p= ;; esac; [ -n \"$p\" ] && m=$(command -v mise) && [ \"$p\" -ef \"$m\" ] && s=$p && p=; if [ -z \"$p\" ] && command -v mise >/dev/null 2>&1; then p=$(mise -C / exec github:shermanhuman/cartographer -- sh -c 'command -v cartographer' </dev/null); case \"$p\" in */shims/*) p= ;; esac; fi; [ -z \"$p\" ] && p=$s; if [ -n \"$p\" ]; then exec \"$p\" mcp; fi; echo \"cartographer not found: install it with  mise use -g github:shermanhuman/cartographer  (or put it on PATH)\" >&2; exit 127"
       ]
     }
   }

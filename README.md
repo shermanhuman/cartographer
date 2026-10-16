@@ -105,7 +105,11 @@ executable that prints [facts v1](docs/facts-format.md) JSON is a plugin.
 
 In CI, call the reusable workflows: `build-snapshot.yml` from the workspace
 repository (on dispatch and weekly), and `pr-impact.yml` from each product
-repository's pull requests for a sticky impact comment. Pin both the
+repository's pull requests for a sticky impact comment. App permissions
+apply to the whole installation, so scope each token: the reusable
+workflows mint theirs with `permission-contents: read`, and a product
+repository that dispatches a rebuild on push mints its token with
+`repositories: <workspace repo>` and `permission-contents: write`. Pin both the
 workflow ref (`@v0.1.0`) and its `cartographer-version` input to the same
 release; the workflows install exactly that binary. In your own CI, keep
 the token away from plugin code: `cartographer build --fetch-only` clones or

@@ -217,6 +217,15 @@ func (s *Store) Prune(ctx context.Context, keep int) error {
 	return nil
 }
 
+// RepoHasCode reports whether repo has at least one module or function in
+// snapshot.
+func (s *Store) RepoHasCode(ctx context.Context, snapshot, repo string) (bool, error) {
+	var ok bool
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM modules WHERE snapshot_id = ? AND repo = ?)
+		OR EXISTS(SELECT 1 FROM functions WHERE snapshot_id = ? AND repo = ?)`, snapshot, repo, snapshot, repo).Scan(&ok)
+	return ok, err
+}
+
 // RepoInfo is a repository recorded in a snapshot.
 type RepoInfo struct{ Name, URL, Revision string }
 
