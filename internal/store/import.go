@@ -202,6 +202,10 @@ func (im *importer) definitions(d *facts.Doc) error {
 		}
 	}
 	for _, f := range d.Functions {
+		// Bundles are validated on read; targetIndex enumerates the range.
+		if f.MinArity < 0 || f.MinArity > f.Arity || f.Arity > facts.MaxArity {
+			return fmt.Errorf("function %s: arity range %d..%d out of bounds (0..%d)", f.ID, f.MinArity, f.Arity, facts.MaxArity)
+		}
 		im.funcs[f.ID], im.fnRepo[f.ID] = f, repo
 		if err := im.exec(`INSERT INTO functions(snapshot_id, id, repo, module, name, arity, min_arity, kind, file, line, clauses, fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 			im.sid, f.ID, repo, f.Module, f.Name, f.Arity, f.MinArity, f.Kind, f.File, f.Line, js(nonNil(f.Clauses)), f.Fingerprint); err != nil {

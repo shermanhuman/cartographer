@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/shermanhuman/cartographer/internal/facts"
 	"github.com/shermanhuman/cartographer/internal/query"
 	"github.com/shermanhuman/cartographer/internal/store"
 )
@@ -119,7 +120,7 @@ type sigChange struct {
 func arities(fns []dfn) []int {
 	set := map[int]bool{}
 	for _, f := range fns {
-		for a := f.MinArity; a <= f.Arity; a++ {
+		for a := max(f.MinArity, 0); a <= min(f.Arity, facts.MaxArity); a++ {
 			set[a] = true
 		}
 	}

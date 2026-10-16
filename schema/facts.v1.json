@@ -33,7 +33,7 @@
       "type": "object", "required": ["id", "name", "arity", "min_arity", "file"], "additionalProperties": false,
       "properties": {
         "id": {"type": "string"}, "module": {"type": "string"}, "name": {"type": "string"},
-        "arity": {"type": "integer", "minimum": 0}, "min_arity": {"type": "integer", "minimum": 0},
+        "arity": {"type": "integer", "minimum": 0, "maximum": 255}, "min_arity": {"type": "integer", "minimum": 0, "maximum": 255},
         "kind": {"type": "string"}, "file": {"type": "string"}, "line": {"type": "integer"},
         "clauses": {"type": "array", "items": {"type": "integer"}},
         "fingerprint": {"type": "string"}

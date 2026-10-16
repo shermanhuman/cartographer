@@ -23,7 +23,8 @@ validator: `internal/facts`. Check a plugin's output with
   every `file` must be listed in it.
 - `functions[].min_arity` is the smallest arity the definition accepts
   (default arguments); the core resolves calls of any arity in
-  `min_arity..arity`.
+  `min_arity..arity`. Both satisfy `0 <= min_arity <= arity <= 255`
+  (Erlang's maximum arity); documents outside that range are rejected.
 - `functions[].fingerprint` is an opaque hash of the function's source.
   Annotations that cite a function go stale when its fingerprint changes.
 

@@ -199,6 +199,24 @@ func TestImportRefusesOtherWorkspacesID(t *testing.T) {
 	}
 }
 
+// An unvalidated bundle with an absurd arity range fails instead of
+// expanding every arity into the call-target index.
+func TestImportRejectsHugeArity(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	b, err := bundle.Read(mini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Facts[0].Functions[0].MinArity, b.Facts[0].Functions[0].Arity = 0, 1_000_000_000
+	if err := s.ImportBundle(context.Background(), b); err == nil || !strings.Contains(err.Error(), "arity") {
+		t.Errorf("got %v", err)
+	}
+}
+
 func TestAnnotationExtraFieldsPreserved(t *testing.T) {
 	s, _ := imported(t)
 	var body string

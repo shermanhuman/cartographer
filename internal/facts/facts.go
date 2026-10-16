@@ -59,6 +59,10 @@ type Module struct {
 	Language  string   `json:"language,omitempty"`
 }
 
+// MaxArity bounds functions[].arity (Erlang's limit): the core expands
+// min_arity..arity per function, so the range must stay small.
+const MaxArity = 255
+
 type Function struct {
 	ID       string `json:"id"`
 	Module   string `json:"module,omitempty"` // module id
@@ -213,6 +217,9 @@ func (d *Doc) Validate() error {
 		funcs[f.ID] = true
 		if f.Module != "" && !modules[f.Module] {
 			add("%s.module: unknown module %q", w, f.Module)
+		}
+		if f.Arity < 0 || f.Arity > MaxArity {
+			add("%s.arity: must be between 0 and %d", w, MaxArity)
 		}
 		if f.MinArity > f.Arity || f.MinArity < 0 {
 			add("%s.min_arity: must be between 0 and arity", w)
