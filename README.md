@@ -63,6 +63,7 @@ cd my-project-map
 cartographer init                  # first time: writes a commented cartographer.toml
 cartographer build --local --import   # every sibling checkout at its HEAD, plugins, import
 cartographer workspace add .       # trust it: queries rebuild it when checkouts move on
+cd ../my-app                       # query from a mapped repository
 cartographer status                # snapshot, freshness against your checkouts
 ```
 
@@ -73,9 +74,12 @@ snapshots per workspace in the store (as `import` and `pull` do).
 
 `workspace add <dir>` registers the workspace once, so the map keeps itself
 fresh. Registering is the trust step, like `mise trust`: a rebuild runs the
-workspace's plugin commands, so cartographer rebuilds only workspaces you
-added, never one it merely finds beside your repository (`status` suggests
-the command when it sees one). From then on, when you query from a checkout
+workspace's plugin commands, so cartographer records a digest of
+`cartographer.toml` and rebuilds only workspaces you added, and only while
+that file is unchanged. After it changes (a pull of the map repository),
+`status` says `cartographer.toml changed since you registered it`: review
+it and run `workspace add` again. A workspace merely found beside your
+repository is never run (`status` suggests the command). From then on, when you query from a checkout
 whose workspace checkout has commits past the snapshot, cartographer
 rebuilds in the background (a detached `build --local --import`; the MCP
 server builds in-process) and the header says `rebuilding since 10:42` until

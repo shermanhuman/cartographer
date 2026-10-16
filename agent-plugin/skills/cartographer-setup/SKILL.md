@@ -22,11 +22,14 @@ disable-model-invocation: true
    disposable database, the capture command, and `cache_key` paths
    (migrations) so it reruns only when they change.
 5. **Build locally:** `cartographer build --local --import` in the
-   workspace maps every sibling checkout at its HEAD (no fetch, no token),
-   then `cartographer status` and `cartographer serve --open`. To keep it
+   workspace maps every sibling checkout at its HEAD (no fetch, no token);
+   then, from a product repository (`cd ../my-app`), `cartographer status`
+   and `cartographer serve --open`. To keep it
    fresh, register it once: `cartographer workspace add <dir>`. That is the
    trust step (like `mise trust`): rebuilds run the workspace's plugin
-   commands, so only registered workspaces are rebuilt. Then a query from a
+   commands, so only registered workspaces are rebuilt, and only while
+   `cartographer.toml` matches the digest recorded then; after a change,
+   review it and add it again. Then a query from a
    checkout whose workspace checkout has commits past the snapshot
    rebuilds in the background ("rebuilding since …" in the header).
    Uncommitted edits stay ⚠. Off switches: `--no-rebuild`,
