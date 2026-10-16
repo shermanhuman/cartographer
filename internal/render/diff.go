@@ -409,7 +409,12 @@ func Diff(ctx context.Context, s *store.Store, baseID, headID string) (string, e
 		fmt.Fprintf(&b, "### Blast radius (callers in head, depth ≤%d)\n\n", DiffDepth)
 		var lines []string
 		for _, d := range dangles {
-			lines = append(lines, fmt.Sprintf("- %s still calls removed `%s` at %s (now unresolved)", link(head.fns[d.From].Label, head.fns[d.From].Repo, d.File, d.Line), d.Target, loc(d.File, d.Line)))
+			caller := link(head.fns[d.From].Label, head.fns[d.From].Repo, d.File, d.Line)
+			if d.Removed {
+				lines = append(lines, fmt.Sprintf("- %s still calls removed `%s` at %s (now unresolved)", caller, d.Target, loc(d.File, d.Line)))
+			} else {
+				lines = append(lines, fmt.Sprintf("- %s calls `%s` at %s, which no longer resolves", caller, d.Target, loc(d.File, d.Line)))
+			}
 		}
 		listed := map[string]bool{}
 		for _, list := range [][]query.Hop{hops, danglingHops} {
@@ -586,6 +591,7 @@ func Diff(ctx context.Context, s *store.Store, baseID, headID string) (string, e
 type dangling struct {
 	From, Target, File string
 	Line               int
+	Removed            bool // the target function is gone (else it no longer resolves)
 }
 
 // danglingCalls returns head call sites that are now unresolved because of
@@ -630,10 +636,8 @@ func danglingCalls(ctx context.Context, db *sql.DB, baseID, headID string, head 
 		}
 		resolvable := kind != "dynamic" && !strings.HasPrefix(kind, "js_")
 		isLocal := !strings.Contains(d.Target, ".")
-		switch {
-		case wasResolved[[2]string{d.From, d.Target}],
-			qualified[d.Target],
-			resolvable && isLocal && local[head.fns[d.From].Module+"|"+d.Target]:
+		d.Removed = qualified[d.Target] || resolvable && isLocal && local[head.fns[d.From].Module+"|"+d.Target]
+		if d.Removed || wasResolved[[2]string{d.From, d.Target}] {
 			out = append(out, d)
 		}
 	}

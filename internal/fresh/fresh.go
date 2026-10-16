@@ -236,8 +236,9 @@ func Check(ctx context.Context, repos []Repo, paths map[string]string) *Report {
 				break
 			}
 			fmt.Sscanf(n, "%d", &st.Behind)
-			// -z: paths verbatim, as facts record them (no C-quoting).
-			if out, err := gitRaw(ctx, st.Path, "diff", "--name-only", "-z", "--end-of-options", r.Revision, "--"); err == nil {
+			// -z: paths verbatim, as facts record them (no C-quoting); --no-renames:
+			// a renamed file is changed at its old path too.
+			if out, err := gitRaw(ctx, st.Path, "diff", "--name-only", "-z", "--no-renames", "--end-of-options", r.Revision, "--"); err == nil {
 				for _, f := range strings.Split(out, "\x00") {
 					if f != "" {
 						st.Changed[f] = true

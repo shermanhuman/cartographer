@@ -138,3 +138,14 @@ test('deep call chains do not overflow the walk', () => {
     assert.deepEqual(calls.map(c => c.target), [{name: 'then', arity: 1}, {module: 'q', name: 'then', arity: 1}]);
   } finally { fs.rmSync(root, {recursive: true}); }
 });
+
+test('arity is clamped to the facts format bound of 255', () => {
+  const root = tmp();
+  try {
+    fs.mkdirSync(path.join(root, 'assets/js'), {recursive: true});
+    const params = Array.from({length: 300}, (_, i) => `p${i}`).join(', ');
+    fs.writeFileSync(path.join(root, 'assets/js/wide.js'), `function wide(${params}) { return p0; }`);
+    const doc = extract({repo: 'x', root});
+    assert.deepEqual([fn(doc, 'wide').arity, fn(doc, 'wide').min_arity], [255, 255]);
+  } finally { fs.rmSync(root, {recursive: true}); }
+});

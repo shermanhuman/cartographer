@@ -289,13 +289,26 @@ func (s *Session) chooseFrom(ctx context.Context, co fresh.Checkout) (string, er
 		}
 		return "", &ErrNotMapped{Workspaces: names}
 	}
-	// An origin match anywhere outranks a directory-name match, so a newer
-	// workspace with a same-named repo can't shadow the right project.
+	// A [checkouts] path naming this checkout outranks everything (a fork's
+	// origin matches no workspace URL); then an origin match anywhere
+	// outranks a directory-name match, so a newer workspace with a
+	// same-named repo can't shadow the right project.
 	repos := make([][]fresh.Repo, len(names))
 	for i, ws := range names {
 		if repos[i], err = s.repos(ctx, latest[ws]); err != nil {
 			return "", err
 		}
+	}
+	if cfg, _ := userconfig.Load(); cfg != nil {
+		for i, ws := range names {
+			for _, r := range repos[i] {
+				if p, ok := cfg.Checkouts[r.Name]; ok && samePath(fresh.ExpandHome(p), co.Root) {
+					return latest[ws], nil
+				}
+			}
+		}
+	}
+	for i, ws := range names {
 		if co.MatchOrigin(repos[i]) != "" {
 			return latest[ws], nil
 		}
@@ -336,4 +349,18 @@ func (s *Session) Mapped(ctx context.Context) bool {
 	}
 	_, err := s.chooseFrom(ctx, co)
 	return err == nil
+}
+
+// samePath reports whether a and b name the same directory, through symlinks
+// (macOS temp dirs live under /var -> /private/var).
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ra, err1 := filepath.EvalSymlinks(a)
+	rb, err2 := filepath.EvalSymlinks(b)
+	if err1 != nil || err2 != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return ra == rb
 }

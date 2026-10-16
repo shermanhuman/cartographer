@@ -464,7 +464,7 @@ func TestDiffDanglingLostArity(t *testing.T) {
 	if !strings.Contains(got, "/1, /2 → /2") {
 		t.Fatalf("want create /1, /2 → /2 signature change:\n%s", got)
 	}
-	if !strings.Contains(got, "still calls removed `Shop.Orders.create/1` at lib/shop_web/order_controller.ex:9 (now unresolved)") {
+	if !strings.Contains(got, "calls `Shop.Orders.create/1` at lib/shop_web/order_controller.ex:9, which no longer resolves") || strings.Contains(got, "still calls removed") {
 		t.Errorf("ShopWeb.OrderController.create/2 should be flagged as a dangling caller:\n%s", got)
 	}
 }

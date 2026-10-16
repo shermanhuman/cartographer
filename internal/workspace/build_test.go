@@ -625,7 +625,7 @@ func TestFetchOnlyRejectsStaleUserCheckout(t *testing.T) {
 	}
 	commit(t, repo, "lib/shop/new.ex")
 	err := Fetch(context.Background(), c, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "behind origin") {
-		t.Fatalf("stale checkout: err = %v, want a behind-origin error", err)
+	if err == nil || !strings.Contains(err.Error(), "differs from origin") {
+		t.Fatalf("stale checkout: err = %v, want a differs-from-origin error", err)
 	}
 }

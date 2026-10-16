@@ -182,3 +182,18 @@ func TestCheckKeepsUnicodePathsRaw(t *testing.T) {
 		t.Errorf("changed = %v", rep.Repos[0].Changed)
 	}
 }
+
+// A rename changes the file facts cite at the old path; git's default rename
+// detection would list only the new one.
+func TestCheckReportsRenamedFromPath(t *testing.T) {
+	ctx := context.Background()
+	app := t.TempDir()
+	sh(t, app, "git", "init", "-q", "-b", "main")
+	rev := commit(t, app, "lib/a.ex", "defmodule A do\nend\n")
+	sh(t, app, "git", "mv", "lib/a.ex", "lib/b.ex")
+	sh(t, app, "git", "commit", "-qm", "rename")
+	rep := Check(ctx, []Repo{{Name: "app", Revision: rev}}, map[string]string{"app": app})
+	if !rep.Changed("app", "lib/a.ex") || !rep.Changed("app", "lib/b.ex") {
+		t.Errorf("changed = %v", rep.Repos[0].Changed)
+	}
+}

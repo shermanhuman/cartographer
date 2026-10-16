@@ -82,6 +82,10 @@ workspaces = ["my-org/my-project-map"]
 shop-worker = "~/src/shop-worker"   # repository name = local path
 ```
 
+A checkout whose `origin` is a fork or mirror (a URL no workspace lists)
+maps only through its `[checkouts]` entry; otherwise cartographer never
+guesses across projects by directory name.
+
 ## Map your project
 
 A workspace repository holds `cartographer.toml` (the repositories and their

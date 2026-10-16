@@ -10,6 +10,7 @@ import {parse} from './vendor/acorn.mjs'; // acorn 8.15.0, MIT (vendor/ACORN-LIC
 export const VERSION = '0.1.0';
 const EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 const FUNCTION_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
+const MAX_ARITY = 255;
 const USAGE = 'usage: node extract.mjs --repo NAME --root DIR [--revision SHA] [--source-roots assets/js]';
 
 export function parseArgs(argv) {
@@ -214,14 +215,15 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js']}) {
         const i = stack.length - 1;
         const {line, column} = node.loc.start;
         const name = functionName(stack, i) ?? `anonymous@${line}:${column}`;
-        const arity = node.params.length;
+        // The facts format bounds arity at 255 (the Erlang limit).
+        const arity = Math.min(node.params.length, MAX_ARITY);
         const base = `${moduleId}:${name}/${arity}`;
         const n = (seen.get(base) ?? 0) + 1;
         seen.set(base, n);
         const id = n === 1 ? base : `${base}#${n}`;
         functions.push({
           id, module: moduleId, name, arity,
-          min_arity: node.params.filter(p => p.type !== 'AssignmentPattern' && p.type !== 'RestElement').length,
+          min_arity: Math.min(node.params.filter(p => p.type !== 'AssignmentPattern' && p.type !== 'RestElement').length, arity),
           kind: kindOf(node, stack[i - 1]), file, line, clauses: [line],
           fingerprint: fingerprint(parsed.tokens, node),
         });

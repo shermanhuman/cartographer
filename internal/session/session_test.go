@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -420,5 +421,27 @@ func TestCancelledCallIsNotCached(t *testing.T) {
 	sess.Query(cctx)
 	if q, _, err := sess.Query(context.Background()); err != nil || q.Snapshot != "snapshot-20261015T120000Z" {
 		t.Errorf("live Query after a cancelled one: %v", err)
+	}
+}
+
+// A fork's origin disagrees with every workspace URL; an explicit [checkouts]
+// path in the user config still maps it.
+func TestChooseUsesExplicitCheckoutForAFork(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	importAs(t, s, "acme", "snapshot-20261015T120000Z", "")
+	app := filepath.Join(t.TempDir(), "shop-app")
+	gitInit(t, app, "git@github.com:me/shop-app.git")
+	sess := &Session{Store: s, Cwd: app}
+	t.Setenv("CARTOGRAPHER_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	if _, err := sess.choose(ctx); err == nil {
+		t.Fatal("a fork with no [checkouts] entry was mapped")
+	}
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	os.WriteFile(cfg, []byte("[checkouts]\nshop-app = "+strconv.Quote(app)+"\n"), 0o644)
+	t.Setenv("CARTOGRAPHER_CONFIG", cfg)
+	if id, err := sess.choose(ctx); err != nil || id != "snapshot-20261015T120000Z" {
+		t.Errorf("explicit checkout ignored: %q, %v", id, err)
 	}
 }
