@@ -413,3 +413,191 @@ func TestArchiveErrorDoesNotHang(t *testing.T) {
 		t.Fatal("archive hung after an extraction error")
 	}
 }
+
+func commit(t *testing.T, repo, file string) string {
+	t.Helper()
+	write(t, filepath.Join(repo, file), "// "+file+"\n")
+	run(t, repo, "git", "add", ".")
+	run(t, repo, "git", "commit", "-qm", file)
+	return run(t, repo, "git", "rev-parse", "HEAD")
+}
+
+// --fetch on an existing checkout builds the upstream revision: a fetch moves
+// only origin/*, not the local branch HEAD points at.
+func TestBuildFetchExistingCheckoutUsesUpstream(t *testing.T) {
+	for _, managed := range []bool{true, false} {
+		t.Run(fmt.Sprint("managed=", managed), func(t *testing.T) {
+			ws, repo, _ := setup(t)
+			c, _ := Load(ws)
+			c.Schema = nil
+			c.Repos[0].URL = repo
+			c.Repos[0].Path = filepath.Join(t.TempDir(), "clone")
+			if !managed { // a developer's own checkout
+				run(t, repo, "git", "clone", "-q", repo, c.Repos[0].Path)
+			}
+			build := func() string {
+				t.Helper()
+				m, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: t.TempDir(), Fetch: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return m.Repos[0].Revision
+			}
+			build()
+			upstream := commit(t, repo, "lib/shop/new.ex")
+			if got := build(); got != upstream {
+				t.Errorf("second fetch build = %s, want upstream %s", got, upstream)
+			}
+			// A configured branch resolves against origin too.
+			run(t, repo, "git", "branch", "release")
+			c.Repos[0].Ref = "release"
+			build()
+			run(t, repo, "git", "checkout", "-q", "release")
+			rel := commit(t, repo, "lib/shop/rel.ex")
+			run(t, repo, "git", "checkout", "-q", "main")
+			if got := build(); got != rel {
+				t.Errorf("ref=release build = %s, want %s", got, rel)
+			}
+		})
+	}
+}
+
+// Fetch (build --fetch-only) is the only step that holds the token: it runs
+// no plugin or prepare, stores no credential, and leaves everything a later
+// Build without Fetch needs, offline and without a token.
+func TestFetchOnlyThenOfflineBuild(t *testing.T) {
+	const tok = "ghs_fetchonly"
+	t.Setenv("GH_TOKEN", tok)
+	ws, repo, _ := setup(t)
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	run(t, repo, "git", "clone", "-q", "--bare", repo, bare)
+	run(t, bare, "git", "config", "uploadpack.allowFilter", "true")
+	run(t, bare, "git", "config", "uploadpack.allowAnySHA1InWant", "true")
+	c, _ := Load(ws)
+	c.Repos[0].URL = "file://" + bare
+	clone := filepath.Join(t.TempDir(), "clone", "shop-app")
+	c.Repos[0].Path = clone
+	marker := filepath.Join(t.TempDir(), "ran")
+	p := c.Plugins["fake"]
+	p.Command = []string{"sh", "-c", "echo plugin >> " + marker + " && " + p.Command[2], "plugin", "{root}"}
+	c.Plugins["fake"] = p
+	c.Schema.Prepare = "echo prepare >> " + marker
+
+	fetchOnly := func() {
+		t.Helper()
+		if err := Fetch(context.Background(), c, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(marker); err == nil {
+			t.Fatalf("fetch-only ran a plugin or prepare: %s", mustRead(t, marker))
+		}
+		if cfg := run(t, clone, "git", "config", "--local", "--list"); strings.Contains(cfg, "extraheader") || strings.Contains(cfg, tok) ||
+			strings.Contains(cfg, base64.StdEncoding.EncodeToString([]byte("x-access-token:"+tok))) {
+			t.Fatalf("clone config stores a credential:\n%s", cfg)
+		}
+	}
+	offlineBuild := func(want string) {
+		t.Helper()
+		t.Setenv("GH_TOKEN", "")
+		os.Rename(bare, bare+".gone") // no network either
+		defer os.Rename(bare+".gone", bare)
+		defer t.Setenv("GH_TOKEN", tok)
+		m, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Repos[0].Revision != want {
+			t.Errorf("revision = %s, want %s", m.Repos[0].Revision, want)
+		}
+	}
+	fetchOnly()
+	if got := run(t, clone, "git", "config", "remote.origin.partialclonefilter"); got != "blob:none" {
+		t.Fatalf("clone is not partial (filter %q)", got)
+	}
+	offlineBuild(run(t, repo, "git", "rev-parse", "HEAD"))
+
+	// Upstream moves: the next fetch-only must move what the build uses.
+	os.Remove(marker)
+	upstream := commit(t, repo, "lib/shop/next.ex")
+	run(t, repo, "git", "push", "-q", bare, "main")
+	fetchOnly()
+	offlineBuild(upstream)
+}
+
+func TestSchemaCacheKeysOnRevisionWithoutCacheKey(t *testing.T) {
+	ws, repo, log := setup(t)
+	c, _ := Load(ws)
+	c.Schema.CacheKey = nil
+	cache := t.TempDir()
+	build := func() {
+		t.Helper()
+		if _, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: cache}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build()
+	build()
+	commit(t, repo, "lib/shop/x.ex")
+	build()
+	if n := strings.Count(mustRead(t, log), "prepared"); n != 2 {
+		t.Errorf("prepare ran %d times, want 2 (cached per revision)", n)
+	}
+}
+
+func TestSchemaCacheKeyMustMatch(t *testing.T) {
+	ws, _, _ := setup(t)
+	c, _ := Load(ws)
+	c.Schema.CacheKey = []string{"priv/repo/migrations", "priv/repo/migratoins"}
+	_, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), `cache_key "priv/repo/migratoins" matches nothing`) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A failed build leaves no output directory (so a retry can run) and no
+// temporary directory beside it.
+func TestFailedBuildLeavesNoOutput(t *testing.T) {
+	ws, _, _ := setup(t)
+	c, _ := Load(ws)
+	p := c.Plugins["fake"]
+	good := p.Command
+	p.Command = []string{"false"}
+	c.Plugins["fake"] = p
+	parent := t.TempDir()
+	out := filepath.Join(parent, "snap")
+	if _, err := Build(context.Background(), c, BuildOptions{Out: out, CacheDir: t.TempDir()}); err == nil {
+		t.Fatal("want a plugin failure")
+	}
+	if left, _ := os.ReadDir(parent); len(left) != 0 {
+		t.Fatalf("failed build left %v", left)
+	}
+	p.Command = good
+	c.Plugins["fake"] = p
+	if _, err := Build(context.Background(), c, BuildOptions{Out: out, CacheDir: t.TempDir()}); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if _, err := bundle.Read(out); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := os.ReadDir(parent); len(left) != 1 {
+		t.Errorf("parent holds %v, want only the snapshot", left)
+	}
+}
+
+func TestPluginAndPrepareStderrIsLogged(t *testing.T) {
+	ws, _, _ := setup(t)
+	c, _ := Load(ws)
+	p := c.Plugins["fake"]
+	p.Command = []string{"sh", "-c", "echo plugin-warning >&2 && " + p.Command[2], "plugin", "{root}"}
+	c.Plugins["fake"] = p
+	c.Schema.Prepare = "echo prepare-warning >&2"
+	var logb strings.Builder
+	if _, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: t.TempDir(), Log: &logb}); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"plugin-warning", "prepare-warning"} {
+		if !strings.Contains(logb.String(), w) {
+			t.Errorf("log lacks %s:\n%s", w, logb.String())
+		}
+	}
+}

@@ -55,8 +55,11 @@ type Plugin struct {
 
 // Schema configures database schema extraction. Prepare runs in the archived
 // PrepareRepo (e.g. migrations against a disposable database), then Command
-// emits a schema facts document. Both are skipped when the cache key — the
-// content of CacheKey paths plus Version — is unchanged.
+// emits a schema facts document. Both are skipped when the cache key is
+// unchanged. The key covers Version, Command, Prepare, PrepareRepo, Env, the
+// plugin code digest and, at the PrepareRepo revision, the files under the
+// CacheKey paths (each must match something) or, with no CacheKey, the
+// revision itself.
 type Schema struct {
 	PrepareRepo string            `toml:"prepare_repo"`
 	Prepare     string            `toml:"prepare"`

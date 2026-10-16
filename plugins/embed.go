@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -31,15 +32,27 @@ func digest() string {
 }
 
 // Extract writes the embedded plugins under cacheDir/plugins/<digest> (once)
-// and returns that directory, for use as {plugins} in plugin commands.
+// and returns that directory, for use as {plugins} in plugin commands. Each
+// call extracts into its own temporary directory and renames it into place,
+// so concurrent calls never share files; a complete directory is never
+// removed or replaced.
 func Extract(cacheDir string) (string, error) {
 	dir := filepath.Join(cacheDir, "plugins", digest())
-	if _, err := os.Stat(filepath.Join(dir, ".complete")); err == nil {
+	if complete(dir) {
 		return dir, nil
 	}
-	tmp := dir + ".tmp"
-	os.RemoveAll(tmp)
-	err := fs.WalkDir(FS, ".", func(p string, d fs.DirEntry, err error) error {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(dir), filepath.Base(dir)+".tmp-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmp) // a no-op once renamed
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return "", err
+	}
+	err = fs.WalkDir(FS, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -54,15 +67,24 @@ func Extract(cacheDir string) (string, error) {
 		return os.WriteFile(target, b, 0o644)
 	})
 	if err != nil {
-		os.RemoveAll(tmp)
 		return "", err
 	}
 	if err := os.WriteFile(filepath.Join(tmp, ".complete"), nil, 0o644); err != nil {
 		return "", err
 	}
-	os.RemoveAll(dir)
 	if err := os.Rename(tmp, dir); err != nil {
-		return "", err
+		// Another call won the race: use its directory.
+		if complete(dir) {
+			return dir, nil
+		}
+		// Renamed directories are always complete, so this is a leftover of
+		// an older version. Never remove what is there.
+		return "", fmt.Errorf("plugins: %s exists but is incomplete (remove it): %w", dir, err)
 	}
 	return dir, nil
+}
+
+func complete(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".complete"))
+	return err == nil
 }

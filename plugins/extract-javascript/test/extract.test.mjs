@@ -122,3 +122,19 @@ test('CLI output is deterministic, also through a symlinked entry path', () => {
     assert.equal(JSON.parse(first).revision, 'abc');
   } finally { fs.rmSync(root, {recursive: true}); }
 });
+
+test('deep call chains do not overflow the walk', () => {
+  const root = tmp();
+  try {
+    fs.mkdirSync(path.join(root, 'assets/js'), {recursive: true});
+    const chain = 'q' + '.then(step)'.repeat(5000);
+    fs.writeFileSync(path.join(root, 'assets/js/deep.js'), `function run(q) { return ${chain}; }\n`);
+    fs.writeFileSync(path.join(root, 'assets/js/ok.js'), 'function ok() { return 1; }');
+    const doc = extract({repo: 'x', root});
+    assert.deepEqual(doc.notes, []);
+    assert.deepEqual(doc.functions.map(f => f.name), ['run', 'ok']);
+    const calls = doc.calls.filter(c => c.from === fn(doc, 'run').id);
+    // q.then(step) has a receiver module; the 4999 chained calls do not.
+    assert.deepEqual(calls.map(c => c.target), [{name: 'then', arity: 1}, {module: 'q', name: 'then', arity: 1}]);
+  } finally { fs.rmSync(root, {recursive: true}); }
+});

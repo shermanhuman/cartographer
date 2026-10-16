@@ -10,8 +10,8 @@
        {"name": "customers_email_not_null", "type": "n", "definition": "NOT NULL email"}
      ],
      "indexes": [
-       {"name": "customers_pkey", "definition": "CREATE UNIQUE INDEX customers_pkey ON public.customers USING btree (id)"},
-       {"name": "customers_email_index", "definition": "CREATE UNIQUE INDEX customers_email_index ON public.customers USING btree (email)"}
+       {"name": "customers_pkey"},
+       {"name": "customers_email_index"}
      ]},
     {"id": "public.orders", "name": "orders", "schema": "public", "kind": "r",
      "columns": [
@@ -27,7 +27,7 @@
        {"name": "orders_region_id_fkey", "type": "f", "definition": "FOREIGN KEY (region_id) REFERENCES geo.regions(id)"}
      ],
      "indexes": [
-       {"name": "orders_pkey", "definition": "CREATE UNIQUE INDEX orders_pkey ON public.orders USING btree (id)"}
+       {"name": "orders_pkey"}
      ]},
     {"id": "public.order_totals", "name": "order_totals", "schema": "public", "kind": "v",
      "columns": [

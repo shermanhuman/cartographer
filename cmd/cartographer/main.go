@@ -66,7 +66,7 @@ Snapshots:
 
 Building (in a workspace with cartographer.toml):
   init [dir]                  write a cartographer.toml template
-  build [--out DIR] [--ref repo=sha]... [--import] [--fetch]
+  build [--out DIR] [--ref repo=sha]... [--import] [--fetch | --fetch-only]
                               snapshot every repo and run its extractor plugins
   publish <snapshot-dir>      pack and publish as a GitHub release, prune old ones
   review <annotation-id>      mark an annotation reviewed against the snapshot's code
@@ -110,7 +110,7 @@ type common struct {
 	out                                         string
 	plugins                                     string
 	doImport                                    bool
-	fetch                                       bool
+	fetch, fetchOnly                            bool
 	refs                                        refFlags
 	max                                         int
 	port                                        int
@@ -156,6 +156,7 @@ func flags(name string, c *common) *flag.FlagSet {
 	fs.StringVar(&c.plugins, "plugins", os.Getenv("CARTOGRAPHER_PLUGINS"), "extractor plugins directory ({plugins})")
 	fs.BoolVar(&c.doImport, "import", false, "import the built snapshot into the local store")
 	fs.BoolVar(&c.fetch, "fetch", false, "clone or fetch repos before building (CI)")
+	fs.BoolVar(&c.fetchOnly, "fetch-only", false, "clone or fetch repos, then stop: no plugin or prepare runs (CI: the only step with the token)")
 	fs.Var(&c.refs, "ref", "repo=revision to snapshot instead of the configured ref (repeatable)")
 	fs.IntVar(&c.max, "max", 0, "max diagram nodes (mermaid; default 40)")
 	fs.IntVar(&c.port, "port", server.DefaultPort, "serve: port on 127.0.0.1")
@@ -285,6 +286,13 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		cfg, err := workspace.Load(c.workspace)
 		if err != nil {
 			return err
+		}
+		if c.fetchOnly {
+			if err := workspace.Fetch(ctx, cfg, c.refs, os.Stderr); err != nil {
+				return err
+			}
+			fmt.Fprintf(w, "fetched %d repos\n", len(cfg.Repos))
+			return nil
 		}
 		out := c.out
 		if out == "" {

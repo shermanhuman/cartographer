@@ -83,14 +83,13 @@ function parseSource(source) {
 
 const keyName = (key) => key?.type === 'Identifier' || key?.type === 'PrivateIdentifier' ? key.name : key?.type === 'Literal' ? String(key.value) : null;
 
+// Iterative, like the walk: a.b.c... may be thousands deep.
 function memberName(node) {
-  if (node?.type === 'Identifier') return node.name;
-  if (node?.type === 'ThisExpression') return 'this';
-  if (node?.type === 'MemberExpression' && !node.computed) {
-    const object = memberName(node.object);
-    return object ? `${object}.${node.property.name}` : node.property.name;
-  }
-  return null;
+  const parts = [];
+  for (; node?.type === 'MemberExpression' && !node.computed; node = node.object) parts.unshift(node.property.name);
+  if (node?.type === 'Identifier') parts.unshift(node.name);
+  else if (node?.type === 'ThisExpression') parts.unshift('this');
+  return parts.length ? parts.join('.') : null;
 }
 
 // Name of the thing an object literal or class is bound to, if any.
@@ -201,8 +200,14 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js']}) {
     const seen = new Map();
     const stack = [];
 
-    const visit = (node, caller) => {
-      if (!node || typeof node.type !== 'string') return;
+    // Iterative pre-order walk: a long call or member chain nests the AST
+    // thousands deep, which would overflow a recursive visit.
+    const work = [{node: parsed.ast, caller: null}];
+    while (work.length) {
+      const item = work.pop();
+      if (item.exit) { stack.pop(); continue; }
+      const {node, caller} = item;
+      if (!node || typeof node.type !== 'string') continue;
       stack.push(node);
       let current = caller;
       if (FUNCTION_TYPES.has(node.type)) {
@@ -225,14 +230,15 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js']}) {
       if (node.type === 'CallExpression' && current) {
         calls.push({from: current, ...callTarget(node, file), file, line: node.loc.start.line});
       }
+      work.push({exit: true});
+      const children = [];
       for (const [key, value] of Object.entries(node)) {
         if (key === 'loc' || key === 'start' || key === 'end') continue;
-        if (Array.isArray(value)) value.forEach(child => visit(child, current));
-        else if (value && typeof value === 'object') visit(value, current);
+        if (Array.isArray(value)) children.push(...value);
+        else if (value && typeof value === 'object') children.push(value);
       }
-      stack.pop();
-    };
-    visit(parsed.ast, null);
+      for (let k = children.length - 1; k >= 0; k--) work.push({node: children[k], caller: current});
+    }
   }
 
   const cmp = (...keys) => (a, b) => {
