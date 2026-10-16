@@ -9,7 +9,7 @@ WITH tables AS (
   'id',t.nspname||'.'||t.relname,'name',t.relname,'schema',t.nspname,'kind',t.relkind,
   'columns',COALESCE((SELECT jsonb_agg(jsonb_build_object('name',a.attname,'type',format_type(a.atttypid,a.atttypmod),'nullable',NOT a.attnotnull,'default',pg_get_expr(d.adbin,d.adrelid)) ORDER BY a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid=t.oid AND a.attnum>0 AND NOT a.attisdropped),'[]'),
   'constraints',COALESCE((SELECT jsonb_agg(jsonb_build_object('name',co.conname,'type',co.contype,'definition',pg_get_constraintdef(co.oid)) ORDER BY co.conname) FROM pg_constraint co WHERE co.conrelid=t.oid),'[]'),
-  'indexes',COALESCE((SELECT jsonb_agg(jsonb_build_object('name',ci.relname,'definition',pg_get_indexdef(i.indexrelid)) ORDER BY ci.relname) FROM pg_index i JOIN pg_class ci ON ci.oid=i.indexrelid WHERE i.indrelid=t.oid),'[]')
+  'indexes',COALESCE((SELECT jsonb_agg(jsonb_build_object('name',ci.relname) ORDER BY ci.relname) FROM pg_index i JOIN pg_class ci ON ci.oid=i.indexrelid WHERE i.indrelid=t.oid),'[]')
  ) value FROM tables t
 ), fks AS (
  SELECT jsonb_build_object('name',co.conname,'from',ns.nspname||'.'||s.relname,'to',nt.nspname||'.'||target.relname,
