@@ -80,6 +80,18 @@ func withWorkspace(body, src string) string {
 	item := strconv.Quote(src)
 	if loc := workspacesKey.FindStringIndex(body); loc != nil && loc[0] < firstTable(body) {
 		if end, last := arrayEnd(body, loc[1]); end >= 0 {
+			if last >= 0 && strings.Contains(body[last:end], "\n") {
+				// Multi-line: the entry goes on its own line before the
+				// bracket, indented like the last one, so comments stay put.
+				lineStart := strings.LastIndex(body[:last], "\n") + 1
+				indent := body[lineStart : lineStart+len(body[lineStart:])-len(strings.TrimLeft(body[lineStart:], " \t"))]
+				comma := ","
+				if body[last] == ',' || body[last] == '[' {
+					comma = ""
+				}
+				bracketLine := strings.LastIndex(body[:end], "\n") + 1
+				return body[:last+1] + comma + body[last+1:bracketLine] + indent + item + ",\n" + body[bracketLine:]
+			}
 			sep := ", "
 			if last < 0 || body[last] == ',' || body[last] == '[' {
 				sep = " "

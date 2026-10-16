@@ -601,3 +601,23 @@ func TestPluginAndPrepareStderrIsLogged(t *testing.T) {
 		}
 	}
 }
+
+// Fetch never moves a developer's own checkout, so when its branch is behind
+// origin a later Build without Fetch would snapshot the stale commit: Fetch
+// fails and says so instead.
+func TestFetchOnlyRejectsStaleUserCheckout(t *testing.T) {
+	ws, repo, _ := setup(t)
+	c, _ := Load(ws)
+	c.Schema = nil
+	c.Repos[0].URL = repo
+	c.Repos[0].Path = filepath.Join(t.TempDir(), "clone")
+	run(t, repo, "git", "clone", "-q", repo, c.Repos[0].Path)
+	if err := Fetch(context.Background(), c, nil, nil); err != nil {
+		t.Fatalf("up-to-date checkout: %v", err)
+	}
+	commit(t, repo, "lib/shop/new.ex")
+	err := Fetch(context.Background(), c, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "behind origin") {
+		t.Fatalf("stale checkout: err = %v, want a behind-origin error", err)
+	}
+}

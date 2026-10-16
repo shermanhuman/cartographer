@@ -287,6 +287,8 @@ func TestPruneDirsRemovesOnlyStalePartials(t *testing.T) {
 		os.MkdirAll(d, 0o755)
 	}
 	old := time.Now().Add(-2 * StalePartial)
+	mine := filepath.Join(snaps, "notes")
+	os.MkdirAll(mine, 0o755)
 	os.Chtimes(stale, old, old)
 	p.pruneDirs()
 	if _, err := os.Stat(fresh); err != nil {
@@ -294,5 +296,8 @@ func TestPruneDirsRemovesOnlyStalePartials(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); err == nil {
 		t.Error("an abandoned partial directory was kept")
+	}
+	if _, err := os.Stat(mine); err != nil {
+		t.Error("a directory cartographer didn't make was removed")
 	}
 }

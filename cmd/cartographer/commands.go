@@ -22,8 +22,8 @@ const (
 	pagedFlags = queryFlags + " limit offset"
 )
 
-// commandFlags lists every command and the flags that apply to it ("*"
-// means all flags), for validation and `<command> --help`.
+// commandFlags lists every command and the flags that apply to it, for
+// validation and `<command> --help`.
 var commandFlags = map[string]string{
 	"status": queryFlags, "show": queryFlags, "entity": queryFlags,
 	"path": queryFlags, "table": queryFlags, "context": queryFlags,
@@ -36,7 +36,7 @@ var commandFlags = map[string]string{
 	"serve":   "db snapshot no-pull port open",
 	"pull":    "db", "workspace": "", "import": "db", "snapshots": "db",
 	"mapped": "db no-pull", "hook": "db no-pull", "mcp": "db snapshot no-pull",
-	"init": "", "build": "*", "publish": "workspace", "review": "db snapshot workspace",
+	"init": "", "build": "db workspace out plugins import fetch fetch-only ref", "publish": "workspace", "review": "db snapshot workspace",
 	"validate-facts": "", "plugins-dir": "", "version": "",
 }
 
@@ -80,7 +80,7 @@ func commandHelp(w io.Writer, fs *flag.FlagSet, cmd string) {
 	fmt.Fprintln(w, "\nflags:")
 	want := strings.Fields(names)
 	fs.VisitAll(func(f *flag.Flag) {
-		if names != "*" && !slices.Contains(want, f.Name) {
+		if !slices.Contains(want, f.Name) {
 			return
 		}
 		def := ""

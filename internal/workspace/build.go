@@ -78,6 +78,12 @@ func Fetch(ctx context.Context, c *Config, refs map[string]string, log io.Writer
 		if err != nil {
 			return fmt.Errorf("fetch: %s: %w", r.Name, err)
 		}
+		// fetchRepo moves the local branches of a managed clone only; a
+		// developer's own checkout keeps its branch, which a later Build
+		// without Fetch would snapshot.
+		if upstream, err := revision(ctx, r, src, refs, true); err == nil && upstream != rev {
+			return fmt.Errorf("fetch: %s: %s is behind origin (%.12s, origin has %.12s): update the checkout, or use build --fetch", r.Name, r.Ref, rev, upstream)
+		}
 		if err := primeBlobs(ctx, src, rev); err != nil {
 			return fmt.Errorf("fetch: %s: %w", r.Name, err)
 		}

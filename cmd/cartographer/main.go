@@ -127,7 +127,12 @@ type common struct {
 
 type refFlags map[string]string
 
-func (r *refFlags) String() string { return fmt.Sprint(map[string]string(*r)) }
+func (r *refFlags) String() string {
+	if r == nil || len(*r) == 0 {
+		return ""
+	}
+	return fmt.Sprint(map[string]string(*r))
+}
 func (r *refFlags) Set(v string) error {
 	name, rev, ok := strings.Cut(v, "=")
 	if !ok || name == "" || rev == "" {

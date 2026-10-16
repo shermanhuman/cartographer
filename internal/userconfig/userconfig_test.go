@@ -108,3 +108,23 @@ func TestAddWorkspaceRejectsBadSources(t *testing.T) {
 		}
 	}
 }
+
+// In a multi-line array the new entry gets its own line before the closing
+// bracket, so a comment stays on the entry it describes.
+func TestAddWorkspaceMultiLineArrayKeepsCommentPlacement(t *testing.T) {
+	p := use(t, "workspaces = [\n  \"acme/map\", # the main map\n]\n")
+	if err := AddWorkspace("acme/other"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := read(t, p), "workspaces = [\n  \"acme/map\", # the main map\n  \"acme/other\",\n]\n"; got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	// Same when the last entry has no trailing comma.
+	p = use(t, "workspaces = [\n  \"acme/map\" # the main map\n]\n")
+	if err := AddWorkspace("acme/other"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := read(t, p), "workspaces = [\n  \"acme/map\", # the main map\n  \"acme/other\",\n]\n"; got != want {
+		t.Errorf("no trailing comma, got:\n%s\nwant:\n%s", got, want)
+	}
+}

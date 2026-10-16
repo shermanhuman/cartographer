@@ -134,11 +134,15 @@ func (p *Puller) stamp(source string, ok bool) {
 }
 
 // pruneDirs removes unpack directories abandoned by a crash, and snapshot
-// directories that older versions kept after import.
+// directories that older versions kept after import. Only snapshot-named
+// entries are touched: the directory may sit beside a user-chosen --db.
 func (p *Puller) pruneDirs() {
 	snaps := filepath.Join(p.DataDir, "snapshots")
 	entries, _ := os.ReadDir(snaps)
 	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), TagPrefix) {
+			continue
+		}
 		partial := strings.Contains(e.Name(), partialMark) || strings.HasSuffix(e.Name(), ".partial")
 		if partial {
 			// In-progress pulls are left alone until stale.
