@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/shermanhuman/cartographer/internal/fresh"
 )
 
 type Config struct {
@@ -73,7 +75,17 @@ func AddLocalWorkspace(dir string) error {
 	if !filepath.IsAbs(dir) {
 		return fmt.Errorf("local workspace must be an absolute path, got %q", dir)
 	}
-	return addItem("local_workspaces", filepath.Clean(dir), func(c *Config) []string { return c.LocalWorkspaces })
+	dir = filepath.Clean(dir)
+	c, err := Load()
+	if err != nil {
+		return err
+	}
+	for _, have := range c.LocalWorkspaces {
+		if filepath.Clean(fresh.ExpandHome(have)) == dir {
+			return nil
+		}
+	}
+	return addItem("local_workspaces", dir, func(c *Config) []string { return c.LocalWorkspaces })
 }
 
 // addItem appends item to the top-level array key, editing the file in

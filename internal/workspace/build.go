@@ -520,13 +520,16 @@ func runCmd(ctx context.Context, dir string, env, argv []string, stdout io.Write
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = append(childEnv(os.Environ()), env...)
+	// Once cancelled, don't wait long for grandchildren (sh -c) that keep
+	// the output pipes open.
+	cmd.WaitDelay = 5 * time.Second
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	if stdout != nil {
 		cmd.Stdout = stdout
 	}
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("%s: %v\n%s", argv[0], err, tail(errb.String()))
+		return "", fmt.Errorf("%s: %w\n%s", argv[0], err, tail(errb.String()))
 	}
 	return errb.String(), nil
 }

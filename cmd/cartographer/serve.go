@@ -36,7 +36,10 @@ func serve(ctx context.Context, w io.Writer, s *store.Store, c *common) error {
 	sess := newSession(c, s, os.Stderr)
 	sess.Background = true
 	if sess.Rebuild != nil {
-		sess.Rebuild = backgroundRebuild(c, sess, s)
+		// Ctrl-C cancels ctx: a running rebuild stops and cleans up first.
+		start, wait := backgroundRebuild(ctx, c, sess, s)
+		sess.Rebuild = start
+		defer func() { stop(); wait() }()
 	}
 	if sess.AutoPull {
 		sess.PullDue(ctx)

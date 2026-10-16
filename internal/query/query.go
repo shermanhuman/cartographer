@@ -28,6 +28,9 @@ type Q struct {
 	// Staleness is a one-line summary prepended to every header, e.g.
 	// "shop-app 3 commits behind". Empty means current or unknown.
 	Staleness string
+	// Notes are advice lines that status appends (e.g. how to keep the map
+	// fresh); other queries ignore them.
+	Notes []string
 }
 
 // New opens a query context on the newest snapshot (or the given id).

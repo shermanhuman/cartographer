@@ -140,13 +140,17 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-// Name returns the workspace name in dir's cartographer.toml without
-// validating the rest ("" when the file is missing or unreadable).
-func Name(dir string) string {
+// Name returns the workspace name in a config file (or the cartographer.toml
+// in a dir) without validating the rest ("" when the file is missing or
+// unreadable, or names none).
+func Name(path string) string {
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		path = filepath.Join(path, FileName)
+	}
 	var c struct {
 		Name string `toml:"name"`
 	}
-	if _, err := toml.DecodeFile(filepath.Join(dir, FileName), &c); err != nil {
+	if _, err := toml.DecodeFile(path, &c); err != nil {
 		return ""
 	}
 	return c.Name

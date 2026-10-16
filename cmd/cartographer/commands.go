@@ -36,7 +36,7 @@ var commandFlags = map[string]string{
 	"serve":   "db snapshot no-pull no-rebuild port open",
 	"pull":    "db", "workspace": "", "import": "db", "snapshots": "db",
 	"mapped": "db no-pull", "hook": "db no-pull", "mcp": "db snapshot no-pull no-rebuild",
-	"init": "", "build": "db workspace out plugins import local fetch fetch-only ref", "publish": "workspace", "review": "db snapshot workspace",
+	"init": "", "build": "db workspace out plugins import local background fetch fetch-only ref", "publish": "workspace", "review": "db snapshot workspace",
 	"validate-facts": "", "plugins-dir": "", "version": "",
 }
 

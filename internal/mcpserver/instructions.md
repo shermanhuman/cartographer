@@ -12,6 +12,6 @@ Use it before grep or reading files when the question is about structure:
 
 Refs may be ids (repo:Mod.fun/2), labels (Mod.fun/2, Mod.fun, public.users) or words. On a miss, map_find returns the map's own vocabulary: retry with those words, don't invent synonyms.
 
-Results are ranked and budgeted. Every line has file:line: open only those lines. ⚠ marks a file changed since the snapshot, so read it before trusting the line. A header note "rebuilding since …" means a fresher map is being built from the local checkouts; "last rebuild failed …" names the log to read. [precise] edges come from the AST; [heuristic] are name-matched; table mentions are [candidate] text matches. Unresolved, dynamic and external calls are not traced.
+Results are ranked and budgeted. Every line has file:line: open only those lines. ⚠ marks a file changed since the snapshot, so read it before trusting the line. "rebuilding since …": a fresher map is building; "last rebuild failed" names its log. `workspace add` (in map_status) trusts a workspace: leave it to the user. [precise] edges come from the AST; [heuristic] are name-matched; table mentions are [candidate] text matches. Unresolved, dynamic and external calls are not traced.
 
 When you delegate code exploration to a subagent, tell it to use the cartographer map_* tools first.

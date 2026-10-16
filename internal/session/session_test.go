@@ -498,8 +498,9 @@ func TestHasCode(t *testing.T) {
 }
 
 // aheadRepo makes a checkout whose HEAD is one commit past the revision the
-// mini snapshot records for shop-app, beside a local workspace named mini.
-func aheadRepo(t *testing.T, s *store.Store) (parent, app, ws string) {
+// mini snapshot records for shop-app, and beside it a local workspace named
+// mini that builds it. register records the workspace in the user config.
+func aheadRepo(t *testing.T, s *store.Store, register bool) (parent, app, ws string) {
 	t.Helper()
 	parent = t.TempDir()
 	app = filepath.Join(parent, "shop-app")
@@ -507,11 +508,23 @@ func aheadRepo(t *testing.T, s *store.Store) (parent, app, ws string) {
 	first := commitFile(t, app, "a.ex")
 	commitFile(t, app, "b.ex")
 	importAs(t, s, "mini", "snapshot-20261015T120000Z", "")
-	s.DB.Exec(`UPDATE repos SET revision = ? WHERE name = 'shop-app'`, first)
+	setRevision(t, s, first)
 	ws = filepath.Join(parent, "mini-map")
 	os.MkdirAll(ws, 0o755)
-	os.WriteFile(filepath.Join(ws, "cartographer.toml"), []byte("name = \"mini\"\n"), 0o644)
+	os.WriteFile(filepath.Join(ws, "cartographer.toml"), []byte("name = \"mini\"\n[[repos]]\nname = \"shop-app\"\nurl = \"https://github.com/example/shop-app\"\npath = \"../shop-app\"\n"), 0o644)
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	if register {
+		os.WriteFile(cfg, []byte("local_workspaces = ["+strconv.Quote(ws)+"]\n"), 0o644)
+	}
+	t.Setenv("CARTOGRAPHER_CONFIG", cfg)
 	return parent, app, ws
+}
+
+func setRevision(t *testing.T, s *store.Store, rev string) {
+	t.Helper()
+	if _, err := s.DB.Exec(`UPDATE repos SET revision = ? WHERE name = 'shop-app'`, rev); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func commitFile(t *testing.T, repo, name string) string {
@@ -522,79 +535,219 @@ func commitFile(t *testing.T, repo, name string) string {
 			t.Fatalf("%v: %s", err, out)
 		}
 	}
-	rev, _ := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	return head(t, repo)
+}
+
+func head(t *testing.T, repo string) string {
+	t.Helper()
+	rev, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
 	return strings.TrimSpace(string(rev))
 }
 
-// A checkout ahead of the snapshot, with its workspace beside it, starts a
-// rebuild once per freshness computation; a lock or a recent failure
+// recorder is a Session.Rebuild that records its calls.
+type recorder struct{ calls []string }
+
+func (r *recorder) rebuild(name, dir string) { r.calls = append(r.calls, name+" "+dir) }
+
+// A checkout ahead of the snapshot, with its workspace registered, starts
+// a rebuild once per freshness computation; a lock or a recent failure
 // holds it back, and the report says so.
 func TestRebuildStartsWhenACheckoutIsAhead(t *testing.T) {
 	ctx := context.Background()
-	t.Setenv("CARTOGRAPHER_CONFIG", filepath.Join(t.TempDir(), "none.toml"))
 	s, _ := store.Open(":memory:")
 	defer s.Close()
-	_, app, ws := aheadRepo(t, s)
-	var calls []string
-	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Rebuild: func(_ context.Context, name, dir string) {
-		calls = append(calls, name+" "+dir)
-	}}
+	_, app, ws := aheadRepo(t, s, true)
+	var r recorder
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Rebuild: r.rebuild}
 	for range 3 { // a burst shares one freshness computation and one start
 		if _, rep, err := sess.Query(ctx); err != nil || rep.Rebuild != "" {
 			t.Fatalf("query: %v, %+v", err, rep)
 		}
 	}
-	if real, _ := filepath.EvalSymlinks(ws); len(calls) != 1 || calls[0] != "mini "+real {
-		t.Fatalf("rebuild calls = %q, want one for %s", calls, ws)
+	if len(r.calls) != 1 || r.calls[0] != "mini "+ws {
+		t.Fatalf("rebuild calls = %q, want one for %s", r.calls, ws)
 	}
 	// Running (the lock is held): no second start, and the header says so.
 	d := rebuild.Dir{Path: sess.DataDir}
 	unlock, _ := d.Lock("mini")
 	_, rep, _ := sess.Query(WithoutCache(ctx))
-	if len(calls) != 1 || !strings.HasPrefix(rep.Rebuild, "rebuilding since ") || !strings.Contains(rep.Summary(), "rebuilding since") {
-		t.Errorf("under a lock: calls %d, rebuild note %q", len(calls), rep.Rebuild)
+	if len(r.calls) != 1 || !strings.HasPrefix(rep.Rebuild, "rebuilding since ") || !strings.Contains(rep.Summary(), "rebuilding since") {
+		t.Errorf("under a lock: calls %d, rebuild note %q", len(r.calls), rep.Rebuild)
 	}
 	unlock()
 	// A recent failure backs off; its message is reported.
-	d.Run("mini", func() error { return errors.New("plugin exploded") })
+	d.Run("mini", func() (map[string]string, error) { return nil, errors.New("plugin exploded") })
 	_, rep, _ = sess.Query(WithoutCache(ctx))
-	if len(calls) != 1 || !strings.Contains(rep.Rebuild, "last rebuild failed") || !strings.Contains(rep.Rebuild, "plugin exploded") {
-		t.Errorf("after a failure: calls %d, rebuild note %q", len(calls), rep.Rebuild)
+	if len(r.calls) != 1 || !strings.Contains(rep.Rebuild, "last rebuild failed") || !strings.Contains(rep.Rebuild, "plugin exploded") {
+		t.Errorf("after a failure: calls %d, rebuild note %q", len(r.calls), rep.Rebuild)
 	}
-	// Nothing to do without a callback (--no-rebuild) or when current.
+	// Nothing to do without a callback (--no-rebuild).
 	sess = &Session{Store: s, DataDir: t.TempDir(), Cwd: app}
-	if _, rep, err := sess.Query(ctx); err != nil || rep.Summary() == "" {
-		t.Errorf("without Rebuild: %v %q", err, rep.Summary())
+	if _, rep, err := sess.Query(ctx); err != nil || rep.Summary() == "" || len(rep.Hints) != 0 {
+		t.Errorf("without Rebuild: %v %q %q", err, rep.Summary(), rep.Hints)
 	}
 }
 
-// Only committed work triggers: uncommitted edits stay ⚠ until committed,
-// and a checkout without a local workspace (none beside it, none
-// configured) is left alone; a configured local_workspaces entry finds one
-// that lives elsewhere.
-func TestRebuildNeedsCommitsAndALocalWorkspace(t *testing.T) {
+// A rebuild runs the workspace's plugin commands, so only a registered
+// workspace is rebuilt: a sibling claiming the snapshot's name is only
+// suggested.
+func TestRebuildOnlyFromRegisteredWorkspaces(t *testing.T) {
 	ctx := context.Background()
 	s, _ := store.Open(":memory:")
 	defer s.Close()
-	_, app, ws := aheadRepo(t, s)
-	elsewhere := filepath.Join(t.TempDir(), "map")
-	os.Rename(ws, elsewhere)
-	calls := 0
-	cfg := filepath.Join(t.TempDir(), "config.toml")
-	t.Setenv("CARTOGRAPHER_CONFIG", cfg)
-	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Rebuild: func(context.Context, string, string) { calls++ }}
-	if _, _, err := sess.Query(ctx); err != nil || calls != 0 {
-		t.Fatalf("no workspace anywhere: %v, %d calls", err, calls)
+	_, app, ws := aheadRepo(t, s, false)
+	var r recorder
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Rebuild: r.rebuild}
+	_, rep, err := sess.Query(ctx)
+	if err != nil || len(r.calls) != 0 {
+		t.Fatalf("unregistered sibling rebuilt: %v, %q", err, r.calls)
 	}
-	os.WriteFile(cfg, []byte("local_workspaces = ["+strconv.Quote(elsewhere)+"]\n"), 0o644)
-	if _, _, err := sess.Query(WithoutCache(ctx)); err != nil || calls != 1 {
-		t.Fatalf("configured workspace: %v, %d calls", err, calls)
+	real, _ := filepath.EvalSymlinks(ws)
+	if want := "to keep this map fresh automatically: cartographer workspace add " + real; len(rep.Hints) != 1 || rep.Hints[0] != want {
+		t.Errorf("hints = %q, want %q", rep.Hints, want)
 	}
-	// Current but dirty: no rebuild.
-	head, _ := exec.Command("git", "-C", app, "rev-parse", "HEAD").Output()
-	s.DB.Exec(`UPDATE repos SET revision = ? WHERE name = 'shop-app'`, strings.TrimSpace(string(head)))
+	q, _, _ := sess.Query(ctx)
+	if d, _ := q.Status(ctx); !strings.Contains(d.Render(2000), "cartographer workspace add") {
+		t.Errorf("status lacks the hint:\n%s", d.Render(2000))
+	}
+}
+
+// Only committed work triggers: uncommitted edits stay ⚠ until committed.
+func TestRebuildNeedsCommits(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	_, app, _ := aheadRepo(t, s, true)
+	setRevision(t, s, head(t, app))
 	os.WriteFile(filepath.Join(app, "c.ex"), []byte("c"), 0o644)
-	if _, rep, err := sess.Query(WithoutCache(ctx)); err != nil || calls != 1 || !rep.Changed("shop-app", "c.ex") {
-		t.Errorf("dirty checkout: %v, %d calls, %+v", err, calls, rep.Repos)
+	var r recorder
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Rebuild: r.rebuild}
+	if _, rep, err := sess.Query(ctx); err != nil || len(r.calls) != 0 || !rep.Changed("shop-app", "c.ex") {
+		t.Errorf("dirty checkout: %v, %q, %+v", err, r.calls, rep.Repos)
+	}
+}
+
+// A session pinned to a snapshot (--snapshot) never rebuilds: the new
+// snapshot would never be the one it measures.
+func TestRebuildNeverForAPinnedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	_, app, _ := aheadRepo(t, s, true)
+	var r recorder
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Snapshot: "snapshot-20261015T120000Z", Rebuild: r.rebuild}
+	for range 2 {
+		if _, _, err := sess.Query(WithoutCache(ctx)); err != nil || len(r.calls) != 0 {
+			t.Fatalf("pinned: %v, %q", err, r.calls)
+		}
+	}
+}
+
+// The trigger measures the checkouts the workspace builds, not the one the
+// query runs in: a second clone ahead of the snapshot rebuilds nothing
+// while the workspace's own checkout is current (and says why); once that
+// checkout moves on, exactly one rebuild runs.
+func TestRebuildMeasuresWhatTheWorkspaceBuilds(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	_, app, ws := aheadRepo(t, s, true)
+	setRevision(t, s, head(t, app)) // the workspace's checkout is current
+	second := filepath.Join(t.TempDir(), "shop-app")
+	if out, err := exec.Command("git", "clone", "-q", app, second).CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	exec.Command("git", "-C", second, "remote", "set-url", "origin", "https://github.com/example/shop-app").Run()
+	commitFile(t, second, "c.ex")
+	var r recorder
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: second, Rebuild: r.rebuild}
+	for range 3 {
+		_, rep, err := sess.Query(WithoutCache(ctx))
+		if err != nil || rep.Repos[0].Behind != 1 || len(r.calls) != 0 {
+			t.Fatalf("second clone: %v, %+v, %q", err, rep.Repos[0], r.calls)
+		}
+		if len(rep.Hints) != 1 || !strings.Contains(rep.Hints[0], "checkout here differs from the one the workspace builds: shop-app at "+app) {
+			t.Errorf("hints = %q", rep.Hints)
+		}
+	}
+	// The workspace's checkout moves on: one rebuild, then (as if it built
+	// that HEAD) none, even while the second clone stays ahead.
+	built := commitFile(t, app, "d.ex")
+	for range 3 {
+		sess.Query(WithoutCache(ctx))
+		if len(r.calls) == 1 {
+			setRevision(t, s, built)
+		}
+	}
+	if len(r.calls) != 1 || r.calls[0] != "mini "+ws {
+		t.Errorf("calls = %q", r.calls)
+	}
+}
+
+// Safety net: when the snapshot in use stays behind after a rebuild built
+// exactly the workspace's checkouts (a newer pulled snapshot, a collision),
+// the same rebuild is not run again.
+func TestRebuildNotRepeatedForTheSameHeads(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	_, app, _ := aheadRepo(t, s, true)
+	var r recorder
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app, Rebuild: r.rebuild}
+	d := rebuild.Dir{Path: sess.DataDir}
+	d.Run("mini", func() (map[string]string, error) { return map[string]string{"shop-app": head(t, app)}, nil })
+	_, rep, _ := sess.Query(ctx)
+	if len(r.calls) != 0 || len(rep.Hints) != 1 || !strings.Contains(rep.Hints[0], "already built") {
+		t.Errorf("calls %q, hints %q", r.calls, rep.Hints)
+	}
+}
+
+// A git worktree of the workspace's checkout, on a branch ahead of the
+// snapshot, rebuilds nothing: the workspace builds the main checkout.
+func TestRebuildFromAWorktreeMeasuresTheMainCheckout(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	_, app, _ := aheadRepo(t, s, true)
+	setRevision(t, s, head(t, app))
+	wt := filepath.Join(app, ".worktrees", "feature")
+	if out, err := exec.Command("git", "-C", app, "worktree", "add", "-q", "-b", "feature", wt).CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	commitFile(t, wt, "e.ex")
+	var r recorder
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: wt, Rebuild: r.rebuild}
+	for range 2 {
+		if _, rep, err := sess.Query(WithoutCache(ctx)); err != nil || rep.Repos[0].Behind != 1 || len(r.calls) != 0 {
+			t.Fatalf("worktree: %v, %+v, %q", err, rep.Repos[0], r.calls)
+		}
+	}
+}
+
+// A workspace whose checkouts can't all be found still starts a rebuild:
+// the build records the failure, which then backs off and shows.
+func TestRebuildStartsWhenTheWorkspaceCannotBeResolved(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	_, app, ws := aheadRepo(t, s, true)
+	toml, _ := os.ReadFile(filepath.Join(ws, "cartographer.toml"))
+	os.WriteFile(filepath.Join(ws, "cartographer.toml"), append(toml, []byte("[[repos]]\nname = \"missing-app\"\npath = \"../missing-app\"\n")...), 0o644)
+	var r recorder
+	sess := &Session{Store: s, DataDir: t.TempDir(), Cwd: app}
+	d := rebuild.Dir{Path: sess.DataDir}
+	sess.Rebuild = func(name, dir string) {
+		r.rebuild(name, dir)
+		d.Run(name, func() (map[string]string, error) { return nil, errors.New("no checkout for missing-app") })
+	}
+	for range 3 {
+		sess.Query(WithoutCache(ctx))
+	}
+	_, rep, _ := sess.Query(WithoutCache(ctx))
+	if len(r.calls) != 1 || !strings.Contains(rep.Rebuild, "last rebuild failed") {
+		t.Errorf("calls %q, note %q", r.calls, rep.Rebuild)
 	}
 }

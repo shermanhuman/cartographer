@@ -183,3 +183,20 @@ func TestLoadAutoRebuild(t *testing.T) {
 		t.Error("auto_rebuild = true ignored")
 	}
 }
+
+// A directory already listed in another spelling (~, trailing slash) is not
+// added twice.
+func TestAddLocalWorkspaceDedupesSpellings(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home")
+	}
+	dir := filepath.Join(home, "src", "my-map")
+	p := use(t, "local_workspaces = [\"~/src/my-map/\"]\n")
+	if err := AddLocalWorkspace(dir); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := Load(); len(c.LocalWorkspaces) != 1 {
+		t.Errorf("added twice:\n%s", read(t, p))
+	}
+}

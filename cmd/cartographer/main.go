@@ -64,7 +64,7 @@ UI:
 Snapshots:
   pull [owner/name]           fetch the newest published snapshot (adds the source)
   workspace add <owner/name>  pull snapshots from this repository's releases
-  workspace add <dir>         rebuild from this local workspace when checkouts move
+  workspace add <dir>         trust this local workspace: rebuild from it when checkouts move
   import <dir>                import a snapshot directory
   snapshots                   list imported snapshots
   mapped                      exit 0 if the current directory is a mapped repo
@@ -73,7 +73,8 @@ Building (in a workspace with cartographer.toml):
   init [dir]                  write a cartographer.toml template
   build [--out DIR] [--ref repo=sha]... [--import] [--local | --fetch | --fetch-only]
                               snapshot every repo and run its extractor plugins;
-                              --local maps each checkout at its HEAD (no fetch, no token)
+                              --local maps each checkout at its HEAD (no fetch, no token);
+                              --import keeps the newest 10 snapshots per workspace
   publish <snapshot-dir>      pack and publish as a GitHub release, prune old ones
   review <annotation-id>      mark an annotation reviewed against the snapshot's code
   validate-facts <file>...    check extractor plugin output (facts v1)
@@ -92,8 +93,8 @@ Common flags: --db PATH (or $CARTOGRAPHER_DB), --snapshot ID, --no-pull,
 "cartographer <command> --help" lists the flags a command takes.
 Queries pull newer snapshots at most hourly and mark lines in files changed
 since the snapshot with ⚠. When a checkout has commits past the snapshot and
-its workspace is known locally (a sibling directory, or "workspace add <dir>"),
-queries rebuild the map in the background ("build --local --import").
+its workspace is registered ("workspace add <dir>"), queries rebuild the map
+in the background ("build --local --import").
 A <ref> is an id, a label like Shop.Orders.create/2, or a unique search term.
 `
 
@@ -120,7 +121,7 @@ type common struct {
 	out                                         string
 	plugins                                     string
 	doImport                                    bool
-	fetch, fetchOnly, local                     bool
+	fetch, fetchOnly, local, background         bool
 	refs                                        refFlags
 	max                                         int
 	port                                        int
@@ -174,6 +175,7 @@ func flags(name string, c *common) *flag.FlagSet {
 	fs.BoolVar(&c.fetch, "fetch", false, "clone or fetch repos before building (CI)")
 	fs.BoolVar(&c.fetchOnly, "fetch-only", false, "clone or fetch repos, then stop: no plugin or prepare runs (CI: the only step with the token)")
 	fs.BoolVar(&c.local, "local", false, "snapshot each checkout at its HEAD, located like freshness (siblings, [checkouts]); no fetch, no token")
+	fs.BoolVar(&c.background, "background", false, "with --local: an automatic rebuild; output goes to the workspace's rebuild log in the data dir")
 	fs.Var(&c.refs, "ref", "repo=revision to snapshot instead of the configured ref (repeatable)")
 	fs.IntVar(&c.max, "max", 0, "max diagram nodes (mermaid; default 40)")
 	fs.IntVar(&c.port, "port", server.DefaultPort, "serve: port on 127.0.0.1")
@@ -311,12 +313,15 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		fmt.Fprintf(w, "wrote %s; edit repos and plugins, then run `cartographer build --local --import`\n", target)
 		return nil
 	case "build":
+		if c.local && (c.fetch || c.fetchOnly) {
+			return errors.New("build: --local builds what is checked out; drop --fetch/--fetch-only")
+		}
+		if c.local {
+			return localBuild(ctx, w, &c, nil)
+		}
 		cfg, err := workspace.Load(c.workspace)
 		if err != nil {
 			return err
-		}
-		if c.local && (c.fetch || c.fetchOnly) {
-			return errors.New("build: --local builds what is checked out; drop --fetch/--fetch-only")
 		}
 		if c.fetchOnly {
 			if err := workspace.Fetch(ctx, cfg, c.refs, os.Stderr); err != nil {
@@ -325,7 +330,7 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 			fmt.Fprintf(w, "fetched %d repos\n", len(cfg.Repos))
 			return nil
 		}
-		return buildCmd(ctx, w, &c, cfg, nil)
+		return buildCmd(ctx, w, &c, cfg)
 	case "publish":
 		if err := need(1, "a snapshot directory"); err != nil {
 			return err
@@ -393,15 +398,21 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		}
 		// A directory holding cartographer.toml is a local workspace to
 		// rebuild from; anything else is a GitHub source to pull from.
+		// Registering is the trust step: queries then run this workspace's
+		// plugin commands to rebuild the map.
 		if fi, err := os.Stat(filepath.Join(pos[1], workspace.FileName)); err == nil && !fi.IsDir() {
 			dir, err := filepath.Abs(pos[1])
 			if err != nil {
 				return err
 			}
+			name := workspace.Name(dir)
+			if name == "" {
+				return fmt.Errorf("workspace add: %s has no `name`", filepath.Join(dir, workspace.FileName))
+			}
 			if err := userconfig.AddLocalWorkspace(dir); err != nil {
 				return err
 			}
-			fmt.Fprintf(w, "added local workspace %s (%s) to %s\n", dir, workspace.Name(dir), userconfig.Path())
+			fmt.Fprintf(w, "added local workspace %s (%s) to %s; queries rebuild it when its checkouts move past the map\n", dir, name, userconfig.Path())
 			return nil
 		}
 		if err := userconfig.AddWorkspace(pos[1]); err != nil {
@@ -452,9 +463,15 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		// stdout carries the MCP protocol; warnings go to stderr.
 		sess := newSession(&c, s, os.Stderr)
 		sess.Background = true // long-lived: never hold a tool call for a pull
+		// A client that closes stdin ends Serve: cancel a running rebuild
+		// and let it clean up (lock, scratch) before exiting.
+		ctx, cancel := context.WithCancel(ctx)
 		if sess.Rebuild != nil {
-			sess.Rebuild = backgroundRebuild(&c, sess, s)
+			start, wait := backgroundRebuild(ctx, &c, sess, s)
+			sess.Rebuild = start
+			defer wait()
 		}
+		defer cancel() // runs before wait
 		return mcpserver.Serve(ctx, mcpserver.Options{Version: version, Prepare: func(ctx context.Context) (*query.Q, error) {
 			q, _, err := sess.Query(ctx)
 			return q, err
@@ -532,7 +549,7 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 	sess := newSession(&c, s, os.Stderr)
 	q, rep, err := sess.Query(ctx)
 	if errors.Is(err, store.ErrNoSnapshot) {
-		return errors.New("no snapshot yet: run `cartographer pull <owner/name>` or `cartographer import <dir>`")
+		return errors.New("no snapshot yet: in your workspace run `cartographer build --local --import` (then `cartographer workspace add <dir>` keeps it fresh), or `cartographer pull <owner/name>`, or `cartographer import <dir>`")
 	}
 	if err != nil {
 		return err
@@ -556,6 +573,9 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 	case "export":
 		return exportCmd(ctx, w, s, q, &c)
 	}
+	// status lists the repos itself, then the advice (q.Notes) last.
+	notes := q.Notes
+	q.Notes = nil
 	d, err := Dispatch(ctx, q, cmd, pos, Opts{Depth: c.depth, Limit: c.limit, Offset: c.offset})
 	if err != nil {
 		return err
@@ -563,6 +583,9 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 	if cmd == "status" {
 		for _, l := range rep.Lines() {
 			d.L("%s", l)
+		}
+		for _, n := range notes {
+			d.L("%s", n)
 		}
 	}
 	return write(w, d, c.format, c.budget)
@@ -577,7 +600,7 @@ func newSession(c *common, s *store.Store, log io.Writer) *session.Session {
 	cwd, _ := os.Getwd()
 	sess := &session.Session{Store: s, DataDir: filepath.Dir(c.db), Cwd: cwd, Snapshot: c.snapshot, AutoPull: !c.noPull, Log: log}
 	if rebuildEnabled(c) {
-		sess.Rebuild = spawnRebuild(c)
+		sess.Rebuild = spawnRebuild(c, log)
 	}
 	return sess
 }

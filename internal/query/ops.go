@@ -826,5 +826,8 @@ func (q *Q) Status(ctx context.Context) (*output.Doc, error) {
 			d.L("annotations: %s", strings.Join(st, ", "))
 		}
 	}
+	for _, n := range q.Notes {
+		d.L("%s", n)
+	}
 	return d, nil
 }

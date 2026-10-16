@@ -37,6 +37,9 @@ type Report struct {
 	// Rebuild notes a local rebuild in progress or the last one's failure
 	// ("" when neither); see package rebuild.
 	Rebuild string
+	// Hints are status-only advice about keeping the map fresh (e.g. a
+	// workspace to register); not part of Summary or Lines.
+	Hints []string
 }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
@@ -273,6 +276,25 @@ func Check(ctx context.Context, repos []Repo, paths map[string]string) *Report {
 		rep.Repos = append(rep.Repos, st)
 	}
 	return rep
+}
+
+// Head returns the commit at HEAD of the checkout at dir ("" if none).
+func Head(ctx context.Context, dir string) string {
+	out, err := git(ctx, dir, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
+// Ahead reports whether the checkout at dir has commits past rev, or lacks
+// rev altogether (a build there would map something else).
+func Ahead(ctx context.Context, dir, rev string) bool {
+	if !ValidRevision(rev) {
+		return true
+	}
+	n, err := git(ctx, dir, "rev-list", "--count", "--end-of-options", rev+"..HEAD")
+	return err != nil || n != "0"
 }
 
 // Changed reports whether repo/file changed since the snapshot.
