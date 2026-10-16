@@ -75,22 +75,36 @@ func Find(ctx context.Context, dir string) Checkout {
 }
 
 // Match names the repo this checkout holds: by origin URL, else by
-// directory name. "" when it holds none of them.
+// directory name. A name never matches a repo whose URL disagrees with a
+// known origin. "" when it holds none of them.
 func (c Checkout) Match(repos []Repo) string {
+	if name := c.MatchOrigin(repos); name != "" {
+		return name
+	}
 	if c.Root == "" {
 		return ""
 	}
+	want := ""
 	if c.Origin != "" {
-		want := NormalizeURL(c.Origin)
-		for _, r := range repos {
-			if r.URL != "" && NormalizeURL(r.URL) == want {
-				return r.Name
-			}
-		}
+		want = NormalizeURL(c.Origin)
 	}
 	base := filepath.Base(c.Root)
 	for _, r := range repos {
-		if r.Name == base {
+		if r.Name == base && (want == "" || r.URL == "" || NormalizeURL(r.URL) == want) {
+			return r.Name
+		}
+	}
+	return ""
+}
+
+// MatchOrigin is Match by origin URL only.
+func (c Checkout) MatchOrigin(repos []Repo) string {
+	if c.Root == "" || c.Origin == "" {
+		return ""
+	}
+	want := NormalizeURL(c.Origin)
+	for _, r := range repos {
+		if r.URL != "" && NormalizeURL(r.URL) == want {
 			return r.Name
 		}
 	}

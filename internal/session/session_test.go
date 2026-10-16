@@ -32,8 +32,8 @@ func gitInit(t *testing.T, dir, origin string) {
 }
 
 // importAs imports the mini fixture under another workspace name and
-// snapshot id, with its repos renamed.
-func importAs(t *testing.T, s *store.Store, workspace, id, repoPrefix string) {
+// snapshot id, with its repos renamed and any extra old/new text replaced.
+func importAs(t *testing.T, s *store.Store, workspace, id, repoPrefix string, repl ...string) {
 	t.Helper()
 	src := "../../testdata/workspace-mini/snapshot"
 	dst := t.TempDir()
@@ -47,6 +47,7 @@ func importAs(t *testing.T, s *store.Store, workspace, id, repoPrefix string) {
 		if repoPrefix != "" {
 			txt = strings.ReplaceAll(txt, "shop-", repoPrefix)
 		}
+		txt = strings.NewReplacer(repl...).Replace(txt)
 		if rel == "manifest.json" {
 			txt = strings.Replace(txt, `"workspace": "mini"`, `"workspace": "`+workspace+`"`, 1)
 			txt = strings.Replace(txt, "snapshot-20261015T120000Z", id, 1)
@@ -108,6 +109,30 @@ func TestChooseNeverGuessesAcrossProjects(t *testing.T) {
 	sess.Cwd = app
 	if id, _ := sess.choose(ctx); id != "snapshot-20261015T120000Z" {
 		t.Errorf("shop repo chose %q (newest overall must not win)", id)
+	}
+}
+
+// A checkout's origin outranks its directory name: a newer workspace whose
+// same-named repo has another origin must not shadow the matching one.
+func TestChoosePrefersOriginOverName(t *testing.T) {
+	ctx := context.Background()
+	s, _ := store.Open(":memory:")
+	defer s.Close()
+	importAs(t, s, "acme", "snapshot-20261015T120000Z", "")
+	importAs(t, s, "other", "snapshot-20261016T000000Z", "", "github.com/example/", "github.com/other/")
+	app := filepath.Join(t.TempDir(), "shop-app")
+	gitInit(t, app, "git@github.com:example/shop-app.git")
+	sess := &Session{Store: s, Cwd: app}
+	if id, err := sess.choose(ctx); err != nil || id != "snapshot-20261015T120000Z" {
+		t.Errorf("origin match lost to a newer same-named repo: %q, %v", id, err)
+	}
+	// With no origin, the name still decides (newest workspace first).
+	bare := filepath.Join(t.TempDir(), "shop-app")
+	os.MkdirAll(bare, 0o755)
+	exec.Command("git", "-C", bare, "init", "-q").Run()
+	sess.Cwd = bare
+	if id, err := sess.choose(ctx); err != nil || id != "snapshot-20261016T000000Z" {
+		t.Errorf("name match without origin: %q, %v", id, err)
 	}
 }
 

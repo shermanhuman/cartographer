@@ -140,3 +140,31 @@ func TestConfiguredCheckoutPaths(t *testing.T) {
 		t.Errorf("gone: note %q, want %q", rep.Repos[1].Note, want)
 	}
 }
+
+// A known origin that disagrees with the repo's URL is not that repo, even
+// when the directory is named like it; an unknown URL on either side falls
+// back to the name.
+func TestMatchOriginMismatchIsNotNameMatch(t *testing.T) {
+	repos := []Repo{{Name: "app", URL: "https://github.com/other/app"}}
+	if got := (Checkout{Root: "/src/app", Origin: "git@github.com:acme/app.git"}).Match(repos); got != "" {
+		t.Errorf("mismatched origin matched %q", got)
+	}
+	if got := (Checkout{Root: "/src/app"}).Match(repos); got != "app" {
+		t.Errorf("no origin: %q", got)
+	}
+	if got := (Checkout{Root: "/src/app", Origin: "https://github.com/acme/app"}).Match([]Repo{{Name: "app"}}); got != "app" {
+		t.Errorf("repo without URL: %q", got)
+	}
+
+	// Sibling discovery uses the same rule.
+	ctx := context.Background()
+	parent := t.TempDir()
+	for _, n := range []string{"cur", "app"} {
+		os.MkdirAll(filepath.Join(parent, n), 0o755)
+		sh(t, filepath.Join(parent, n), "git", "init", "-q", "-b", "main")
+	}
+	sh(t, filepath.Join(parent, "app"), "git", "remote", "add", "origin", "https://github.com/acme/app")
+	if got := Locate(ctx, repos, filepath.Join(parent, "cur"), nil); got["app"] != "" {
+		t.Errorf("sibling with another origin claimed: %v", got)
+	}
+}

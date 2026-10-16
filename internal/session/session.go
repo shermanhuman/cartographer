@@ -289,12 +289,19 @@ func (s *Session) chooseFrom(ctx context.Context, co fresh.Checkout) (string, er
 		}
 		return "", &ErrNotMapped{Workspaces: names}
 	}
-	for _, ws := range names {
-		repos, err := s.repos(ctx, latest[ws])
-		if err != nil {
+	// An origin match anywhere outranks a directory-name match, so a newer
+	// workspace with a same-named repo can't shadow the right project.
+	repos := make([][]fresh.Repo, len(names))
+	for i, ws := range names {
+		if repos[i], err = s.repos(ctx, latest[ws]); err != nil {
 			return "", err
 		}
-		if co.Match(repos) != "" {
+		if co.MatchOrigin(repos[i]) != "" {
+			return latest[ws], nil
+		}
+	}
+	for i, ws := range names {
+		if co.Match(repos[i]) != "" {
 			return latest[ws], nil
 		}
 	}
