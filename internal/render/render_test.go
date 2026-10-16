@@ -383,3 +383,104 @@ func TestMermaidFitsMaxChars(t *testing.T) {
 		t.Error("unbalanced subgraph/end after trimming")
 	}
 }
+
+// diffEdited imports the fixture as base (after editBase) and as a head
+// snapshot (after editHead), and returns the rendered diff.
+func diffEdited(t *testing.T, editBase, editHead func(m map[string]any)) string {
+	t.Helper()
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	ctx := context.Background()
+	baseDir, eb := fixtureCopy(t)
+	eb("facts/shop-app.json", editBase)
+	base, err := s.Import(ctx, baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headDir, eh := fixtureCopy(t)
+	eh("manifest.json", func(m map[string]any) {
+		m["id"] = "snapshot-20261016T120000Z"
+		m["created_at"] = "2026-10-16T12:00:00Z"
+	})
+	eh("facts/shop-app.json", func(m map[string]any) {
+		editBase(m)
+		editHead(m)
+	})
+	head, err := s.Import(ctx, headDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Diff(ctx, s, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) > MaxChars {
+		t.Errorf("diff is %d chars", len(got))
+	}
+	return got
+}
+
+// A local call (target without a module) resolved through the caller's
+// module in base; head removes the callee, so the surviving caller's call
+// is now unresolved.
+func TestDiffDanglingLocalCall(t *testing.T) {
+	got := diffEdited(t, func(m map[string]any) {
+		for _, c := range m["calls"].([]any) {
+			call := c.(map[string]any)
+			if tgt := call["target"].(map[string]any); tgt["name"] == "validate" {
+				delete(tgt, "module")
+			}
+		}
+	}, func(m map[string]any) {
+		var fns []any
+		for _, f := range m["functions"].([]any) {
+			if f.(map[string]any)["id"] != "shop-app:Shop.Orders.validate/1" {
+				fns = append(fns, f)
+			}
+		}
+		m["functions"] = fns
+	})
+	if !strings.Contains(got, "| removed | `Shop.Orders.validate/1`") {
+		t.Fatalf("want validate/1 removed:\n%s", got)
+	}
+	if !strings.Contains(got, "still calls removed `validate/1` at lib/shop/orders.ex:11 (now unresolved)") {
+		t.Errorf("Shop.Orders.create/2 should be flagged as a dangling caller:\n%s", got)
+	}
+}
+
+// Dropping a default argument keeps the function ID (same max arity) but
+// removes a callable arity; a surviving call at the lost arity is flagged.
+func TestDiffDanglingLostArity(t *testing.T) {
+	got := diffEdited(t, func(map[string]any) {}, func(m map[string]any) {
+		for _, f := range m["functions"].([]any) {
+			if fn := f.(map[string]any); fn["id"] == "shop-app:Shop.Orders.create/2" {
+				fn["min_arity"] = 2
+			}
+		}
+	})
+	if !strings.Contains(got, "/1, /2 → /2") {
+		t.Fatalf("want create /1, /2 → /2 signature change:\n%s", got)
+	}
+	if !strings.Contains(got, "still calls removed `Shop.Orders.create/1` at lib/shop_web/order_controller.ex:9 (now unresolved)") {
+		t.Errorf("ShopWeb.OrderController.create/2 should be flagged as a dangling caller:\n%s", got)
+	}
+}
+
+// A caller that simply stops calling a function is not dangling.
+func TestDiffRemovedCallNotDangling(t *testing.T) {
+	got := diffEdited(t, func(map[string]any) {}, func(m map[string]any) {
+		var calls []any
+		for _, c := range m["calls"].([]any) {
+			if c.(map[string]any)["from"] != "shop-app:Shop.OrdersTest.test_total/1" {
+				calls = append(calls, c)
+			}
+		}
+		m["calls"] = calls
+	})
+	if strings.Contains(got, "still calls") {
+		t.Errorf("no caller should dangle:\n%s", got)
+	}
+}

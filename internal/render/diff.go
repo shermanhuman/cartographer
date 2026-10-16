@@ -271,8 +271,7 @@ func Diff(ctx context.Context, s *store.Store, baseID, headID string) (string, e
 	})
 
 	// Blast radius: callers in head of changed functions, plus head call
-	// sites that still name a removed (or re-aritied) function and so no
-	// longer resolve.
+	// sites that no longer resolve (see danglingCalls).
 	hq := &query.Q{S: s, Snapshot: headID}
 	var seeds []string
 	seedSet := map[string]bool{}
@@ -298,24 +297,10 @@ func Diff(ctx context.Context, s *store.Store, baseID, headID string) (string, e
 			}
 		}
 	}
-	type dangling struct {
-		From, Target, File string
-		Line               int
+	dangles, err := danglingCalls(ctx, s.DB, baseID, headID, head, gone)
+	if err != nil {
+		return "", err
 	}
-	var dangles []dangling
-	for _, g := range gone {
-		rows, err := s.DB.QueryContext(ctx, `SELECT from_id, target, file, line FROM calls WHERE snapshot_id = ? AND to_id IS NULL AND target = ? ORDER BY from_id, line`, headID, g.Label)
-		if err != nil {
-			return "", err
-		}
-		for rows.Next() {
-			var d dangling
-			rows.Scan(&d.From, &d.Target, &d.File, &d.Line)
-			dangles = append(dangles, d)
-		}
-		rows.Close()
-	}
-	sort.SliceStable(dangles, func(i, j int) bool { return dangles[i].From < dangles[j].From })
 	rootRepo := map[string]string{}
 	for _, id := range seeds {
 		rootRepo[id] = head.fns[id].Repo
@@ -595,4 +580,61 @@ func Diff(ctx context.Context, s *store.Store, baseID, headID string) (string, e
 	}
 	fmt.Fprintf(&b, "<sub>base %s → head %s · cartographer diff</sub>\n", stamp(base), stamp(head))
 	return capChars(b.String()), nil
+}
+
+type dangling struct {
+	From, Target, File string
+	Line               int
+}
+
+// danglingCalls returns head call sites that are now unresolved because of
+// the change: the same caller made the same call (by target text) resolved
+// in base, which covers local calls resolved via the caller's module and
+// callable arities lost to a dropped default argument; or the call names a
+// removed function, qualified or as a local call from its module.
+func danglingCalls(ctx context.Context, db *sql.DB, baseID, headID string, head *snapFacts, gone []dfn) ([]dangling, error) {
+	wasResolved := map[[2]string]bool{}
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT from_id, target FROM calls WHERE snapshot_id = ? AND to_id IS NOT NULL AND target != ''`, baseID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var k [2]string
+		if err := rows.Scan(&k[0], &k[1]); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		wasResolved[k] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	qualified, local := map[string]bool{}, map[string]bool{}
+	for _, g := range gone {
+		qualified[g.Label] = true
+		local[g.Module+"|"+fmt.Sprintf("%s/%d", g.Name, g.Arity)] = true
+	}
+	rows, err = db.QueryContext(ctx, `SELECT from_id, target, kind, file, line FROM calls WHERE snapshot_id = ? AND to_id IS NULL AND target != '' ORDER BY from_id, line, target`, headID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []dangling
+	for rows.Next() {
+		var d dangling
+		var kind string
+		if err := rows.Scan(&d.From, &d.Target, &kind, &d.File, &d.Line); err != nil {
+			return nil, err
+		}
+		resolvable := kind != "dynamic" && !strings.HasPrefix(kind, "js_")
+		isLocal := !strings.Contains(d.Target, ".")
+		switch {
+		case wasResolved[[2]string{d.From, d.Target}],
+			qualified[d.Target],
+			resolvable && isLocal && local[head.fns[d.From].Module+"|"+d.Target]:
+			out = append(out, d)
+		}
+	}
+	return out, rows.Err()
 }
