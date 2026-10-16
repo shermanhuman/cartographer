@@ -78,7 +78,9 @@ workspace's plugin commands, so cartographer records a digest of
 `cartographer.toml` and rebuilds only workspaces you added, and only while
 that file is unchanged. After it changes (a pull of the map repository),
 `status` says `cartographer.toml changed since you registered it`: review
-it and run `workspace add` again. A workspace merely found beside your
+it and run `workspace add` again. The digest covers `cartographer.toml`
+only, as with `mise trust`: after pulling the map repository, also review
+any scripts its commands run. A workspace merely found beside your
 repository is never run (`status` suggests the command). From then on, when you query from a checkout
 whose workspace checkout has commits past the snapshot, cartographer
 rebuilds in the background (a detached `build --local --import`; the MCP
@@ -89,7 +91,8 @@ workspace lists, so a second clone or a worktree that is ahead is reported
 
 Uncommitted edits are never built; their files stay marked ⚠. A failed
 rebuild shows `last rebuild failed 10:42: … (log: …)` and is retried after
-five minutes. Turn rebuilds off with `--no-rebuild`,
+five minutes (six hours after one stopped at its 15-minute bound: run
+`build --local --import` by hand). Turn rebuilds off with `--no-rebuild`,
 `CARTOGRAPHER_NO_REBUILD=1`, or `auto_rebuild = false` in the user config.
 
 Bundled extractor plugins: `extract-elixir` (AST, precise calls with default
@@ -118,7 +121,7 @@ and where checkouts live when they aren't siblings of the repository you
 are in:
 
 ```toml
-local_workspaces = ["~/src/my-project-map"]   # workspace add <dir>: rebuilt automatically
+local_workspaces = ["~/src/my-project-map"]   # written by workspace add <dir>; a hand-listed entry still needs it (it records the trust digest)
 workspaces = ["my-org/my-project-map"]        # workspace add <owner/name>, pull
 # auto_rebuild = false
 
