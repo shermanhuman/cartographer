@@ -30,6 +30,7 @@ test('typed queries match every word and respect the chip', () => {
   assert.deepEqual(ids(searchRows(catalog, 'current_user', 'module')), []);
 });
 
-test('an exact label ranks first', () => {
-  assert.equal(searchRows(catalog, 'users', 'all')[0].id, 'table:users');
+test('an exact label ranks ahead of name order', () => {
+  const rows = searchRows([e('function', 'list_users/0', 'App.Accounts.list_users/0'), e('table', 'users')], 'users', 'all');
+  assert.deepEqual(ids(rows), ['table:users', 'function:App.Accounts.list_users/0']);
 });
