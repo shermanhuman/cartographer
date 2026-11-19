@@ -27,4 +27,6 @@ jobs:
           elixir plugins/extract-elixir/test/extract_test.exs
           elixir plugins/extract-postgres-schema/test/capture_test.exs
       - name: JavaScript plugin tests
-        run: node --test plugins/extract-javascript/test/
+        run: |
+          node --test plugins/extract-javascript/test/
+          node --test web/scripts/
