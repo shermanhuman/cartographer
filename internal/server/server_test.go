@@ -300,6 +300,9 @@ func TestAnnotationsStatusSnapshots(t *testing.T) {
 	if st["snapshot"] != snap || st["generated_at"] != "2026-10-15T13:00:00Z" || asObj(st["freshness"])["summary"] != "shop-app 2 commits behind" {
 		t.Errorf("status: %v", st)
 	}
+	if cov, _ := st["coverage"].([]any); len(cov) != 2 || asObj(cov[0])["repo"] != "shop-app" || asObj(cov[0])["call_sites"].(float64) != 8 || asObj(cov[0])["in_repo"].(float64) != 6 {
+		t.Errorf("status coverage: %v", st["coverage"])
+	}
 	if asObj(st["counts"])["functions"].(float64) != 7 || !strings.HasPrefix(st["provenance"].(string), "map "+snap) {
 		t.Errorf("status counts: %v", st)
 	}

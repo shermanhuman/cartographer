@@ -942,10 +942,11 @@ func (q *Q) Status(ctx context.Context) (*output.Doc, error) {
 		parts = append(parts, fmt.Sprintf("%d %s", n, c.label))
 	}
 	d.L("%s", strings.Join(parts, " · "))
-	var resolved, total int
-	q.S.DB.QueryRowContext(ctx, `SELECT count(to_id), count(*) FROM calls WHERE snapshot_id = ?`, q.Snapshot).Scan(&resolved, &total)
-	if total > 0 {
-		d.L("call sites resolved: %d of %d (%.0f%%); the rest are external, dynamic or imported", resolved, total, 100*float64(resolved)/float64(total))
+	if cov, err := q.Coverage(ctx); err == nil && len(cov) > 0 {
+		d.L("coverage")
+		for _, c := range cov {
+			d.L("  %s", c.Line())
+		}
 	}
 	rows, err := q.S.DB.QueryContext(ctx, `SELECT status, count(*) FROM annotations WHERE snapshot_id = ? GROUP BY 1 ORDER BY 1`, q.Snapshot)
 	if err == nil {

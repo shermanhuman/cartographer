@@ -336,6 +336,10 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 		return nil, fmt.Errorf("status: counting resolved calls: %w", err)
 	}
 	counts["resolved_call_sites"] = resolved
+	coverage, err := q.Coverage(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("status: coverage: %w", err)
+	}
 	review := obj{}
 	rows, err := db.QueryContext(ctx, `SELECT status, count(*) FROM annotations WHERE snapshot_id = ? GROUP BY 1`, q.Snapshot)
 	if err != nil {
@@ -370,7 +374,7 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 	}
 	return obj{
 		"snapshot": q.Snapshot, "default_snapshot": def, "workspace": ws, "created_at": created, "imported_at": imported,
-		"repos": nonNil(repos), "counts": counts, "annotations": review, "freshness": fresh,
+		"repos": nonNil(repos), "counts": counts, "coverage": nonNil(coverage), "annotations": review, "freshness": fresh,
 		"provenance": q.Provenance(ctx), "version": a.o.Version,
 		"generated_at": a.o.Now().UTC().Format(time.RFC3339),
 	}, nil
