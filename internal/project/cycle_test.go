@@ -287,3 +287,34 @@ func TestAnchorListGainsRepo(t *testing.T) {
 		t.Fatalf("want the clone command, got %v", err)
 	}
 }
+
+// A recorded checkout that moved is found again at the next build; among
+// several matches a main working tree beats a linked worktree, then the
+// shortest path.
+func TestMovedCheckoutIsFoundAgain(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	// A linked worktree of sales one level down, shorter than the moved
+	// main checkout's path: the main working tree still wins.
+	wt := filepath.Join(x.root, "wt")
+	git(t, sales, "worktree", "add", "-q", "-b", "wt", wt)
+	moved := filepath.Join(x.root, "work", "sales-moved-here")
+	os.MkdirAll(filepath.Dir(moved), 0o755)
+	if err := os.Rename(sales, moved); err != nil {
+		t.Fatal(err)
+	}
+	git(t, moved, "worktree", "repair", wt)
+	if _, err := x.runner().Cycle(context.Background(), "shop", true); err != nil {
+		t.Fatal(err)
+	}
+	reg, _ := project.Load(x.state, "shop")
+	if m, _ := reg.Member("acme/sales"); m.Path != moved {
+		t.Errorf("recorded %s, want the moved main checkout %s", m.Path, moved)
+	}
+	os.RemoveAll(moved)
+	os.RemoveAll(wt)
+	if _, err := x.runner().Cycle(context.Background(), "shop", true); err == nil || !strings.Contains(err.Error(), "git clone https://github.com/acme/sales") {
+		t.Errorf("a vanished checkout should fail closed with its clone command: %v", err)
+	}
+}

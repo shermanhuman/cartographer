@@ -26,6 +26,8 @@ type View struct {
 	Yours   string
 	Running time.Time // a cycle holds the lock since (zero none)
 	Now     time.Time
+	// Roots are the checkout roots, for clone commands.
+	Roots []string
 }
 
 func ago(d time.Duration) string {
@@ -204,7 +206,7 @@ func (v *View) Problems() []string {
 	}
 	for _, m := range v.Reg.Members {
 		if m.Path == "" {
-			out = append(out, fmt.Sprintf("%s has no checkout: %s", m.Name(), CloneCommand(m.Repo, nil)))
+			out = append(out, fmt.Sprintf("%s has no checkout: %s", m.Name(), CloneCommand(m.Repo, v.Roots)))
 		}
 	}
 	return out

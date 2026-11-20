@@ -270,6 +270,7 @@ func openStore(c *common) (*store.Store, error) {
 }
 
 func run(ctx context.Context, args []string, w io.Writer) error {
+	store.BinaryVersion = version // part of every map id
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprint(w, usage)
 		return nil

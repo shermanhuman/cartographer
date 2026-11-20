@@ -15,8 +15,8 @@ import (
 // the user config (by owner/name, then by name), then a sibling of Near
 // (the checkout `project add` was given), then the Roots searched two
 // levels deep, matching any remote whose URL normalizes to the member's
-// GitHub URL. Among several matches a main working tree beats a linked
-// worktree, then the shortest path wins.
+// GitHub URL. A main working tree beats a linked worktree wherever it is
+// found; among equals a sibling comes first, then the shortest path.
 type Locator struct {
 	Checkouts map[string]string
 	Near      string
@@ -37,19 +37,20 @@ func (l *Locator) Find(ctx context.Context, slug string) string {
 		}
 	}
 	want := fresh.NormalizeURL(GitHubURL(slug))
+	var siblings []string
 	if l.Near != "" {
 		if entries, err := os.ReadDir(filepath.Dir(l.Near)); err == nil {
-			var found []string
 			for _, e := range entries {
 				dir := filepath.Join(filepath.Dir(l.Near), e.Name())
 				if e.IsDir() && isCheckout(dir) && hasRemote(ctx, dir, want) {
-					found = append(found, dir)
+					siblings = append(siblings, dir)
 				}
 			}
-			if p := best(found); p != "" {
-				return p
-			}
 		}
+	}
+	// A sibling main working tree needs no scan of the roots.
+	if p := best(siblings); p != "" && !isWorktree(p) {
+		return p
 	}
 	if l.scanned == nil {
 		l.scanned = map[string][]string{}
@@ -60,6 +61,13 @@ func (l *Locator) Find(ctx context.Context, slug string) string {
 				}
 			}
 		}
+	}
+	if p := best(l.scanned[want]); p != "" && !isWorktree(p) {
+		return p
+	}
+	// Only linked worktrees: a sibling first.
+	if p := best(siblings); p != "" {
+		return p
 	}
 	return best(l.scanned[want])
 }
