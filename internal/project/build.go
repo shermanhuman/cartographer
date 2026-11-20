@@ -293,7 +293,9 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 					logf("%s: %s stderr:\n%s", name, step, workspace.Tail(s))
 				}
 				if err != nil {
-					return nil, &StepError{t.Repo, t.Commit, step, err}
+					// The header shows the cause; the full error and stderr
+					// are in the log.
+					return nil, &StepError{t.Repo, t.Commit, step, pluginCause(stderr, err, t.root, name)}
 				}
 				m.Facts = append(m.Facts, rel)
 				continue
@@ -475,4 +477,26 @@ func copyWorkingCopy(ctx context.Context, src, dst string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+// pluginCause turns a failed extractor run into its cause for the header:
+// the last meaningful line of its stderr, without the "cartographer: " prefix
+// and with the build's archive path shown as the repo name. Lines that are
+// only loader noise (shared-library version warnings) are skipped. Without
+// stderr it keeps err.
+func pluginCause(stderr string, err error, root, repo string) error {
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" || strings.Contains(l, "no version information available") {
+			continue
+		}
+		l = strings.TrimPrefix(l, "cartographer: ")
+		if root != "" {
+			l = strings.ReplaceAll(l, root+"/", repo+"/")
+			l = strings.ReplaceAll(l, root, repo)
+		}
+		return errors.New(l)
+	}
+	return err
 }
