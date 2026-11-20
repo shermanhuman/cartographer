@@ -139,7 +139,7 @@ func ExtractorTools(extractor string, pins map[string]string) ([]Tool, error) {
 		t, err := need("rust")
 		return append([]Tool{RustAnalyzer}, t...), err
 	case "elixir", "schema":
-		return need("elixir", "erlang")
+		return need("erlang", "elixir") // elixir installs on erlang
 	case "javascript":
 		return []Tool{Node}, nil
 	}
