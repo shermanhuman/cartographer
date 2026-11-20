@@ -343,6 +343,9 @@ func (s *Session) projectReport(ctx context.Context, m *memo, id string, reg *pr
 		st = &project.State{}
 	}
 	v := &project.View{Reg: reg, State: st, Snapshot: id, Report: rep, Yours: yours, Now: s.now()}
+	if cfg, _ := userconfig.Load(); cfg != nil {
+		v.Roots = cfg.Roots()
+	}
 	if since, ok := project.Lock(s.StateDir, reg.Name).Running(reg.Name); ok {
 		v.Running = since
 	}
