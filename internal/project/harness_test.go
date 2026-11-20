@@ -99,7 +99,9 @@ func (x *h) advance(d time.Duration) {
 	x.mu.Unlock()
 }
 
-func sanitize(spec string) string { return strings.NewReplacer(":", "_", "/", "_", "@", "_").Replace(spec) }
+func sanitize(spec string) string {
+	return strings.NewReplacer(":", "_", "/", "_", "@", "_").Replace(spec)
+}
 
 // fakeMise answers where, install, bin-paths and env for tools under
 // x.tools (install succeeds only for those under x.tools/available).

@@ -80,7 +80,7 @@ type BuildOptions struct {
 	// Version is the cartographer version (recorded with the tools).
 	Version string
 	Now     time.Time
-	Log      io.Writer
+	Log     io.Writer
 }
 
 // Build maps the inputs into a snapshot directory.

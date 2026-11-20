@@ -377,7 +377,9 @@ func (r *Runner) fetchAll(ctx context.Context, reg *Registration, st *State, env
 		in.Pins = pins
 	}
 	// The anchor goes first (its contexts_depth applies).
-	sort.SliceStable(inputs, func(i, j int) bool { return strings.EqualFold(inputs[i].Repo, reg.Anchor) && !strings.EqualFold(inputs[j].Repo, reg.Anchor) })
+	sort.SliceStable(inputs, func(i, j int) bool {
+		return strings.EqualFold(inputs[i].Repo, reg.Anchor) && !strings.EqualFold(inputs[j].Repo, reg.Anchor)
+	})
 	return inputs, nil
 }
 
@@ -502,7 +504,9 @@ func (r *Runner) Head(ctx context.Context, from string) (Result, error) {
 		}
 		inputs = append(inputs, Input{Member: m, Commit: fresh.Head(ctx, m.Path), Head: true, Settings: ms, Pins: pins})
 	}
-	sort.SliceStable(inputs, func(i, j int) bool { return strings.EqualFold(inputs[i].Repo, anchor) && !strings.EqualFold(inputs[j].Repo, anchor) })
+	sort.SliceStable(inputs, func(i, j int) bool {
+		return strings.EqualFold(inputs[i].Repo, anchor) && !strings.EqualFold(inputs[j].Repo, anchor)
+	})
 	snap, err := r.buildImport(ctx, as.Project, "head", inputs, "", r.now().UTC())
 	if err != nil {
 		return Result{}, err
