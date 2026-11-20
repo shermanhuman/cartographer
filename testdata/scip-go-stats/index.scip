@@ -1,0 +1,13 @@
+
+%
+scip-go0.2.9file:///fixture Ã
+stats.goB6scip-go gomod example.com/stats 0 `example.com/stats`/BB6scip-go gomod github.com/golang/go/src go1.26 strings/BQ?scip-go gomod example.com/stats 0 `example.com/stats`/helper().BR#J8scip-go gomod example.com/stats 0 `example.com/stats`/T#B	R	D8scip-go gomod example.com/stats 0 `example.com/stats`/T#BN<scip-go gomod example.com/stats 0 `example.com/stats`/T#M().B	
+RP<scip-go gomod example.com/stats 0 `example.com/stats`/Use().BZ K?scip-go gomod example.com/stats 0 `example.com/stats`/helper().BB6scip-go gomod github.com/golang/go/src go1.26 strings/BL@scip-go gomod github.com/golang/go/src go1.26 strings/ToUpper().BB6scip-go gomod github.com/golang/go/src go1.26 strings/BL@scip-go gomod github.com/golang/go/src go1.26 strings/ToLower().BD8scip-go gomod example.com/stats 0 `example.com/stats`/T#BH<scip-go gomod example.com/stats 0 `example.com/stats`/T#M().B
+6scip-go gomod example.com/stats 0 `example.com/stats`/¶Package stats has exactly one in-repo invocation, one external invocation,
+one external function value and one in-repo method value: 2 call sites
+(1 in-repo, 1 external) and 2 refs.
+(#2stats:"go*package statsV
+8scip-go gomod example.com/stats 0 `example.com/stats`/T#(12T:"go*type T struct{}g
+?scip-go gomod example.com/stats 0 `example.com/stats`/helper().(2helper:"go*func helper() stringW
+<scip-go gomod example.com/stats 0 `example.com/stats`/T#M().(2M:"go*func (T).M()u
+<scip-go gomod example.com/stats 0 `example.com/stats`/Use().(2Use:."go*(func Use() (func(string) string, func())"go0

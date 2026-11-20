@@ -1,0 +1,563 @@
+{
+  "facts_version": 2,
+  "producer": {
+    "name": "scip-go",
+    "version": "0.2.9",
+    "call_precision": "precise"
+  },
+  "repo": "fixture",
+  "revision": "r1",
+  "files": [
+    {
+      "path": "app/admin.go",
+      "language": "go",
+      "category": "source"
+    },
+    {
+      "path": "app/server.go",
+      "language": "go",
+      "category": "source"
+    },
+    {
+      "path": "app/server_test.go",
+      "language": "go",
+      "category": "test"
+    },
+    {
+      "path": "app/store.go",
+      "language": "go",
+      "category": "source"
+    },
+    {
+      "path": "cmd/tool/main.go",
+      "language": "go",
+      "category": "source"
+    },
+    {
+      "path": "osdep/x_linux.go",
+      "language": "go",
+      "category": "source"
+    }
+  ],
+  "modules": [
+    {
+      "id": "fixture:app",
+      "name": "app",
+      "namespace": [
+        "app"
+      ],
+      "file": "app/admin.go",
+      "line": 20,
+      "language": "go"
+    },
+    {
+      "id": "fixture:cmd/tool",
+      "name": "cmd/tool",
+      "namespace": [
+        "cmd",
+        "tool"
+      ],
+      "file": "cmd/tool/main.go",
+      "line": 10,
+      "language": "go"
+    },
+    {
+      "id": "fixture:osdep",
+      "name": "osdep",
+      "namespace": [
+        "osdep"
+      ],
+      "file": "osdep/x_linux.go",
+      "line": 4,
+      "language": "go"
+    }
+  ],
+  "functions": [
+    {
+      "id": "fixture:app.Keys/1",
+      "module": "fixture:app",
+      "name": "Keys",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "function",
+      "file": "app/store.go",
+      "line": 20,
+      "fingerprint": "c1704d86ad1c5cb3"
+    },
+    {
+      "id": "fixture:app.Server.Routes/2",
+      "module": "fixture:app",
+      "name": "Routes",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "method",
+      "file": "app/server.go",
+      "line": 36,
+      "fingerprint": "b68a4078bc518434"
+    },
+    {
+      "id": "fixture:app.Server.dialEvent/2",
+      "module": "fixture:app",
+      "name": "dialEvent",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "method",
+      "file": "app/server.go",
+      "line": 31,
+      "fingerprint": "77e88de3bfe61d8d"
+    },
+    {
+      "id": "fixture:app.Server.f/0",
+      "module": "fixture:app",
+      "name": "f",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "method",
+      "file": "app/server.go",
+      "line": 14,
+      "fingerprint": "34fa9fe8df42415c"
+    },
+    {
+      "id": "fixture:app.Server.guard/1",
+      "module": "fixture:app",
+      "name": "guard",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "method",
+      "file": "app/server.go",
+      "line": 29,
+      "fingerprint": "bbfd157fa39d9fab"
+    },
+    {
+      "id": "fixture:app.Server.items/2",
+      "module": "fixture:app",
+      "name": "items",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "method",
+      "file": "app/server.go",
+      "line": 32,
+      "fingerprint": "bea2b7d354304e9f"
+    },
+    {
+      "id": "fixture:app.Server.run/1",
+      "module": "fixture:app",
+      "name": "run",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "method",
+      "file": "app/server.go",
+      "line": 20,
+      "fingerprint": "9fe8080b454a854a"
+    },
+    {
+      "id": "fixture:app.Server.signedIn/1",
+      "module": "fixture:app",
+      "name": "signedIn",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "method",
+      "file": "app/server.go",
+      "line": 30,
+      "fingerprint": "a8f56e23d2d9a548"
+    },
+    {
+      "id": "fixture:app.Store.Save/2",
+      "module": "fixture:app",
+      "name": "Save",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "interface_method",
+      "file": "app/store.go",
+      "line": 7,
+      "fingerprint": "41c3bfdd5e889597"
+    },
+    {
+      "id": "fixture:app.TestRun/1",
+      "module": "fixture:app",
+      "name": "TestRun",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "function",
+      "file": "app/server_test.go",
+      "line": 5,
+      "fingerprint": "4ff92e605fd2854d"
+    },
+    {
+      "id": "fixture:app.adminClient.Check/2",
+      "module": "fixture:app",
+      "name": "Check",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "method",
+      "file": "app/admin.go",
+      "line": 34,
+      "fingerprint": "03056075151d3ece"
+    },
+    {
+      "id": "fixture:app.adminClient.Lookup/2",
+      "module": "fixture:app",
+      "name": "Lookup",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "method",
+      "file": "app/admin.go",
+      "line": 58,
+      "fingerprint": "226a3fd90951c188"
+    },
+    {
+      "id": "fixture:app.adminClient.Message/3",
+      "module": "fixture:app",
+      "name": "Message",
+      "arity": 3,
+      "min_arity": 3,
+      "kind": "method",
+      "file": "app/admin.go",
+      "line": 80,
+      "fingerprint": "c5db709e9c283824"
+    },
+    {
+      "id": "fixture:app.adminClient.Suppress/2",
+      "module": "fixture:app",
+      "name": "Suppress",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "method",
+      "file": "app/admin.go",
+      "line": 38,
+      "fingerprint": "72848b1351014696"
+    },
+    {
+      "id": "fixture:app.adminClient.do/3",
+      "module": "fixture:app",
+      "name": "do",
+      "arity": 3,
+      "min_arity": 3,
+      "kind": "method",
+      "file": "app/admin.go",
+      "line": 42,
+      "fingerprint": "30dc6fdbd65a4ca5"
+    },
+    {
+      "id": "fixture:app.adminClient.get/2",
+      "module": "fixture:app",
+      "name": "get",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "method",
+      "file": "app/admin.go",
+      "line": 52,
+      "fingerprint": "7445573efd1d7a27"
+    },
+    {
+      "id": "fixture:app.adminClient.gmail/2",
+      "module": "fixture:app",
+      "name": "gmail",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "method",
+      "file": "app/admin.go",
+      "line": 70,
+      "fingerprint": "f4137b6c68098623"
+    },
+    {
+      "id": "fixture:app.adminClient.post/4",
+      "module": "fixture:app",
+      "name": "post",
+      "arity": 4,
+      "min_arity": 4,
+      "kind": "method",
+      "file": "app/admin.go",
+      "line": 20,
+      "fingerprint": "8397b02e4889570d"
+    },
+    {
+      "id": "fixture:app.diskStore.Save/2",
+      "module": "fixture:app",
+      "name": "Save",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "method",
+      "file": "app/store.go",
+      "line": 17,
+      "fingerprint": "60925a8fa290e2c7"
+    },
+    {
+      "id": "fixture:app.memStore.Save/2",
+      "module": "fixture:app",
+      "name": "Save",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "method",
+      "file": "app/store.go",
+      "line": 13,
+      "fingerprint": "f907df0b193a6b64"
+    },
+    {
+      "id": "fixture:app.register/1",
+      "module": "fixture:app",
+      "name": "register",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "function",
+      "file": "app/server.go",
+      "line": 16,
+      "fingerprint": "8a72a539df408be9"
+    },
+    {
+      "id": "fixture:cmd/tool.main/0",
+      "module": "fixture:cmd/tool",
+      "name": "main",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "cmd/tool/main.go",
+      "line": 10,
+      "fingerprint": "bb2117ca9eedb278"
+    },
+    {
+      "id": "fixture:osdep.OnLinux/0",
+      "module": "fixture:osdep",
+      "name": "OnLinux",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "osdep/x_linux.go",
+      "line": 4,
+      "fingerprint": "146787bc7776a924"
+    }
+  ],
+  "calls": [
+    {
+      "from": "fixture:app.adminClient.Check/2",
+      "to": "fixture:app.adminClient.post/4",
+      "kind": "call",
+      "file": "app/admin.go",
+      "line": 35,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.adminClient.Suppress/2",
+      "to": "fixture:app.adminClient.post/4",
+      "kind": "call",
+      "file": "app/admin.go",
+      "line": 39,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.adminClient.get/2",
+      "to": "fixture:app.adminClient.do/3",
+      "kind": "call",
+      "file": "app/admin.go",
+      "line": 53,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.adminClient.Lookup/2",
+      "to": "fixture:app.adminClient.get/2",
+      "kind": "call",
+      "file": "app/admin.go",
+      "line": 59,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.adminClient.Lookup/2",
+      "to": "fixture:app.adminClient.do/3",
+      "kind": "call",
+      "file": "app/admin.go",
+      "line": 62,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.adminClient.Lookup/2",
+      "to": "fixture:app.adminClient.do/3",
+      "kind": "call",
+      "file": "app/admin.go",
+      "line": 65,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.adminClient.Message/3",
+      "to": "fixture:app.adminClient.gmail/2",
+      "kind": "call",
+      "file": "app/admin.go",
+      "line": 81,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.Server.run/1",
+      "to": "fixture:app.Server.f/0",
+      "kind": "call",
+      "file": "app/server.go",
+      "line": 21,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.Server.run/1",
+      "to": "fixture:app.register/1",
+      "kind": "call",
+      "file": "app/server.go",
+      "line": 22,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.Server.run/1",
+      "to": "fixture:app.diskStore.Save/2",
+      "kind": "dispatch",
+      "file": "app/server.go",
+      "line": 23,
+      "precision": "heuristic"
+    },
+    {
+      "from": "fixture:app.Server.run/1",
+      "to": "fixture:app.memStore.Save/2",
+      "kind": "dispatch",
+      "file": "app/server.go",
+      "line": 23,
+      "precision": "heuristic"
+    },
+    {
+      "from": "fixture:app.Server.run/1",
+      "to": "fixture:app.memStore.Save/2",
+      "kind": "call",
+      "file": "app/server.go",
+      "line": 24,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.Server.run/1",
+      "to": "fixture:app.Keys/1",
+      "kind": "call",
+      "file": "app/server.go",
+      "line": 25,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.Server.Routes/2",
+      "to": "fixture:app.Server.guard/1",
+      "kind": "call",
+      "file": "app/server.go",
+      "line": 37,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.Server.Routes/2",
+      "to": "fixture:app.Server.signedIn/1",
+      "kind": "call",
+      "file": "app/server.go",
+      "line": 37,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app.TestRun/1",
+      "to": "fixture:app.Server.run/1",
+      "kind": "call",
+      "file": "app/server_test.go",
+      "line": 7,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:cmd/tool.main/0",
+      "to": "fixture:osdep.OnLinux/0",
+      "kind": "call",
+      "file": "cmd/tool/main.go",
+      "line": 12,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:cmd/tool.main/0",
+      "to": "fixture:app.Server.Routes/2",
+      "kind": "call",
+      "file": "cmd/tool/main.go",
+      "line": 13,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:cmd/tool.main/0",
+      "to": "fixture:app.Keys/1",
+      "kind": "call",
+      "file": "cmd/tool/main.go",
+      "line": 14,
+      "precision": "precise"
+    }
+  ],
+  "notes": [
+    {
+      "kind": "dropped_documents",
+      "message": "1 indexed documents outside the repository root (generated test mains) were dropped"
+    }
+  ],
+  "routes": [
+    {
+      "id": "fixture:route:* /items/{id}",
+      "path": "/items/{id}",
+      "handler": "fixture:app.Server.items/2",
+      "file": "app/server.go",
+      "line": 38,
+      "precision": "precise"
+    },
+    {
+      "id": "fixture:route:POST /dial/events",
+      "method": "POST",
+      "path": "/dial/events",
+      "handler": "fixture:app.Server.dialEvent/2",
+      "file": "app/server.go",
+      "line": 37,
+      "precision": "heuristic"
+    }
+  ],
+  "http_refs": [
+    {
+      "from": "fixture:app.adminClient.Check/2",
+      "method": "POST",
+      "path": "/api/v1/sales/cold/check",
+      "base": "baseURL",
+      "file": "app/admin.go",
+      "line": 35
+    },
+    {
+      "from": "fixture:app.adminClient.Suppress/2",
+      "method": "POST",
+      "path": "/api/v1/sales/cold/suppress",
+      "base": "baseURL",
+      "file": "app/admin.go",
+      "line": 39
+    },
+    {
+      "from": "fixture:app.adminClient.Lookup/2",
+      "method": "GET",
+      "path": "/api/v1/people/:id",
+      "base": "baseURL",
+      "file": "app/admin.go",
+      "line": 59
+    },
+    {
+      "from": "fixture:app.adminClient.Lookup/2",
+      "method": "DELETE",
+      "path": "/api/v1/cache",
+      "base": "baseURL",
+      "file": "app/admin.go",
+      "line": 62
+    },
+    {
+      "from": "fixture:app.adminClient.Message/3",
+      "method": "GET",
+      "path": "/gmail/v1/messages/:id",
+      "base": "baseURL",
+      "file": "app/admin.go",
+      "line": 81
+    }
+  ],
+  "stats": [
+    {
+      "language": "go",
+      "call_sites": 42,
+      "in_repo": 17,
+      "dispatch": 1,
+      "external": 24,
+      "unresolved": 0,
+      "refs": 4,
+      "not_extracted": 3
+    }
+  ]
+}
