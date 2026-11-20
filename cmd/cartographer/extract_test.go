@@ -20,8 +20,8 @@ func TestExtractHelpAndUsage(t *testing.T) {
 			t.Errorf("help lacks %q:\n%s", want, out.String())
 		}
 	}
-	if err := run(context.Background(), []string{"extract", "kubernetes"}, &out); err == nil || !strings.Contains(err.Error(), "usage: cartographer extract scip") {
-		t.Errorf("extract kubernetes: %v", err)
+	if err := run(context.Background(), []string{"extract", "bogus"}, &out); err == nil || !strings.Contains(err.Error(), "usage: cartographer extract scip|kubernetes|urls") {
+		t.Errorf("extract bogus: %v", err)
 	}
 	if err := run(context.Background(), []string{"extract", "scip", "--lang", "cobol", "--repo", "x"}, &out); err == nil {
 		t.Error("an unknown language must fail")
