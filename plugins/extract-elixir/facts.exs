@@ -25,7 +25,13 @@ defmodule Cartographer.ElixirFacts do
   scripts) and `:schema_facts` (path of a schema facts document; enables
   `table_refs`).
   """
-  def build(opts) do
+  def build(opts), do: opts |> build_with_skips() |> elem(0)
+
+  @doc """
+  `build/1`, plus the routes and HTTP references counted as not extracted:
+  `{doc, [%{file, line, reason}]}`, sorted.
+  """
+  def build_with_skips(opts) do
     repo = Keyword.fetch!(opts, :repo)
     root = opts |> Keyword.fetch!(:root) |> Path.expand()
     source_roots = Keyword.get(opts, :source_roots) || ["lib"]
@@ -115,6 +121,13 @@ defmodule Cartographer.ElixirFacts do
     }
     |> Enum.reject(fn {_, v} -> is_nil(v) end)
     |> Map.new()
+    |> then(fn doc ->
+      skips =
+        for(s <- parsed.route_skips, do: %{file: s.file, line: s.line, reason: s.kind}) ++
+          Enum.map(http_skipped, &Map.take(&1, [:file, :line, :reason]))
+
+      {doc, Enum.sort(skips)}
+    end)
   end
 
   # Keys in this order first, then alphabetically, so output is stable and

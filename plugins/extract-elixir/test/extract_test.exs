@@ -271,7 +271,13 @@ defmodule Cartographer.ElixirExtractTest do
   # one request is built across functions.
   describe "facts v2: routes, HTTP references and stats" do
     defp web_doc(repo, roots \\ ["lib"]),
-      do: ElixirFacts.build(repo: repo, root: Path.join(@web, repo), source_roots: roots)
+      do: repo |> web(roots) |> elem(0)
+
+    defp web(repo, roots \\ ["lib"]),
+      do:
+        ElixirFacts.build_with_skips(repo: repo, root: Path.join(@web, repo), source_roots: roots)
+
+    defp skips(doc_and_skips), do: doc_and_skips |> elem(1) |> Enum.map(&{&1.line, &1.reason})
 
     defp stats(doc) do
       [%{language: "elixir"} = s] = doc.stats
@@ -316,6 +322,14 @@ defmodule Cartographer.ElixirExtractTest do
       # live_dashboard, forward, live and a non-literal path are counted;
       # pipe_through and pipelines are not routes.
       assert %{not_extracted: 4, dispatch: 0, refs: 0} = stats(doc)
+
+      assert skips(web("admin")) == [
+               {43, "live_dashboard"},
+               {44, "forward"},
+               {50, "live"},
+               {55, "get with a non-literal path"}
+             ]
+
       refute Map.has_key?(doc, :http_refs)
     end
 
@@ -336,41 +350,65 @@ defmodule Cartographer.ElixirExtractTest do
       assert Enum.all?(doc.http_refs, &(&1.base == "Rosearch.ApiClient"))
       # The piped path (wont_fix) and the path built by path/1 (boilerplate).
       assert %{not_extracted: 2} = stats(doc)
+      assert skips(web("rosearch")) == [{14, "piped"}, {19, "not a literal path"}]
       refute Map.has_key?(doc, :routes)
     end
 
     test "a url: that reaches Req.new through a pipe is counted, not extracted" do
-      doc = web_doc("sites", ["shared-libs/lib"])
+      {doc, skipped} = web("sites", ["shared-libs/lib"])
       refute Map.has_key?(doc, :http_refs)
       # create_lead's pipe into attempt/2, and Turnstile's Req.post of a
       # request whose URL is a module attribute.
       assert %{not_extracted: 2} = stats(doc)
+
+      assert Enum.map(skipped, &{&1.file, &1.line, &1.reason}) == [
+               {"shared-libs/lib/shared/admin_client.ex", 17, "piped"},
+               {"shared-libs/lib/shared/turnstile.ex", 9, "Req.post without a path"}
+             ]
     end
 
     test "a path written in a helper, or as a literal url: beside a request, is a ref there" do
-      doc =
-        extract(~S"""
-        defmodule Billing do
-          def cancel(id), do: delete("/subscriptions/#{id}")
-          def list(collection), do: get("/" <> collection)
-          def refresh(req), do: Req.post(req, url: "/oauth/token", body: "x")
-          defp get(path), do: request(:get, path)
-          defp delete(path), do: request(:delete, path)
-          defp request(method, path), do: Req.request(Req.new(base_url: "https://x"), method: method, url: path)
-        end
-        defmodule Caller do
-          def go, do: Billing.list("subscriptions")
-        end
-        """)
+      {doc, skipped} =
+        ElixirFacts.build_with_skips(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/billing.ex" => ~S"""
+              defmodule Billing do
+                def cancel(id), do: delete("/subscriptions/#{id}")
+                def list(collection), do: get("/" <> collection)
+                def refresh(req), do: Req.post(req, url: "/oauth/token", body: "x")
+                def show(id) do
+                  path = "/subscriptions/#{id}"
+                  get(path)
+                end
+                defp get(path), do: request(:get, path)
+                defp delete(path), do: request(:delete, path)
+                defp request(method, path), do: Req.request(Req.new(base_url: "https://x"), method: method, url: path)
+              end
+              defmodule Caller do
+                def go, do: Billing.list("subscriptions")
+                def view(id), do: Billing.show(id)
+              end
+              """
+            })
+        )
 
       assert Enum.map(doc.http_refs, &{&1[:method], &1.path, &1.from}) == [
                {"DELETE", "/subscriptions/:p1", "fixture:Billing.cancel/1"},
                {"POST", "/oauth/token", "fixture:Billing.refresh/1"}
              ]
 
+      # show/1's id is a path parameter, not the path: the request starts in
+      # show/1 (a variable path, counted), and Caller.view/1 is no request.
       # "/" <> collection names no path, so list/1 carries it and its caller
-      # passes "subscriptions": counted.
-      assert %{not_extracted: 1} = stats(doc)
+      # passes "subscriptions": counted there.
+      assert %{not_extracted: 2} = stats(doc)
+
+      assert Enum.map(skipped, &{&1.line, &1.reason}) == [
+               {7, "not a literal path"},
+               {14, "not a literal path"}
+             ]
     end
 
     test "stats count call sites as in-repo, external or unresolved" do
