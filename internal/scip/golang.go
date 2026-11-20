@@ -88,7 +88,11 @@ func (c *conv) goName(f *fn) error {
 			owner = p.Name + "."
 		}
 	}
-	f.f.ID = fmt.Sprintf("%s.%s%s/%d", dir, owner, f.f.Name, f.f.Arity)
+	prefix := dir + "."
+	if dir == "." { // the module root package: no directory in the id
+		prefix = ""
+	}
+	f.f.ID = fmt.Sprintf("%s%s%s/%d", prefix, owner, f.f.Name, f.f.Arity)
 	f.key = moduleKey{id: dir, name: dir, namespace: strings.Split(dir, "/")}
 	return nil
 }

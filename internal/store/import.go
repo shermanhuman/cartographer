@@ -311,8 +311,13 @@ func nonNil[T any](s []T) []T {
 	return s
 }
 
-// label renders a function as Module.name/arity.
+// label renders a function as Module.name/arity: its id without the repo
+// prefix when the id has one (Go and Rust ids carry the receiver type, which
+// Module.name would drop), else built from the module.
 func label(f facts.Function, modules map[string]facts.Module) string {
+	if i := strings.Index(f.ID, ":"); i > 0 && strings.HasSuffix(f.ID, fmt.Sprintf("%s/%d", f.Name, f.Arity)) {
+		return f.ID[i+1:]
+	}
 	if mo, ok := modules[f.Module]; ok {
 		return fmt.Sprintf("%s.%s/%d", mo.Name, f.Name, f.Arity)
 	}
