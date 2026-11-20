@@ -266,7 +266,7 @@ func TestConvertGoStats(t *testing.T) {
 	if len(d.Stats) != 1 || d.Stats[0] != want {
 		t.Errorf("stats %+v, want %+v", d.Stats, want)
 	}
-	wantEdges(t, d, "fixture:..Use/0", 15, "fixture:..helper/0 call precise")
+	wantEdges(t, d, "fixture:Use/0", 15, "fixture:helper/0 call precise")
 	if len(d.Calls) != 1 {
 		t.Errorf("calls %+v: want only the in-repo one", d.Calls)
 	}
