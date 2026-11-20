@@ -397,6 +397,28 @@ func (s *Session) freshFrom(ctx context.Context, m *memo, id string) (*fresh.Rep
 			}
 			return rep, nil
 		}
+		if si, ok, _ := s.Store.Info(ctx, id); ok && si.Source == "head" {
+			// A `refresh --head` map of an unregistered project: labelled
+			// "your checkouts" all the same, its checkouts found as usual.
+			cfg, _ := userconfig.Load()
+			if cfg == nil {
+				cfg = &userconfig.Config{}
+			}
+			reg := &project.Registration{Name: ws}
+			for name, p := range fresh.LocateFrom(ctx, repos, m.co, cfg.Checkouts) {
+				for _, r := range repos {
+					if r.Name == name {
+						slug := strings.TrimPrefix(fresh.NormalizeURL(r.URL), "github.com/")
+						reg.Members = append(reg.Members, project.Member{Repo: slug, Path: p})
+					}
+				}
+			}
+			rep := s.projectReport(ctx, m, id, reg, repos)
+			if ctx.Err() == nil {
+				m.reports[id] = rep
+			}
+			return rep, nil
+		}
 	}
 	cfg, _ := userconfig.Load()
 	if cfg == nil {

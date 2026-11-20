@@ -88,6 +88,10 @@ func TestProjectCommands(t *testing.T) {
 	if regs, _ := project.List(project.StateDir()); len(regs) != 0 {
 		t.Error("still registered")
 	}
+	// An unregistered project's --head map is labelled all the same.
+	if out := cli(t, headDB, "status", "--no-pull"); !strings.Contains(out, "your checkouts, built ") {
+		t.Errorf("head status, unregistered:\n%s", out)
+	}
 }
 
 // project add owner/name without a checkout prints the clone command and
