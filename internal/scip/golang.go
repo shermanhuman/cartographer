@@ -257,7 +257,7 @@ func (c *conv) goRoute(d *doc, g *goFile, call *ast.CallExpr) {
 	if m == "" {
 		m = "*"
 	}
-	r := facts.Route{ID: c.opt.Repo + ":route:" + m + " " + p, Method: method, Path: p, Handler: h.f.ID, File: d.path, Line: g.fset.Position(call.Pos()).Line, Precision: facts.Precise}
+	r := facts.Route{ID: c.opt.Repo + ":route:" + path.Dir(d.path) + ":" + m + " " + p, Method: method, Path: p, Handler: h.f.ID, File: d.path, Line: g.fset.Position(call.Pos()).Line, Precision: facts.Precise}
 	if wrapped {
 		r.Precision = facts.Heuristic
 	}

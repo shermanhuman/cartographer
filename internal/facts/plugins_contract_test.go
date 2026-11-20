@@ -111,7 +111,7 @@ func TestElixirPluginWebContract(t *testing.T) {
 	admin := run("admin", "lib")
 	var check *Route
 	for i, r := range admin.Routes {
-		if r.ID == "admin:route:POST /api/v1/sales/cold/check" {
+		if r.ID == "admin:route:AdminWeb.Router:POST /api/v1/sales/cold/check" {
 			check = &admin.Routes[i]
 		}
 	}

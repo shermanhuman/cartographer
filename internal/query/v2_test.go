@@ -17,7 +17,7 @@ import (
 const (
 	v2Start   = "sales:internal/dialer.Server.campaignEnrollSave/2"
 	v2Caller  = "sales:internal/dialer.adminClient.Check/1"
-	v2Route   = "admin:route:POST /api/v1/sales/cold/check"
+	v2Route   = "admin:route:AdminWeb.Router:POST /api/v1/sales/cold/check"
 	v2Handler = "admin:AdminWeb.SalesColdController.check/2"
 )
 

@@ -675,7 +675,7 @@ func TestOverviewShowsCrossRepoHTTPEdge(t *testing.T) {
 		t.Errorf("cross-repo edge: %v", e)
 	}
 	cat := byID(getJSON[[]obj](t, srv, "/api/catalog"))
-	if r := cat["admin:route:POST /api/v1/sales/cold/check"]; r["kind"] != "route" || r["label"] != "POST /api/v1/sales/cold/check" {
+	if r := cat["admin:route:AdminWeb.Router:POST /api/v1/sales/cold/check"]; r["kind"] != "route" || r["label"] != "POST /api/v1/sales/cold/check" {
 		t.Errorf("route catalog entry: %v", r)
 	}
 	if s := cat["s:admin"]; s["summary"] != "2 modules · 1 route at ccccccc" {

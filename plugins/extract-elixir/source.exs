@@ -687,6 +687,7 @@ defmodule Cartographer.ElixirSource do
         end
 
       r = %{
+        router: env.module,
         method: String.upcase(verb),
         path: "/" <> Enum.join(scope.path ++ segments(path), "/"),
         controller: controller,

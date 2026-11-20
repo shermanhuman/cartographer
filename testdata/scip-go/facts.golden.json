@@ -489,7 +489,7 @@
   ],
   "routes": [
     {
-      "id": "fixture:route:* /items/{id}",
+      "id": "fixture:route:app:* /items/{id}",
       "path": "/items/{id}",
       "handler": "fixture:app.Server.items/2",
       "file": "app/server.go",
@@ -497,7 +497,7 @@
       "precision": "precise"
     },
     {
-      "id": "fixture:route:POST /dial/events",
+      "id": "fixture:route:app:POST /dial/events",
       "method": "POST",
       "path": "/dial/events",
       "handler": "fixture:app.Server.dialEvent/2",

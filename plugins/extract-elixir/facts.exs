@@ -416,15 +416,16 @@ defmodule Cartographer.ElixirFacts do
   # --- routes ----------------------------------------------------------------
 
   # A route's handler is Controller.action/2 when this document defines it.
-  # The same method and path a second time (another router, or a later
-  # scope that Phoenix never reaches) is noted and left out.
+  # Ids carry the router module, so two apps in one repo can serve the same
+  # path. The same router, method and path a second time (a later scope that
+  # Phoenix never reaches) is noted and left out.
   defp routes(raw, functions, repo) do
     ids = MapSet.new(functions, & &1.id)
 
     raw
     |> Enum.sort_by(&{&1.file, &1.line})
     |> Enum.reduce({[], %{}, []}, fn r, {routes, seen, notes} ->
-      id = "#{repo}:route:#{r.method} #{r.path}"
+      id = "#{repo}:route:#{r.router}:#{r.method} #{r.path}"
 
       case seen do
         %{^id => first} ->

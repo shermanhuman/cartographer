@@ -16,7 +16,7 @@
     {"id": "admin:AdminWeb.SalesColdController.check/2", "module": "admin:AdminWeb.SalesColdController", "name": "check", "arity": 2, "min_arity": 2, "kind": "def", "file": "lib/admin_web/controllers/sales_cold_controller.ex", "line": 4, "fingerprint": "check-v1"}
   ],
   "routes": [
-    {"id": "admin:route:POST /api/v1/sales/cold/check", "method": "POST", "path": "/api/v1/sales/cold/check", "handler": "admin:AdminWeb.SalesColdController.check/2", "file": "lib/admin_web/router.ex", "line": 12, "precision": "precise"}
+    {"id": "admin:route:AdminWeb.Router:POST /api/v1/sales/cold/check", "method": "POST", "path": "/api/v1/sales/cold/check", "handler": "admin:AdminWeb.SalesColdController.check/2", "file": "lib/admin_web/router.ex", "line": 12, "precision": "precise"}
   ],
   "services": [
     {"kind": "deployment", "name": "admin", "namespace": "default", "image": "ghcr.io/example/admin:1.0", "labels": {"app": "admin"}, "file": "deploy/admin.yaml", "line": 1},

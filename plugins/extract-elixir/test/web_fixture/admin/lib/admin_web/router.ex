@@ -52,6 +52,8 @@ defmodule AdminWeb.Router do
 
     post "/users/log-in", UserSessionController, :create
     get "/missing", MissingController, :show
+    # A later scope repeating a route Phoenix already matched: noted, left out.
+    get "/missing", MissingController, :show
     get @dynamic_path, PageController, :home
   end
 end

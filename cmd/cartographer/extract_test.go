@@ -30,9 +30,10 @@ func TestExtractHelpAndUsage(t *testing.T) {
 
 // With scip-go on PATH, extract prints one valid facts v2 document.
 func TestExtractScipGo(t *testing.T) {
+	// A mise shim with no version set is on PATH but doesn't run: skip then too.
 	for _, n := range []string{"scip-go", "go"} {
-		if _, err := exec.LookPath(n); err != nil {
-			t.Skipf("%s not on PATH", n)
+		if err := exec.Command(n, "version").Run(); err != nil && exec.Command(n, "--version").Run() != nil {
+			t.Skipf("%s isn't runnable here", n)
 		}
 	}
 	var out bytes.Buffer

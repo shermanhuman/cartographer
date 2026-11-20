@@ -9,7 +9,7 @@ import {functionNeighborhood, edgeLabel, hopLabel} from '../graph-model.js';
 const base = process.env.CARTOGRAPHER_V2_URL;
 const skip = base ? false : 'set CARTOGRAPHER_V2_URL to `cartographer serve` over testdata/workspace-v2 (go test ./internal/server does)';
 const get = async path => {const r = await fetch(new URL(path, base)); assert.ok(r.ok, `${path}: ${r.status}`); return r.json()};
-const route = 'admin:route:POST /api/v1/sales/cold/check';
+const route = 'admin:route:AdminWeb.Router:POST /api/v1/sales/cold/check';
 const caller = 'sales:internal/dialer.adminClient.Check/1';
 const handler = 'admin:AdminWeb.SalesColdController.check/2';
 const start = 'sales:internal/dialer.Server.campaignEnrollSave/2';

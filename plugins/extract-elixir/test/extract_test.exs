@@ -287,23 +287,25 @@ defmodule Cartographer.ElixirExtractTest do
     test "Phoenix verb routes join nested scope paths and aliases to a handler" do
       doc = web_doc("admin")
 
-      assert Enum.map(doc.routes, &{&1.id, &1[:handler]}) == [
-               {"admin:route:GET /", "admin:AdminWeb.PageController.home/2"},
-               {"admin:route:GET /api/v1/tenant/resolve/:slug",
+      assert Enum.sort(Enum.map(doc.routes, &{&1.id, &1[:handler]})) == Enum.sort([
+               {"admin:route:AdminWeb.Router:GET /", "admin:AdminWeb.PageController.home/2"},
+               {"admin:route:AdminWeb.Router:GET /api/v1/tenant/resolve/:slug",
                 "admin:AdminWeb.API.V1.AuthController.resolve_tenant/2"},
-               {"admin:route:GET /api/v2/tenants/:slug/users",
+               {"admin:route:AdminWeb.Router:GET /api/v2/tenants/:slug/users",
                 "admin:AdminWeb.API.V2.TenantUsersController.index/2"},
-               {"admin:route:GET /missing", nil},
-               {"admin:route:POST /api/v1/internal/invites",
+               {"admin:route:AdminWeb.Router:GET /missing", nil},
+               {"admin:route:AdminWeb.InternalRouter:POST /api/v1/internal/invites",
                 "admin:AdminWeb.API.V1.BetaInviteController.create/2"},
-               {"admin:route:POST /api/v1/leads",
+               {"admin:route:AdminWeb.Router:POST /api/v1/leads",
+                 "admin:AdminWeb.API.V1.LeadController.create/2"},
+                {"admin:route:AdminWeb.InternalRouter:POST /api/v1/leads",
                 "admin:AdminWeb.API.V1.LeadController.create/2"},
-               {"admin:route:POST /api/v1/sales/cold/check",
+               {"admin:route:AdminWeb.Router:POST /api/v1/sales/cold/check",
                 "admin:AdminWeb.API.V1.SalesColdController.check/2"},
-               {"admin:route:POST /api/v1/sales/cold/suppress",
+               {"admin:route:AdminWeb.Router:POST /api/v1/sales/cold/suppress",
                 "admin:AdminWeb.API.V1.SalesColdController.suppress/2"},
-               {"admin:route:POST /users/log-in", "admin:AdminWeb.UserSessionController.create/2"}
-             ]
+               {"admin:route:AdminWeb.Router:POST /users/log-in", "admin:AdminWeb.UserSessionController.create/2"}
+             ])
 
       assert %{
                method: "POST",
@@ -327,7 +329,7 @@ defmodule Cartographer.ElixirExtractTest do
                {43, "live_dashboard"},
                {44, "forward"},
                {50, "live"},
-               {55, "get with a non-literal path"}
+               {57, "get with a non-literal path"}
              ]
 
       refute Map.has_key?(doc, :http_refs)

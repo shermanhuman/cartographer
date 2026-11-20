@@ -230,8 +230,8 @@ func TestConvertGo(t *testing.T) {
 		routes = append(routes, r.ID+" -> "+r.Handler+" "+r.Precision)
 	}
 	wantRoutes := []string{
-		"fixture:route:* /items/{id} -> " + app + "Server.items/2 precise",
-		"fixture:route:POST /dial/events -> " + app + "Server.dialEvent/2 heuristic",
+		"fixture:route:app:* /items/{id} -> " + app + "Server.items/2 precise",
+		"fixture:route:app:POST /dial/events -> " + app + "Server.dialEvent/2 heuristic",
 	}
 	if !slices.Equal(routes, wantRoutes) {
 		t.Errorf("routes:\n got %q\nwant %q", routes, wantRoutes)
