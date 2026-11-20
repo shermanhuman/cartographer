@@ -2,6 +2,7 @@ package project_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shermanhuman/cartographer/internal/project"
+	"github.com/shermanhuman/cartographer/internal/rebuild"
 )
 
 // A pushed commit is mapped by the first command once the last fetch is
@@ -181,15 +183,36 @@ func TestRacingCallersBuildOnce(t *testing.T) {
 	x := newH(t)
 	_, sales, _ := x.world()
 	x.register(sales)
+	// Both callers saw "never attempted"; the first holds its cycle open
+	// until the second has tried.
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	defer project.SetHookLocked(func() {
+		entered <- struct{}{}
+		<-release
+	})()
 	var wg sync.WaitGroup
-	for range 2 {
+	errs := make([]error, 2)
+	for i := range 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			x.runner().Cycle(context.Background(), "shop", false)
+			_, errs[i] = x.runner().Cycle(context.Background(), "shop", false)
 		}()
+		if i == 0 {
+			<-entered
+		}
 	}
+	// The second either is refused by the lock or (without one) enters too.
+	select {
+	case <-entered:
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(release)
 	wg.Wait()
+	if !errors.Is(errs[0], rebuild.ErrRunning) && !errors.Is(errs[1], rebuild.ErrRunning) {
+		t.Errorf("neither caller was refused by the lock: %v", errs)
+	}
 	// Two elixir members: one build runs the extractor twice.
 	if x.runs() != 2 || x.snapshots() != 1 {
 		t.Fatalf("runs %d, snapshots %d", x.runs(), x.snapshots())

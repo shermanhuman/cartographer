@@ -97,7 +97,11 @@ func (r *Runner) fail(name string, st *State, digest string, err error) error {
 	return err
 }
 
+// hookLocked runs at the start of every cycle, under the lock (tests).
+var hookLocked = func() {}
+
 func (r *Runner) cycle(ctx context.Context, name string, force bool) (Result, error) {
+	hookLocked()
 	now := r.now().UTC()
 	st, err := LoadState(r.StateDir, name)
 	if err != nil {
