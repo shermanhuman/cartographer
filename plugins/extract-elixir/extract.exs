@@ -1,6 +1,7 @@
-# extract-elixir: writes one facts v1 document for an Elixir repository to
+# extract-elixir: writes one facts v2 document for an Elixir repository to
 # stdout. Usage: see README.md. Never compiles or executes project code.
 Code.require_file("source.exs", __DIR__)
+Code.require_file("http.exs", __DIR__)
 Code.require_file("facts.exs", __DIR__)
 
 defmodule Cartographer.ElixirExtractCLI do

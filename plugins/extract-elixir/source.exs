@@ -4,8 +4,10 @@ defmodule Cartographer.ElixirSource do
   and never compiles or executes project code.
 
   It records modules, one entry per function clause, raw call sites (with the
-  lexical aliases and imports in scope), Ecto `schema "table"` declarations
-  and notes. Call attribution that needs every definition in the repository
+  lexical aliases and imports in scope, and their argument AST), Ecto
+  `schema "table"` declarations, Phoenix router routes and notes. Clauses of
+  a module that calls `Req` keep their AST (`:http`) for
+  `Cartographer.ElixirHTTP`. Call attribution that needs every definition in the repository
   (local vs imported vs Kernel) happens later in `Cartographer.ElixirFacts`.
 
   Parsing never creates atoms for names found in the source: a static atoms
@@ -73,7 +75,21 @@ defmodule Cartographer.ElixirSource do
     ArgumentError -> {:ok, %{__atom__: name}}
   end
 
-  def new, do: %{modules: [], clauses: [], calls: [], schemas: [], notes: []}
+  def new,
+    do: %{
+      modules: [],
+      clauses: [],
+      calls: [],
+      schemas: [],
+      notes: [],
+      routes: [],
+      route_skips: []
+    }
+
+  # Req functions that send a request; their URL-or-options arguments are
+  # where a wrapper's path parameter ends up (see Cartographer.ElixirHTTP).
+  @req_sinks ~w(request get post put patch delete head request! get! post! put! patch! delete! head!)
+  def req_sinks, do: @req_sinks
 
   @doc """
   Parses `source` (the contents of `relative`) and adds its facts to `acc`.
@@ -119,12 +135,33 @@ defmodule Cartographer.ElixirSource do
 
     case result do
       {:ok, ast} ->
-        elem(walk(ast, env, acc), 1)
+        {_, file_acc} = walk(ast, env, new())
+        merge(acc, prune_http(file_acc))
 
       {:error, reason} ->
         note(acc, "parse_error", relative, parse_message(reason))
     end
   end
+
+  # Clause ASTs are kept only for modules with a Req request call: the HTTP
+  # wrapper analysis reads nothing else, and the rest would only hold memory.
+  defp prune_http(acc) do
+    req_modules =
+      for c <- acc.calls,
+          c.module == "Req" and c.name in @req_sinks,
+          into: MapSet.new(),
+          do: c.caller_module
+
+    clauses =
+      Enum.map(acc.clauses, fn c ->
+        if MapSet.member?(req_modules, c.module), do: c, else: Map.delete(c, :http)
+      end)
+
+    %{acc | clauses: clauses}
+  end
+
+  defp merge(acc, file_acc),
+    do: Map.new(acc, fn {k, v} -> {k, Map.get(file_acc, k, []) ++ v} end)
 
   defp parse_message({meta, message, token}) when is_list(meta) do
     message =
@@ -234,6 +271,10 @@ defmodule Cartographer.ElixirSource do
     }
 
     {_, acc} = walk(body, next, acc)
+
+    acc =
+      if router?(body), do: route_walk(body[:do], next, %{path: [], alias: nil}, acc), else: acc
+
     {outer, acc}
   end
 
@@ -356,7 +397,8 @@ defmodule Cartographer.ElixirSource do
           file: env.file,
           line: line(meta),
           end_line: max_line(clause),
-          normalized: normalize(clause)
+          normalized: normalize(clause),
+          http: %{params: args, guards: guards, body: body, aliases: env.aliases}
         }
 
         acc = %{acc | clauses: [c | acc.clauses]}
@@ -456,7 +498,7 @@ defmodule Cartographer.ElixirSource do
           apply_call(acc, env, args, meta)
 
         literal ->
-          call(acc, env, name(mod, env), fun, length(args), meta, "remote")
+          call(acc, env, name(mod, env), fun, length(args), meta, "remote", args)
 
         true ->
           call(acc, env, nil, fun, length(args), meta, "dynamic")
@@ -486,7 +528,7 @@ defmodule Cartographer.ElixirSource do
     acc =
       if env.caller && fun not in @special && {fun, arity} not in @special_forms &&
            not (is_atom(fun) and Macro.operator?(fun, arity)),
-         do: call(acc, env, nil, fun, arity, meta, "local_or_import"),
+         do: call(acc, env, nil, fun, arity, meta, "local_or_import", args),
          else: acc
 
     {_, acc} = walk(args, env, acc)
@@ -498,6 +540,177 @@ defmodule Cartographer.ElixirSource do
 
   defp walk(tuple, env, acc) when is_tuple(tuple), do: walk(Tuple.to_list(tuple), env, acc)
   defp walk(_, env, acc), do: {env, acc}
+
+  # --- Phoenix routes -------------------------------------------------------
+
+  @route_verbs ~w(get post put patch delete options head)
+  # Router forms that never hold routes.
+  @route_opaque ~w(pipeline plug pipe_through def defp defmacro defmacrop defmodule quote)
+
+  # A Phoenix router: `use Phoenix.Router` or `use <App>Web, :router` at the
+  # top of the module body.
+  defp router?(body) do
+    forms =
+      case body do
+        [do: {:__block__, _, forms}] -> forms
+        [do: form] -> [form]
+        _ -> []
+      end
+
+    Enum.any?(forms, fn
+      {:use, _, [{:__aliases__, _, [p, r]} | _]} when ident?(p) and ident?(r) ->
+        str(p) == "Phoenix" and str(r) == "Router"
+
+      {:use, _, [_, router]} when ident?(router) ->
+        str(router) == "router"
+
+      _ ->
+        false
+    end)
+  end
+
+  # Walks a router body for verb routes inside nested scopes. `scope` joins
+  # its literal path to the enclosing one and appends its alias (expanded
+  # through the lexical aliases, as Phoenix does) to the enclosing alias.
+  # Routes the walker cannot name (a non-literal path, `live`, `forward`,
+  # `resources`, any other macro whose first argument is a "/" path) are
+  # recorded in `route_skips` and only counted.
+  defp route_walk({:__block__, _, forms}, env, scope, acc), do: route_walk(forms, env, scope, acc)
+
+  defp route_walk(forms, env, scope, acc) when is_list(forms) do
+    {_, acc} =
+      Enum.reduce(forms, {env, acc}, fn form, {env, acc} -> route_form(form, env, scope, acc) end)
+
+    acc
+  end
+
+  defp route_walk(form, env, scope, acc), do: elem(route_form(form, env, scope, acc), 1)
+
+  defp route_form({kind, _, _} = form, env, _scope, acc)
+       when kind in [:alias, :require, :import] do
+    {env, _} = walk(form, env, new())
+    {env, acc}
+  end
+
+  defp route_form({fun, meta, args} = form, env, scope, acc) when ident?(fun) and is_list(args) do
+    case {str(fun), args} do
+      {"scope", _} ->
+        {env, scope_form(form, env, scope, acc)}
+
+      {opaque, _} when opaque in @route_opaque ->
+        {env, acc}
+
+      {verb, [path, plug, action | rest]} when verb in @route_verbs and length(rest) <= 1 ->
+        {env, verb_route(verb, path, plug, action, meta, env, scope, acc)}
+
+      {verb, _} when verb in @route_verbs ->
+        {env, route_skip(acc, env, meta, "#{verb} with an unexpected shape")}
+
+      {other, [path | _]} when is_binary(path) ->
+        if String.starts_with?(path, "/"),
+          do: {env, route_skip(acc, env, meta, other)},
+          else: {env, route_blocks(args, env, scope, acc)}
+
+      _ ->
+        {env, route_blocks(args, env, scope, acc)}
+    end
+  end
+
+  defp route_form(_, env, _scope, acc), do: {env, acc}
+
+  # `if`, `live_session` and other blocks: their do/else bodies may hold routes.
+  defp route_blocks(args, env, scope, acc) do
+    for arg <- args,
+        Keyword.keyword?(arg),
+        {key, body} <- arg,
+        key in [:do, :else],
+        reduce: acc do
+      acc -> route_walk(body, env, scope, acc)
+    end
+  end
+
+  defp scope_form({_, meta, args}, env, scope, acc) do
+    {positional, blocks} = Enum.split_while(args, &(not do_block?(&1)))
+
+    {path, alias_ast, opts} =
+      case positional do
+        [path, alias_ast, opts] when is_list(opts) -> {path, alias_ast, opts}
+        [path, opts] when is_binary(path) and is_list(opts) -> {path, nil, opts}
+        [path, alias_ast] when is_binary(path) -> {path, alias_ast, []}
+        [path] when is_binary(path) -> {path, nil, []}
+        [opts] when is_list(opts) -> {Keyword.get(opts, :path, "/"), nil, opts}
+        other -> {other, nil, []}
+      end
+
+    alias_ast = alias_ast || (Keyword.keyword?(opts) && Keyword.get(opts, :alias)) || nil
+
+    inner = %{
+      path:
+        if(is_binary(path) and scope.path != :unknown,
+          do: scope.path ++ segments(path),
+          else: :unknown
+        ),
+      alias:
+        cond do
+          alias_ast == false ->
+            nil
+
+          alias_ast != nil and literal_module?(alias_ast) ->
+            join_alias(scope.alias, name(alias_ast, env))
+
+          alias_ast != nil ->
+            :unknown
+
+          true ->
+            scope.alias
+        end
+    }
+
+    case blocks do
+      [block | _] when is_list(block) ->
+        route_walk(Keyword.get(block, :do), env, inner, acc)
+
+      _ ->
+        route_skip(acc, env, meta, "scope without a do block")
+    end
+  end
+
+  defp do_block?(arg),
+    do: is_list(arg) and arg != [] and Keyword.keyword?(arg) and Keyword.has_key?(arg, :do)
+
+  defp verb_route(verb, path, plug, action, meta, env, scope, acc) do
+    if is_binary(path) and scope.path != :unknown do
+      controller =
+        cond do
+          not literal_module?(plug) or scope.alias == :unknown -> nil
+          true -> join_alias(scope.alias, name(plug, env))
+        end
+
+      r = %{
+        method: String.upcase(verb),
+        path: "/" <> Enum.join(scope.path ++ segments(path), "/"),
+        controller: controller,
+        action: if(ident?(action), do: str(action)),
+        file: env.file,
+        line: line(meta)
+      }
+
+      %{acc | routes: [r | acc.routes]}
+    else
+      route_skip(acc, env, meta, "#{verb} with a non-literal path")
+    end
+  end
+
+  defp route_skip(acc, env, meta, what),
+    do: %{acc | route_skips: [%{file: env.file, line: line(meta), kind: what} | acc.route_skips]}
+
+  defp segments(path), do: String.split(path, "/", trim: true)
+
+  defp join_alias(nil, name), do: name
+  defp join_alias(outer, name), do: outer <> "." <> name
+
+  @doc "The module name `ast` denotes under `env` (`:module` and `:aliases`)."
+  def module_name(ast, env), do: name(ast, env)
 
   # apply(Mod, :fun, [a, b]) with literal parts names its target; anything
   # else is a dynamic call the core never resolves.
@@ -511,10 +724,12 @@ defmodule Cartographer.ElixirSource do
   defp apply_call(acc, env, args, meta),
     do: call(acc, env, nil, :apply, length(args), meta, "dynamic")
 
-  defp call(acc, %{caller: nil}, _, _, _, _, _), do: acc
+  defp call(acc, env, mod, fun, arity, meta, kind, args \\ nil)
+  defp call(acc, %{caller: nil}, _, _, _, _, _, _), do: acc
 
-  defp call(acc, env, mod, fun, arity, meta, kind) do
+  defp call(acc, env, mod, fun, arity, meta, kind, args) do
     c = %{
+      args: args,
       from: env.caller,
       caller_module: env.module,
       module: mod,

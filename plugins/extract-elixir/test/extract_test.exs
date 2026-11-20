@@ -1,5 +1,6 @@
 # Run: mise exec -- elixir plugins/extract-elixir/test/extract_test.exs
 Code.require_file("../source.exs", __DIR__)
+Code.require_file("../http.exs", __DIR__)
 Code.require_file("../facts.exs", __DIR__)
 ExUnit.start()
 
@@ -11,6 +12,7 @@ defmodule Cartographer.ElixirExtractTest do
   @plugin Path.expand("..", __DIR__)
   @fixture Path.expand("fixture", __DIR__)
   @schema Path.expand("schema.json", __DIR__)
+  @web Path.expand("web_fixture", __DIR__)
 
   defp fixture_doc(opts \\ []) do
     ElixirFacts.build(
@@ -58,11 +60,11 @@ defmodule Cartographer.ElixirExtractTest do
   describe "fixture project" do
     test "inventories files, modules and namespaces" do
       doc = fixture_doc()
-      assert doc.facts_version == 1
+      assert doc.facts_version == 2
 
       assert doc.producer == %{
                name: "extract-elixir",
-               version: "0.1.0",
+               version: "0.2.0",
                call_precision: "precise"
              }
 
@@ -231,7 +233,7 @@ defmodule Cartographer.ElixirExtractTest do
       assert first == second
       decoded = JSON.decode!(first)
       assert decoded["revision"] == "abc123"
-      assert String.starts_with?(first, ~s({"facts_version":1,"producer":))
+      assert String.starts_with?(first, ~s({"facts_version":2,"producer":))
       assert length(decoded["functions"]) == length(fixture_doc().functions)
     end
 
@@ -261,6 +263,141 @@ defmodule Cartographer.ElixirExtractTest do
         )
 
       assert status == 2
+    end
+  end
+
+  # Three repositories copied in shape from real ones: an admin app's
+  # Phoenix routers, a client app's Req wrapper, and a shared library whose
+  # one request is built across functions.
+  describe "facts v2: routes, HTTP references and stats" do
+    defp web_doc(repo, roots \\ ["lib"]),
+      do: ElixirFacts.build(repo: repo, root: Path.join(@web, repo), source_roots: roots)
+
+    defp stats(doc) do
+      [%{language: "elixir"} = s] = doc.stats
+      s
+    end
+
+    test "Phoenix verb routes join nested scope paths and aliases to a handler" do
+      doc = web_doc("admin")
+
+      assert Enum.map(doc.routes, &{&1.id, &1[:handler]}) == [
+               {"admin:route:GET /", "admin:AdminWeb.PageController.home/2"},
+               {"admin:route:GET /api/v1/tenant/resolve/:slug",
+                "admin:AdminWeb.API.V1.AuthController.resolve_tenant/2"},
+               {"admin:route:GET /api/v2/tenants/:slug/users",
+                "admin:AdminWeb.API.V2.TenantUsersController.index/2"},
+               {"admin:route:GET /missing", nil},
+               {"admin:route:POST /api/v1/internal/invites",
+                "admin:AdminWeb.API.V1.BetaInviteController.create/2"},
+               {"admin:route:POST /api/v1/leads",
+                "admin:AdminWeb.API.V1.LeadController.create/2"},
+               {"admin:route:POST /api/v1/sales/cold/check",
+                "admin:AdminWeb.API.V1.SalesColdController.check/2"},
+               {"admin:route:POST /api/v1/sales/cold/suppress",
+                "admin:AdminWeb.API.V1.SalesColdController.suppress/2"},
+               {"admin:route:POST /users/log-in", "admin:AdminWeb.UserSessionController.create/2"}
+             ]
+
+      assert %{
+               method: "POST",
+               path: "/api/v1/sales/cold/check",
+               precision: "precise",
+               file: "lib/admin_web/router.ex",
+               line: 27
+             } = Enum.find(doc.routes, &(&1.path == "/api/v1/sales/cold/check"))
+
+      # No handler in this document: no handler and no precision.
+      refute Map.has_key?(Enum.find(doc.routes, &(&1.path == "/missing")), :precision)
+
+      assert [%{kind: "duplicate_route", file: "lib/admin_web/router.ex"}] =
+               Enum.filter(doc.notes, &(&1.kind == "duplicate_route"))
+
+      # live_dashboard, forward, live and a non-literal path are counted;
+      # pipe_through and pipelines are not routes.
+      assert %{not_extracted: 4, dispatch: 0, refs: 0} = stats(doc)
+      refute Map.has_key?(doc, :http_refs)
+    end
+
+    test "calls to a Req wrapper with a literal or interpolated path become refs" do
+      doc = web_doc("rosearch")
+
+      assert Enum.map(doc.http_refs, &{&1[:method], &1.path, &1.from, &1.line}) == [
+               {"GET", "/auth/me/preferences", "rosearch:Rosearch.VehicleList.preferences/1", 5},
+               {"GET", "/tenants/:p1/vehicle-cleanup", "rosearch:Rosearch.VehicleList.cleanup/3",
+                9},
+               # fetch/2 passes its path to get/2.
+               {"GET", "/vehicles/supported-makes", "rosearch:Rosearch.VehicleList.makes/1", 22},
+               {"DELETE", "/tenants/:p1/users/:p2", "rosearch:Rosearch.VehicleList.remove_user/3",
+                25},
+               {"GET", "/vehicles/year-ranges", "rosearch:Rosearch.VehicleList.year_ranges/2", 29}
+             ]
+
+      assert Enum.all?(doc.http_refs, &(&1.base == "Rosearch.ApiClient"))
+      # The piped path (wont_fix) and the path built by path/1 (boilerplate).
+      assert %{not_extracted: 2} = stats(doc)
+      refute Map.has_key?(doc, :routes)
+    end
+
+    test "a url: that reaches Req.new through a pipe is counted, not extracted" do
+      doc = web_doc("sites", ["shared-libs/lib"])
+      refute Map.has_key?(doc, :http_refs)
+      # create_lead's pipe into attempt/2, and Turnstile's Req.post of a
+      # request whose URL is a module attribute.
+      assert %{not_extracted: 2} = stats(doc)
+    end
+
+    test "a path written in a helper, or as a literal url: beside a request, is a ref there" do
+      doc =
+        extract(~S"""
+        defmodule Billing do
+          def cancel(id), do: delete("/subscriptions/#{id}")
+          def list(collection), do: get("/" <> collection)
+          def refresh(req), do: Req.post(req, url: "/oauth/token", body: "x")
+          defp get(path), do: request(:get, path)
+          defp delete(path), do: request(:delete, path)
+          defp request(method, path), do: Req.request(Req.new(base_url: "https://x"), method: method, url: path)
+        end
+        defmodule Caller do
+          def go, do: Billing.list("subscriptions")
+        end
+        """)
+
+      assert Enum.map(doc.http_refs, &{&1[:method], &1.path, &1.from}) == [
+               {"DELETE", "/subscriptions/:p1", "fixture:Billing.cancel/1"},
+               {"POST", "/oauth/token", "fixture:Billing.refresh/1"}
+             ]
+
+      # "/" <> collection names no path, so list/1 carries it and its caller
+      # passes "subscriptions": counted.
+      assert %{not_extracted: 1} = stats(doc)
+    end
+
+    test "stats count call sites as in-repo, external or unresolved" do
+      doc =
+        extract(~S"""
+        defmodule A do
+          def a(x), do: x |> b() |> Enum.map(&B.c/1)
+          def b(x), do: {B.c(x), length(x)}
+          def d(f), do: {f.(1), unknown(2), B.missing(3)}
+        end
+        defmodule B do
+          def c(x), do: x
+        end
+        """)
+
+      # in-repo: b/1, B.c/1 (twice, once captured); external: Enum.map/2,
+      # Kernel.length/1; unresolved: f.(), unknown/1, B.missing/1.
+      assert stats(doc) == %{
+               language: "elixir",
+               call_sites: 8,
+               in_repo: 3,
+               dispatch: 0,
+               external: 2,
+               unresolved: 3,
+               refs: 0,
+               not_extracted: 0
+             }
     end
   end
 

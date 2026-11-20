@@ -1,6 +1,6 @@
 # extract-elixir
 
-Writes one [facts v1](../../docs/facts-format.md) document for an Elixir
+Writes one [facts v2](../../docs/facts-format.md) document for an Elixir
 repository to stdout. It parses source with `Code.string_to_quoted/2` and
 never compiles or runs project code. It needs Elixir 1.19+ and no
 dependencies.
@@ -67,6 +67,50 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   after a SQL keyword (`FROM`, `JOIN`, `INTO`, `UPDATE`, `TABLE`,
   `REFERENCES`). `function` is set when the line is inside a function
   clause. These are text matches (`candidate` precision).
+- `routes`: Phoenix routes from router modules (`use Phoenix.Router` or
+  `use <App>Web, :router`). Each `get`/`post`/`put`/`patch`/`delete`/
+  `options`/`head` call with a literal path, inside any nesting of `scope`
+  blocks (`scope "/p"`, `scope "/p", Alias`, `scope "/p", Alias, opts`,
+  `scope path: ..., alias: ...`, and inside `if`/`live_session` blocks), is
+  one route: `id` `<repo>:route:<METHOD> <path>`, `path` the joined scope
+  and route paths (`:id` segments as written). `handler` is
+  `<Controller>.<action>/2` when this document defines it (the controller
+  is expanded through the lexical aliases and prefixed by the scope
+  aliases, as Phoenix does), and then `precision` is `precise`. The same
+  method and path a second time is left out with a `duplicate_route` note
+  (the first in file order is kept). Not extracted, only counted in
+  `stats`: a non-literal path, and any other router macro whose first
+  argument is a `/` path (`live`, `forward`, `resources`, `match`,
+  `live_dashboard`, ...).
+- `http_refs`: requests through Req wrappers. A *carrier* is a function, in
+  a module that calls `Req.request`/`get`/`post`/`put`/`patch`/`delete`/
+  `head`, that passes one of its parameters on to such a call as the URL or
+  as the options' `url:`, directly or through `Req.new`, `Req.merge`,
+  `Req.Request.*`, `Keyword.put`/`merge`/..., `++`, variables and other
+  carriers in the same module (a fixpoint; return values are not followed).
+  A call to a carrier, anywhere in the repository, whose path argument is a
+  string literal, an interpolated string, `"/path?" <> query`, or a keyword
+  list whose `url:` is one of those, is a ref on the calling function:
+  `path` with the query string dropped and each segment holding an
+  interpolation replaced by `:p1`, `:p2`, ... (a path with parameters must
+  also have a literal segment), `method` from the carrier's name (`get` ->
+  `GET`), a literal `method:` option, the method every request it passes the
+  path to agrees on (`fetch` -> `get` -> `GET`), or a literal verb argument
+  (`request(:post, path)`), and `base` the carrier's module. A string that
+  already names a path (`"/subscriptions/#{id}"`) starts a request where it
+  is written, so a helper that builds one is where the ref is; so is a Req
+  call with such a literal URL. Not extracted, only counted: a piped path
+  (`path |> ApiClient.get()`), a variable or call (a path built in another
+  function), a capture of a carrier, and a Req call whose URL comes from no
+  parameter and no literal (`url:` reaching `Req.new` through a pipe in
+  another function, a module attribute).
+- `stats`: one entry, language `elixir`. `call_sites` counts `calls`;
+  `in_repo` those whose target is a function in this document, `external`
+  those naming a module outside it (Kernel and Erlang included),
+  `unresolved` the rest (dynamic calls, unattributed unqualified calls, a
+  function missing from a module that is here). `not_extracted` counts the
+  routes and refs above that were not extracted. `dispatch` and `refs` are
+  0.
 - `notes`:
 
   | Kind | Meaning |
@@ -80,6 +124,7 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   | `symlink_skipped` | A symlinked file or directory, noted once and never followed. |
   | `empty_root` | A source or ref root has no matching files (or does not exist). |
   | `unknown_table` | An Ecto schema whose table is not in the schema facts. |
+  | `duplicate_route` | A route with the method and path of an earlier one. |
 
 Every array is sorted, and keys are written in a fixed order, so the same
 input gives byte-identical output.
@@ -90,3 +135,7 @@ input gives byte-identical output.
 mise exec -- elixir plugins/extract-elixir/test/extract_test.exs
 mise exec -- go test ./internal/facts -run Contract
 ```
+
+`test/fixture` is the v1 shop fixture; `test/web_fixture/{admin,rosearch,sites}`
+are small copies of a Phoenix admin app's routers, a client app's Req
+wrapper, and a shared library whose one request is built across functions.
