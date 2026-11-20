@@ -23,7 +23,7 @@ var schemaSQL string
 //
 //	1 (stored as 0): initial schema
 //	2: db_tables.kind
-const schemaVersion = 2
+const schemaVersion = 3
 
 // DefaultKeep is how many snapshots per workspace Prune keeps by default.
 const DefaultKeep = 10
@@ -109,6 +109,11 @@ func rebuild(ctx context.Context, conn *sql.Conn) error {
 	}
 	// Virtual tables go first (their shadow tables go with them), snapshots
 	// last (everything else references it).
+	for _, view := range []string{"edges", "nodes"} {
+		if _, err := conn.ExecContext(ctx, `DROP VIEW IF EXISTS `+view); err != nil {
+			return err
+		}
+	}
 	rows, err := conn.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
 	  ORDER BY sql LIKE 'CREATE VIRTUAL TABLE%' DESC, name = 'snapshots', name`)
 	if err != nil {
