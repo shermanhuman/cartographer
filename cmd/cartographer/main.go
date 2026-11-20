@@ -19,6 +19,7 @@ import (
 	"github.com/shermanhuman/cartographer/internal/hook"
 	"github.com/shermanhuman/cartographer/internal/mcpserver"
 	"github.com/shermanhuman/cartographer/internal/output"
+	"github.com/shermanhuman/cartographer/internal/project"
 	"github.com/shermanhuman/cartographer/internal/query"
 	"github.com/shermanhuman/cartographer/internal/render"
 	"github.com/shermanhuman/cartographer/internal/scip"
@@ -62,6 +63,19 @@ Sharing (GitHub Markdown, PDF, SVG):
 
 UI:
   serve [--port 7878] [--open]  browse the map at http://127.0.0.1:7878 (loopback only)
+
+Projects (each repo's .cartographer/repo.toml, read from its fetched default branch):
+  project add <member checkout | owner/name> [--yes]
+                              register a project: fetch it, list its members and their checkouts
+  project remove <name>       unregister it
+  project list                registered projects, members, checkouts and last cycle
+  project init <checkout> [--project NAME] [--anchor owner/name]
+                              write a starter .cartographer/repo.toml (commits nothing)
+  refresh [name] [--head --from <dir> --db PATH]
+                              fetch and rebuild now (retries a failed build); --head maps
+                              your working copies into a separate --db
+                              Queries refresh a registered project in the background when
+                              its last fetch is 15 minutes old.
 
 Snapshots:
   pull [owner/name]           fetch the newest published snapshot (adds the source)
@@ -137,6 +151,8 @@ type common struct {
 	around, context, table, annotation, outFile string
 	lang, repo, root, revision                  string
 	rustBuildScripts                            bool
+	yes, head                                   bool
+	from, projectName, anchor                   string
 }
 
 type refFlags map[string]string
@@ -203,6 +219,11 @@ func flags(name string, c *common) *flag.FlagSet {
 	fs.StringVar(&c.root, "root", ".", "extract: repository root")
 	fs.StringVar(&c.revision, "revision", "", "extract: revision the root is at")
 	fs.BoolVar(&c.rustBuildScripts, "rust-build-scripts", true, "extract: run Rust build scripts and proc macros")
+	fs.BoolVar(&c.yes, "yes", false, "project add: register without asking")
+	fs.BoolVar(&c.head, "head", false, "refresh: build the working copies as they are (with --from and its own --db)")
+	fs.StringVar(&c.from, "from", "", "refresh --head: a member checkout of the project to build")
+	fs.StringVar(&c.projectName, "project", "", "project init: the project the repo belongs to")
+	fs.StringVar(&c.anchor, "anchor", "", "project init: the anchor repo (owner/name) holding the member list")
 	return fs
 }
 
@@ -286,6 +307,12 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 	case "version":
 		fmt.Fprintln(w, "cartographer", version)
 		return nil
+	case "project":
+		return projectCmd(ctx, w, &c, pos)
+	case "refresh":
+		dbSet := os.Getenv("CARTOGRAPHER_DB") != ""
+		fs.Visit(func(f *flag.Flag) { dbSet = dbSet || f.Name == "db" })
+		return refreshCmd(ctx, w, &c, pos, dbSet)
 	case "validate-facts":
 		if err := need(1, "a facts file"); err != nil {
 			return err
@@ -511,6 +538,11 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 			sess.Rebuild = start
 			defer wait()
 		}
+		if sess.ProjectRebuild != nil {
+			start, wait := backgroundProject(ctx, &c, sess, s)
+			sess.ProjectRebuild = start
+			defer wait()
+		}
 		defer cancel() // runs before wait
 		return mcpserver.Serve(ctx, mcpserver.Options{Version: version, Prepare: func(ctx context.Context) (*query.Q, error) {
 			q, _, err := sess.Query(ctx)
@@ -588,6 +620,10 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 	defer s.Close()
 	sess := newSession(&c, s, os.Stderr)
 	q, rep, err := sess.Query(ctx)
+	var first *session.ErrFirstBuild
+	if errors.As(err, &first) {
+		return err
+	}
 	if errors.Is(err, store.ErrNoSnapshot) {
 		return errors.New("no snapshot yet: in your workspace run `cartographer build --local --import` (then `cartographer workspace add <dir>` keeps it fresh), or `cartographer pull <owner/name>`, or `cartographer import <dir>`")
 	}
@@ -639,9 +675,10 @@ var errNotMapped = errors.New("not in a mapped repository")
 func newSession(c *common, s *store.Store, log io.Writer) *session.Session {
 	cwd, _ := os.Getwd()
 	db, _ := filepath.Abs(c.db)
-	sess := &session.Session{Store: s, DataDir: filepath.Dir(c.db), DB: db, Cwd: cwd, Snapshot: c.snapshot, AutoPull: !c.noPull, Log: log}
+	sess := &session.Session{Store: s, DataDir: filepath.Dir(c.db), DB: db, Cwd: cwd, Snapshot: c.snapshot, AutoPull: !c.noPull, Log: log, StateDir: project.StateDir()}
 	if rebuildEnabled(c, log) {
 		sess.Rebuild = spawnRebuild(c, log)
+		sess.ProjectRebuild = spawnProject(c, log)
 	}
 	return sess
 }

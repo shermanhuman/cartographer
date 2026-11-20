@@ -41,6 +41,11 @@ func serve(ctx context.Context, w io.Writer, s *store.Store, c *common) error {
 		sess.Rebuild = start
 		defer func() { stop(); wait() }()
 	}
+	if sess.ProjectRebuild != nil {
+		start, wait := backgroundProject(ctx, c, sess, s)
+		sess.ProjectRebuild = start
+		defer func() { stop(); wait() }()
+	}
 	if sess.AutoPull {
 		sess.PullDue(ctx)
 	}

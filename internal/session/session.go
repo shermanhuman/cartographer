@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/shermanhuman/cartographer/internal/fresh"
+	"github.com/shermanhuman/cartographer/internal/project"
 	"github.com/shermanhuman/cartographer/internal/query"
 	"github.com/shermanhuman/cartographer/internal/rebuild"
 	"github.com/shermanhuman/cartographer/internal/snapshot"
@@ -67,6 +68,15 @@ type Session struct {
 	// (rebuild.Dir in DataDir). It must return at once (spawn or go); the
 	// caller holds the session lock. nil never rebuilds.
 	Rebuild func(ws, dir string)
+	// StateDir holds the registered projects (project.StateDir); "" means
+	// none are considered.
+	StateDir string
+	// ProjectRebuild starts a cycle of a registered project when its last
+	// fetch attempt is Cadence old or it was never attempted (and none is
+	// running). It must return at once. nil never starts one.
+	ProjectRebuild func(name string)
+	// Now is the clock for project cadence (tests); nil is time.Now.
+	Now func() time.Time
 
 	ghMu   sync.Mutex // guards GitHub's lazy creation
 	pullMu sync.Mutex // one auto-pull at a time; guards warned
@@ -85,6 +95,10 @@ type memo struct {
 	reports map[string]*fresh.Report // snapshot id -> freshness
 	local   map[string]string        // workspace name -> registered workspace dir ("" none)
 	sibling map[string]string        // workspace name -> unregistered sibling workspace ("" none)
+	// projects are the registered projects; scheduled is set once their
+	// cycles were considered for this memo.
+	projects  []*project.Registration
+	scheduled bool
 }
 
 // DataDir is $CARTOGRAPHER_DATA, else $XDG_DATA_HOME/cartographer or
@@ -182,6 +196,7 @@ func (s *Session) current(ctx context.Context) *memo {
 		return m
 	}
 	m := &memo{at: time.Now(), cwd: s.Cwd, co: fresh.Find(ctx, s.Cwd), reports: map[string]*fresh.Report{}, local: map[string]string{}, sibling: map[string]string{}}
+	m.projects = s.registrations()
 	if ctx.Err() == nil {
 		s.memo = m
 	}
@@ -197,6 +212,7 @@ func (s *Session) resolve(ctx context.Context) (string, *fresh.Report, error) {
 		s.memo = nil
 	}
 	m := s.current(ctx)
+	s.scheduleProjects(m)
 	id := s.Snapshot
 	if id == "" {
 		if m.chosen == "" {
@@ -226,6 +242,7 @@ func (s *Session) Query(ctx context.Context) (*query.Q, *fresh.Report, error) {
 	}
 	q.Changed = rep.Changed
 	q.Staleness = rep.Summary()
+	q.Title = rep.Title
 	q.Notes = rep.Hints
 	return q, rep, nil
 }
@@ -234,7 +251,129 @@ func (s *Session) Query(ctx context.Context) (*query.Q, *fresh.Report, error) {
 func (s *Session) Fresh(ctx context.Context, id string) (*fresh.Report, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.freshFrom(ctx, s.current(ctx), id)
+	m := s.current(ctx)
+	s.scheduleProjects(m)
+	return s.freshFrom(ctx, m, id)
+}
+
+func (s *Session) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// registrations lists the registered projects (none without StateDir).
+func (s *Session) registrations() []*project.Registration {
+	regs, err := project.List(s.StateDir)
+	if err != nil {
+		s.logf("cartographer: %v", err)
+	}
+	return regs
+}
+
+func registered(regs []*project.Registration, ws string) *project.Registration {
+	for _, r := range regs {
+		if r.Name == ws {
+			return r
+		}
+	}
+	return nil
+}
+
+// scheduleProjects starts a cycle of each registered project that is due
+// (never attempted, or its last fetch attempt is project.Cadence old) and
+// not running, once per memo. The cycle itself decides, under the lock,
+// whether anything changed. The caller holds s.mu.
+func (s *Session) scheduleProjects(m *memo) {
+	if m.scheduled || s.ProjectRebuild == nil || s.Snapshot != "" {
+		return
+	}
+	m.scheduled = true
+	now := s.now()
+	for _, reg := range m.projects {
+		st, err := project.LoadState(s.StateDir, reg.Name)
+		if err != nil || !st.Due(now) {
+			continue
+		}
+		if _, running := project.Lock(s.StateDir, reg.Name).Running(reg.Name); running {
+			continue
+		}
+		s.ProjectRebuild(reg.Name)
+	}
+}
+
+// memberOf names the registered member a checkout holds: by its recorded
+// path, else by any remote naming the member's GitHub URL ("" none).
+func memberOf(ctx context.Context, reg *project.Registration, co fresh.Checkout) string {
+	if co.Root == "" {
+		return ""
+	}
+	for _, mb := range reg.Members {
+		if samePath(mb.Path, co.Root) {
+			return mb.Name()
+		}
+	}
+	if slug := project.Identify(ctx, co.Root); slug != "" {
+		if mb, ok := reg.Member(slug); ok {
+			return mb.Name()
+		}
+	}
+	return ""
+}
+
+// projectReport is the freshness of a registered project's snapshot: the
+// recorded checkouts, except that the one the command runs in (a worktree,
+// a second clone) stands for its member, with the header and status
+// describing the map, the fetch and your checkout.
+func (s *Session) projectReport(ctx context.Context, m *memo, id string, reg *project.Registration, repos []fresh.Repo) *fresh.Report {
+	paths := map[string]string{}
+	for _, mb := range reg.Members {
+		if mb.Path != "" {
+			paths[mb.Name()] = mb.Path
+		}
+	}
+	yours := memberOf(ctx, reg, m.co)
+	if yours != "" {
+		paths[yours] = m.co.Root
+	}
+	rep := fresh.CheckWork(ctx, repos, paths)
+	st, err := project.LoadState(s.StateDir, reg.Name)
+	if err != nil {
+		st = &project.State{}
+	}
+	v := &project.View{Reg: reg, State: st, Snapshot: id, Report: rep, Yours: yours, Now: s.now()}
+	if since, ok := project.Lock(s.StateDir, reg.Name).Running(reg.Name); ok {
+		v.Running = since
+	}
+	if si, ok, _ := s.Store.Info(ctx, id); ok {
+		v.MapID, v.Source = si.MapID, si.Source
+		v.Created, _ = time.Parse(time.RFC3339, si.CreatedAt)
+	}
+	v.Manifest, _ = s.Store.Manifest(ctx, id)
+	rep.Lead, rep.Detail, rep.Title = v.Lead(), v.Detail(), v.Label()
+	return rep
+}
+
+// ErrFirstBuild means a registered project has no map yet.
+type ErrFirstBuild struct {
+	Project string
+	Status  string
+}
+
+func (e *ErrFirstBuild) Error() string {
+	return fmt.Sprintf("no map of project %s yet: %s", e.Project, e.Status)
+}
+
+func (s *Session) firstBuild(reg *project.Registration) error {
+	status := "its first build starts with the next command, or run `cartographer refresh`"
+	if since, ok := project.Lock(s.StateDir, reg.Name).Running(reg.Name); ok {
+		status = fmt.Sprintf("its first build is running since %s (log: %s)", since.Local().Format("15:04"), project.LogPath(s.StateDir, reg.Name))
+	} else if st, err := project.LoadState(s.StateDir, reg.Name); err == nil && st.Failed != nil {
+		v := &project.View{Reg: reg, State: st, Now: s.now()}
+		status = strings.Join(v.Problems(), "; ")
+	}
+	return &ErrFirstBuild{Project: reg.Name, Status: status}
 }
 
 // freshFrom computes (or reuses) id's report, and with it decides once per
@@ -247,6 +386,17 @@ func (s *Session) freshFrom(ctx context.Context, m *memo, id string) (*fresh.Rep
 	repos, err := s.repos(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if ws, _ := s.Store.Workspace(ctx, id); ws != "" {
+		if reg := registered(m.projects, ws); reg != nil {
+			// A registered project: never the HEAD-based trigger, and a
+			// legacy workspace of the same name is ignored.
+			rep := s.projectReport(ctx, m, id, reg, repos)
+			if ctx.Err() == nil {
+				m.reports[id] = rep
+			}
+			return rep, nil
+		}
 	}
 	cfg, _ := userconfig.Load()
 	if cfg == nil {
@@ -392,20 +542,46 @@ func (s *Session) chooseRepo(ctx context.Context, co fresh.Checkout) (string, st
 	if err != nil {
 		return "", "", err
 	}
+	regs := s.registrations()
 	if len(all) == 0 {
+		if len(regs) > 0 {
+			reg := regs[0]
+			for _, r := range regs {
+				if memberOf(ctx, r, co) != "" {
+					reg = r
+				}
+			}
+			return "", "", s.firstBuild(reg)
+		}
 		return "", "", store.ErrNoSnapshot
 	}
 	latest := map[string]string{} // workspace -> newest snapshot (all is newest first)
 	var names []string
 	for _, si := range all {
+		if registered(regs, si.Workspace) != nil && si.Source != "main" {
+			continue // a registered project's map comes only from its fetched mains
+		}
 		if _, ok := latest[si.Workspace]; !ok {
 			latest[si.Workspace] = si.ID
 			names = append(names, si.Workspace)
 		}
 	}
+	// The checkout is a registered project's member (by recorded path or
+	// remote): that project, or its first build.
+	for _, reg := range regs {
+		if name := memberOf(ctx, reg, co); name != "" {
+			if id, ok := latest[reg.Name]; ok {
+				return id, name, nil
+			}
+			return "", "", s.firstBuild(reg)
+		}
+	}
 	if co.Root == "" {
 		if len(names) == 1 {
 			return latest[names[0]], "", nil
+		}
+		if len(names) == 0 && len(regs) > 0 {
+			return "", "", s.firstBuild(regs[0])
 		}
 		return "", "", &ErrNotMapped{Workspaces: names}
 	}
