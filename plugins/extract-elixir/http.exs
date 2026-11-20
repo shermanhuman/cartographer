@@ -222,18 +222,7 @@ defmodule Cartographer.ElixirHTTP do
   defp analyze(module, clauses, defs) do
     local = fn name, arity -> lookup(defs, module, name, arity) end
 
-    carriers =
-      Stream.iterate(%{}, fn carriers ->
-        Enum.reduce(clauses, carriers, fn c, acc ->
-          st = run(c, module, local, carriers)
-
-          if MapSet.size(st.carrier) == 0,
-            do: acc,
-            else: Map.update(acc, c.id, st.carrier, &MapSet.union(&1, st.carrier))
-        end)
-      end)
-      |> Stream.chunk_every(2, 1)
-      |> Enum.find_value(fn [a, b] -> if a == b, do: a end)
+    carriers = fixpoint(%{}, clauses, module, local)
 
     runs = Enum.map(clauses, &run(&1, module, local, carriers))
 
@@ -253,6 +242,20 @@ defmodule Cartographer.ElixirHTTP do
       direct: Enum.flat_map(runs, & &1.direct),
       direct_refs: Enum.flat_map(runs, & &1.direct_refs)
     }
+  end
+
+  # Carrier positions per function id, grown until no clause adds any.
+  defp fixpoint(carriers, clauses, module, local) do
+    next =
+      Enum.reduce(clauses, carriers, fn c, acc ->
+        st = run(c, module, local, carriers)
+
+        if MapSet.size(st.carrier) == 0,
+          do: acc,
+          else: Map.update(acc, c.id, st.carrier, &MapSet.union(&1, st.carrier))
+      end)
+
+    if next == carriers, do: carriers, else: fixpoint(next, clauses, module, local)
   end
 
   # A carrier's method: its name when that is a verb, else the one method
