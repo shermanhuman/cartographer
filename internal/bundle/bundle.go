@@ -71,6 +71,9 @@ type Manifest struct {
 	Inventory    []Inventory       `json:"inventory,omitempty"`
 	Tools        map[string]string `json:"tools,omitempty"` // tool -> resolved version
 	InputsDigest string            `json:"inputs_digest,omitempty"`
+	// Images maps a container image name (the last path segment, no tag)
+	// to the repo that builds it, where they differ.
+	Images map[string]string `json:"images,omitempty"`
 }
 
 // Inventory counts a repository's tracked files by extension at the mapped
@@ -123,6 +126,7 @@ type Step struct {
 }
 
 type Bundle struct {
+	Dir         string // where Read found it; "" for a bundle built in memory
 	Manifest    Manifest
 	Facts       []*facts.Doc
 	Docs        []Doc
@@ -131,7 +135,7 @@ type Bundle struct {
 
 // Read loads and validates a snapshot directory.
 func Read(dir string) (*Bundle, error) {
-	b := &Bundle{}
+	b := &Bundle{Dir: dir}
 	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
 		return nil, err
@@ -143,7 +147,7 @@ func Read(dir string) (*Bundle, error) {
 	if m.SnapshotFormat < MinFormat || m.SnapshotFormat > Format {
 		return nil, fmt.Errorf("bundle: snapshot_format %d not supported (want %d to %d; a newer snapshot needs a newer cartographer)", m.SnapshotFormat, MinFormat, Format)
 	}
-	if m.SnapshotFormat == 1 && (m.Source != "" || len(m.Inventory) > 0 || len(m.Tools) > 0 || m.InputsDigest != "") {
+	if m.SnapshotFormat == 1 && (m.Source != "" || len(m.Inventory) > 0 || len(m.Tools) > 0 || m.InputsDigest != "" || len(m.Images) > 0) {
 		return nil, fmt.Errorf("bundle: snapshot_format 1 manifest carries format 2 fields")
 	}
 	if m.ID == "" || m.CreatedAt == "" {

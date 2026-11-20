@@ -8,6 +8,7 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20260907135840-6c8c28e0e8a0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/scip-code/scip/bindings/go/scip v0.10.0
+	go.yaml.in/yaml/v3 v3.0.6
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.60.1
 )

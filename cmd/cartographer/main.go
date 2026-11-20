@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/shermanhuman/cartographer/internal/bundle"
+	"github.com/shermanhuman/cartographer/internal/extract"
 	"github.com/shermanhuman/cartographer/internal/facts"
 	"github.com/shermanhuman/cartographer/internal/hook"
 	"github.com/shermanhuman/cartographer/internal/mcpserver"
@@ -78,8 +79,10 @@ Building (in a workspace with cartographer.toml):
                               --import keeps the newest 10 snapshots per workspace
   publish <snapshot-dir>      pack and publish as a GitHub release, prune old ones
   review <annotation-id>      mark an annotation reviewed against the snapshot's code
-  validate-facts <file>...    check extractor plugin output (facts v1)
+  validate-facts <file>...    check extractor plugin output (facts v1 or v2)
   extract scip --lang go|rust --repo NAME --root DIR [--revision REV] [--rust-build-scripts=false]
+  extract kubernetes|urls --repo NAME --root DIR [--revision REV]
+                              built-in extractors: Deployments and Services; URLs in YAML config
                               index a repository with scip-go or rust-analyzer (found on
                               PATH) and print its facts v2 document
   plugins-dir                 print the directory of the bundled extractor plugins
@@ -400,13 +403,21 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		fmt.Fprintf(w, "reviewed %s against %s: %d citations stamped; commit the annotation file\n", pos[0], sid, n)
 		return nil
 	case "extract":
-		if len(pos) != 1 || pos[0] != "scip" {
-			return errors.New("usage: cartographer extract scip --lang go|rust --repo NAME --root DIR [--revision REV]")
+		var d *facts.Doc
+		var err error
+		switch {
+		case len(pos) == 1 && pos[0] == "scip":
+			d, err = scip.Extract(ctx, scip.RunOptions{
+				Options:          scip.Options{Lang: c.lang, Repo: c.repo, Root: c.root, Revision: c.revision},
+				RustBuildScripts: c.rustBuildScripts,
+			})
+		case len(pos) == 1 && pos[0] == "kubernetes":
+			d, err = extract.Kubernetes(c.repo, c.root, c.revision)
+		case len(pos) == 1 && pos[0] == "urls":
+			d, err = extract.ConfigURLs(c.repo, c.root, c.revision)
+		default:
+			return errors.New("usage: cartographer extract scip|kubernetes|urls --repo NAME --root DIR [--revision REV] [--lang go|rust]")
 		}
-		d, err := scip.Extract(ctx, scip.RunOptions{
-			Options:          scip.Options{Lang: c.lang, Repo: c.repo, Root: c.root, Revision: c.revision},
-			RustBuildScripts: c.rustBuildScripts,
-		})
 		if err != nil {
 			return err
 		}
