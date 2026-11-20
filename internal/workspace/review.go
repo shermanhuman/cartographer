@@ -18,7 +18,13 @@ import (
 // unknown fields) are written back verbatim, re-indented with two spaces.
 // It returns the number of citations stamped.
 func Review(ctx context.Context, c *Config, db *sql.DB, sid, id string) (int, error) {
-	files, _ := filepath.Glob(filepath.Join(c.dir, c.Annotations, "*.json"))
+	return ReviewDir(ctx, filepath.Join(c.dir, c.Annotations), db, sid, id)
+}
+
+// ReviewDir is Review over the annotation files in dir (e.g. a project
+// member checkout's .cartographer/annotations).
+func ReviewDir(ctx context.Context, dir string, db *sql.DB, sid, id string) (int, error) {
+	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
 	sort.Strings(files)
 	fp := func(cite string) (string, bool) {
 		var f string
@@ -86,7 +92,7 @@ func Review(ctx context.Context, c *Config, db *sql.DB, sid, id string) (int, er
 			return n, writeAtomic(path, out.Bytes())
 		}
 	}
-	return 0, fmt.Errorf("annotation %q not found in %s", id, filepath.Join(c.dir, c.Annotations))
+	return 0, fmt.Errorf("annotation %q not found in %s", id, dir)
 }
 
 // object is a JSON object that keeps its keys in authored order. Values stay

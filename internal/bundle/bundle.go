@@ -4,6 +4,7 @@
 //	facts/*.json              facts documents listed in the manifest
 //	docs/<repo>/<path>.md     tracked Markdown, copied at build time
 //	annotations/*.json        human-reviewed journeys and notes
+//	annotations/<repo>/*.json a project's, kept per repo
 package bundle
 
 import (
@@ -264,10 +265,16 @@ func Read(dir string) (*Bundle, error) {
 		return b.Docs[i].Path < b.Docs[j].Path
 	})
 
+	// annotations/<file>.json, and a project's annotations/<repo>/<file>.json
+	// (files of the same name from two repos are distinct).
 	files, _ := filepath.Glob(filepath.Join(dir, "annotations", "*.json"))
+	nested, _ := filepath.Glob(filepath.Join(dir, "annotations", "*", "*.json"))
+	files = append(files, nested...)
 	sort.Strings(files)
 	annFile := map[string]string{}
 	for _, p := range files {
+		name, _ := filepath.Rel(filepath.Join(dir, "annotations"), p)
+		name = filepath.ToSlash(name)
 		raw, err := os.ReadFile(p)
 		if err != nil {
 			return nil, err
@@ -276,20 +283,20 @@ func Read(dir string) (*Bundle, error) {
 			Annotations []json.RawMessage `json:"annotations"`
 		}
 		if err := json.Unmarshal(raw, &doc); err != nil {
-			return nil, fmt.Errorf("bundle: %s: %w", filepath.Base(p), err)
+			return nil, fmt.Errorf("bundle: %s: %w", name, err)
 		}
 		for i, r := range doc.Annotations {
 			var a Annotation
 			if err := json.Unmarshal(r, &a); err != nil {
-				return nil, fmt.Errorf("bundle: %s: annotations[%d]: %w", filepath.Base(p), i, err)
+				return nil, fmt.Errorf("bundle: %s: annotations[%d]: %w", name, i, err)
 			}
 			if a.ID == "" || a.Kind == "" {
-				return nil, fmt.Errorf("bundle: %s: annotations[%d] needs id and kind", filepath.Base(p), i)
+				return nil, fmt.Errorf("bundle: %s: annotations[%d] needs id and kind", name, i)
 			}
 			if prev, ok := annFile[a.ID]; ok {
-				return nil, fmt.Errorf("bundle: duplicate annotation id %q in %s and %s", a.ID, prev, filepath.Base(p))
+				return nil, fmt.Errorf("bundle: duplicate annotation id %q in %s and %s", a.ID, prev, name)
 			}
-			annFile[a.ID] = filepath.Base(p)
+			annFile[a.ID] = name
 			a.Raw = r
 			b.Annotations = append(b.Annotations, a)
 		}

@@ -337,9 +337,10 @@ func TestConvertRust(t *testing.T) {
 // The indexer runs with GOOS=linux whatever the environment says.
 func TestIndexGoFixesGOOS(t *testing.T) {
 	haveTools(t, tools(Go)...)
-	t.Setenv("GOOS", "darwin")
-	t.Setenv("CGO_ENABLED", "1")
-	d, err := Extract(context.Background(), RunOptions{Options: Options{Lang: Go, Repo: "fixture", Root: goFixture.dir}, Log: testWriter{t}})
+	// In the extractor's environment, not the test binary's: the test binary
+	// itself would build for darwin otherwise.
+	env := append(os.Environ(), "GOOS=darwin", "CGO_ENABLED=1")
+	d, err := Extract(context.Background(), RunOptions{Options: Options{Lang: Go, Repo: "fixture", Root: goFixture.dir}, Env: env, Log: testWriter{t}})
 	if err != nil {
 		t.Fatal(err)
 	}

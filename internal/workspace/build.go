@@ -245,28 +245,19 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 		if err != nil {
 			return nil, err
 		}
-		cached := filepath.Join(o.CacheDir, "schema", key+".json")
-		if err := validFacts(cached); err == nil {
-			logf("schema: cached %s", key[:12])
-		} else {
-			if !errors.Is(err, os.ErrNotExist) {
-				logf("schema: cached %s is unusable (%v); rebuilding", key[:12], err)
-			}
-			logf("schema: building (cache key %s)", key[:12])
-			env := mapEnv(c.Schema.Env)
-			if c.Schema.Prepare != "" {
-				stderr, err := runCmd(ctx, prep.root, env, []string{"sh", "-c", c.Schema.Prepare}, nil)
-				if err != nil {
-					return nil, fmt.Errorf("build: schema prepare: %w", err)
-				}
-				logStderr("schema prepare", stderr)
-			}
-			v := map[string]string{"plugins": o.PluginsDir, "workspace": c.dir, "root": prep.root, "repo": prep.repo.Name, "revision": prep.revision}
-			stderr, err := runPlugin(ctx, c.dir, env, expand(c.Schema.Command, v), cached, "")
-			if err != nil {
-				return nil, fmt.Errorf("build: schema: %w", err)
-			}
-			logStderr("schema", stderr)
+		cached, err := RunSchema(ctx, SchemaStep{
+			Root:     prep.root,
+			Dir:      c.dir,
+			Prepare:  c.Schema.Prepare,
+			Command:  c.Schema.Command,
+			Vars:     map[string]string{"plugins": o.PluginsDir, "workspace": c.dir, "root": prep.root, "repo": prep.repo.Name, "revision": prep.revision},
+			Env:      c.Schema.Env,
+			Key:      key,
+			CacheDir: o.CacheDir,
+			Log:      o.Log,
+		})
+		if err != nil {
+			return nil, err
 		}
 		if err := copyFile(cached, filepath.Join(out, "facts", "schema.json")); err != nil {
 			return nil, err

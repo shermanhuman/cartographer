@@ -105,7 +105,7 @@ func TestNeeded(t *testing.T) {
 // The lock is exclusive across processes (O_EXCL), and a lock older than
 // Stale is taken over.
 func TestLockIsExclusiveAndStaleLocksAreTakenOver(t *testing.T) {
-	d := Dir{t.TempDir()}
+	d := Dir{Path: t.TempDir()}
 	unlock, err := d.Lock("mini")
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func deadPid(t *testing.T) int {
 // A fresh lock whose process is gone (killed with its MCP server) is stale
 // at once, not after Stale.
 func TestLockOfADeadProcessIsTakenOver(t *testing.T) {
-	d := Dir{t.TempDir()}
+	d := Dir{Path: t.TempDir()}
 	os.MkdirAll(filepath.Dir(d.lockPath("mini")), 0o755)
 	os.WriteFile(d.lockPath("mini"), []byte(fmt.Sprintf("%d %s\n", deadPid(t), time.Now().UTC().Format(time.RFC3339))), 0o644)
 	if _, ok := d.Running("mini"); ok {
@@ -173,7 +173,7 @@ func TestLockOfADeadProcessIsTakenOver(t *testing.T) {
 // Many processes taking over one stale lock at once: exactly one wins.
 func TestStaleTakeoverIsAtomic(t *testing.T) {
 	for range 20 {
-		d := Dir{t.TempDir()}
+		d := Dir{Path: t.TempDir()}
 		os.MkdirAll(filepath.Dir(d.lockPath("mini")), 0o755)
 		os.WriteFile(d.lockPath("mini"), []byte(fmt.Sprintf("%d 2000-01-01T00:00:00Z\n", deadPid(t))), 0o644)
 		var wins atomic.Int32
@@ -203,7 +203,7 @@ func TestStaleTakeoverIsAtomic(t *testing.T) {
 // off for FailBackoff and keeps the error for Status; a success clears it
 // and records the revisions built.
 func TestRunStampsAndBacksOff(t *testing.T) {
-	d := Dir{t.TempDir()}
+	d := Dir{Path: t.TempDir()}
 	if !d.Due("mini") {
 		t.Fatal("a never-built workspace is due")
 	}
@@ -274,7 +274,7 @@ func TestRunStampsAndBacksOff(t *testing.T) {
 
 // Status cuts a long first line on a rune boundary.
 func TestStatusCutsOnARuneBoundary(t *testing.T) {
-	d := Dir{t.TempDir()}
+	d := Dir{Path: t.TempDir()}
 	d.Fail("mini", errors.New(strings.Repeat("é", 200)))
 	st := d.Status("mini")
 	if !strings.Contains(st, "…") || !utf8Valid(st) {
@@ -287,7 +287,7 @@ func utf8Valid(s string) bool { return strings.ToValidUTF8(s, "�") == s }
 // Each workspace's state lives in its own directory, named safely and
 // distinctly: no workspace's cleanup or lock touches another's.
 func TestWorkspacesDoNotShareState(t *testing.T) {
-	d := Dir{t.TempDir()}
+	d := Dir{Path: t.TempDir()}
 	for _, pair := range [][2]string{{"shop", "shop.build-api"}, {"a/b", "a_b"}, {"my org/map", "my_org_map"}} {
 		a, b := d.StateDir(pair[0]), d.StateDir(pair[1])
 		if a == b || filepath.Dir(a) != filepath.Join(d.Path, "rebuild") || strings.ContainsAny(filepath.Base(a), "/ ") {
@@ -330,7 +330,7 @@ func TestWorkspacesDoNotShareState(t *testing.T) {
 // A rebuild whose lock was taken over (it outlived it) records nothing:
 // its outcome would overwrite the newer owner's.
 func TestLostLockIsNotStamped(t *testing.T) {
-	d := Dir{t.TempDir()}
+	d := Dir{Path: t.TempDir()}
 	err := d.Run("mini", func() (Result, error) {
 		os.WriteFile(d.lockPath("mini"), []byte("1 2000-01-01T00:00:00Z other\n"), 0o644) // taken over
 		return Result{}, errors.New("late failure")
@@ -351,7 +351,7 @@ func TestHeartbeatKeepsALiveLockFresh(t *testing.T) {
 	old := Heartbeat
 	Heartbeat = 20 * time.Millisecond
 	t.Cleanup(func() { Heartbeat = old })
-	d := Dir{t.TempDir()}
+	d := Dir{Path: t.TempDir()}
 	err := d.Run("mini", func() (Result, error) {
 		aged := time.Now().Add(-Stale - time.Minute)
 		os.Chtimes(d.lockPath("mini"), aged, aged)
@@ -369,7 +369,7 @@ func TestHeartbeatKeepsALiveLockFresh(t *testing.T) {
 // Scratch also sweeps what a takeover that died left behind: moved-aside
 // locks, and a takeover guard whose process is gone (no minute's wait).
 func TestLeftoversOfADeadTakeoverAreSwept(t *testing.T) {
-	d := Dir{t.TempDir()}
+	d := Dir{Path: t.TempDir()}
 	dir := d.StateDir("mini")
 	os.MkdirAll(dir, 0o755)
 	aside := filepath.Join(dir, "lock.stale-abc")
@@ -394,7 +394,7 @@ func TestRunningReportsTheStartTime(t *testing.T) {
 	old := Heartbeat
 	Heartbeat = 20 * time.Millisecond
 	t.Cleanup(func() { Heartbeat = old })
-	d := Dir{t.TempDir()}
+	d := Dir{Path: t.TempDir()}
 	start := time.Now()
 	d.Run("mini", func() (Result, error) {
 		time.Sleep(300 * time.Millisecond)
@@ -410,7 +410,7 @@ func TestRunningReportsTheStartTime(t *testing.T) {
 // FailBackoff: rerunning a build that can't finish in time every few
 // minutes would only burn CPU.
 func TestTimeoutBacksOffLonger(t *testing.T) {
-	d := Dir{t.TempDir()}
+	d := Dir{Path: t.TempDir()}
 	d.Run("mini", func() (Result, error) { return Result{}, fmt.Errorf("stopped: %w", context.DeadlineExceeded) })
 	aged := time.Now().Add(-FailBackoff - time.Minute)
 	os.Chtimes(d.stampPath("mini"), aged, aged)

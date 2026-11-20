@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -12,6 +13,8 @@ import (
 	"strings"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/shermanhuman/cartographer/internal/bundle"
 )
 
 //go:embed schema.sql
@@ -151,11 +154,19 @@ type SnapshotInfo struct {
 	ID        string
 	Workspace string
 	CreatedAt string
+	// Source is main, head or published (see bundle.Manifest.Source).
+	Source string
+	// MapID is the content identity (bundle.MapID), "" when unknown.
+	MapID string
+	// InputsDigest is the manifest's inputs digest ("" for most published
+	// and explicit builds).
+	InputsDigest string
 }
 
 // Snapshots lists imported snapshots, newest first.
 func (s *Store) Snapshots(ctx context.Context) ([]SnapshotInfo, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, workspace, created_at FROM snapshots ORDER BY created_at DESC, id DESC`)
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, workspace, created_at, source, map_id, coalesce(json_extract(manifest, '$.inputs_digest'), '')
+	  FROM snapshots ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -163,12 +174,54 @@ func (s *Store) Snapshots(ctx context.Context) ([]SnapshotInfo, error) {
 	var out []SnapshotInfo
 	for rows.Next() {
 		var si SnapshotInfo
-		if err := rows.Scan(&si.ID, &si.Workspace, &si.CreatedAt); err != nil {
+		if err := rows.Scan(&si.ID, &si.Workspace, &si.CreatedAt, &si.Source, &si.MapID, &si.InputsDigest); err != nil {
 			return nil, err
 		}
 		out = append(out, si)
 	}
 	return out, rows.Err()
+}
+
+// Newest returns the newest snapshot of workspace with the given source
+// (ok false when there is none).
+func (s *Store) Newest(ctx context.Context, workspace, source string) (SnapshotInfo, bool, error) {
+	all, err := s.Snapshots(ctx)
+	if err != nil {
+		return SnapshotInfo{}, false, err
+	}
+	for _, si := range all {
+		if si.Workspace == workspace && si.Source == source {
+			return si, true, nil
+		}
+	}
+	return SnapshotInfo{}, false, nil
+}
+
+// Info returns one snapshot's summary (ok false when it isn't imported).
+func (s *Store) Info(ctx context.Context, id string) (SnapshotInfo, bool, error) {
+	all, err := s.Snapshots(ctx)
+	if err != nil {
+		return SnapshotInfo{}, false, err
+	}
+	for _, si := range all {
+		if si.ID == id {
+			return si, true, nil
+		}
+	}
+	return SnapshotInfo{}, false, nil
+}
+
+// Manifest returns a snapshot's manifest as imported.
+func (s *Store) Manifest(ctx context.Context, id string) (*bundle.Manifest, error) {
+	var raw string
+	if err := s.DB.QueryRowContext(ctx, `SELECT manifest FROM snapshots WHERE id = ?`, id).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var m bundle.Manifest
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
 }
 
 // Workspace names the workspace of a snapshot ("" when unknown).

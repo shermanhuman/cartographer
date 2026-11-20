@@ -28,6 +28,9 @@ type Q struct {
 	// Staleness is a one-line summary prepended to every header, e.g.
 	// "shop-app 3 commits behind". Empty means current or unknown.
 	Staleness string
+	// Title, when set, replaces the header's "map <snapshot> · repo@rev …"
+	// (a registered project's map: "map <map id>").
+	Title string
 	// Notes are advice lines that status appends (e.g. how to keep the map
 	// fresh); other queries ignore them.
 	Notes []string
@@ -404,6 +407,9 @@ func (q *Q) header(ctx context.Context, d *output.Doc) {
 	line := "map " + q.Snapshot
 	if len(repos) > 0 {
 		line += " · " + strings.Join(repos, " ")
+	}
+	if q.Title != "" {
+		line = q.Title
 	}
 	if q.Staleness != "" {
 		line += " · " + q.Staleness

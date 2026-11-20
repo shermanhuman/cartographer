@@ -31,8 +31,25 @@ type Config struct {
 	// Checkouts maps repository names to local paths when they aren't
 	// siblings of the current repository.
 	Checkouts map[string]string `toml:"checkouts"`
+	// CheckoutRoots are where project registration looks for member
+	// checkouts, two levels deep (default ~/github; see Roots).
+	CheckoutRoots []string `toml:"checkout_roots"`
 	// Warnings are problems Load worked around (entries it dropped).
 	Warnings []string `toml:"-"`
+}
+
+// Roots returns the checkout roots, ~ expanded: CheckoutRoots, or ~/github
+// when none are set.
+func (c *Config) Roots() []string {
+	roots := c.CheckoutRoots
+	if len(roots) == 0 {
+		roots = []string{"~/github"}
+	}
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		out = append(out, filepath.Clean(fresh.ExpandHome(r)))
+	}
+	return out
 }
 
 // AutoRebuildOn reports whether local rebuilds are enabled (the default).
