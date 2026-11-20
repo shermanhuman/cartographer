@@ -76,6 +76,12 @@ func TestProjectCommands(t *testing.T) {
 	if out := cli(t, headDB, "refresh", "--head", "--from", co); !strings.Contains(out, "your checkouts: imported map") {
 		t.Errorf("refresh --head:\n%s", out)
 	}
+	// review edits the annotation in the checkout it runs in.
+	os.MkdirAll(filepath.Join(co, ".cartographer", "annotations"), 0o755)
+	os.WriteFile(filepath.Join(co, ".cartographer", "annotations", "n.json"), []byte(`{"annotations":[{"kind":"note","id":"n1","title":"N","cites":[]}]}`), 0o644)
+	if out := cli(t, db, "review", "n1"); !strings.Contains(out, "reviewed n1 against snapshot-") || !strings.Contains(out, "commit .cartographer/annotations") {
+		t.Errorf("review:\n%s", out)
+	}
 	if out := cli(t, db, "project", "remove", "solo"); !strings.Contains(out, "removed project solo") {
 		t.Errorf("remove:\n%s", out)
 	}

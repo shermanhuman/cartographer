@@ -408,3 +408,35 @@ without another prompt. Nothing is written into the checkouts but refs/cartograp
 	}
 	return usage
 }
+
+// reviewMember is `review <id>` in a project member checkout: it stamps
+// the annotation in the checkout's .cartographer/annotations against the
+// map chosen for it.
+func reviewMember(ctx context.Context, w io.Writer, c *common, id string) error {
+	cwd, _ := os.Getwd()
+	root := fresh.Root(ctx, cwd)
+	if root == "" {
+		return fmt.Errorf("review: no %s here and not in a checkout", workspace.FileName)
+	}
+	dir := filepath.Join(root, filepath.FromSlash(project.AnnotationsDir))
+	if _, err := os.Stat(dir); err != nil {
+		return fmt.Errorf("review: %s has no %s (and there is no %s here)", root, project.AnnotationsDir, workspace.FileName)
+	}
+	s, err := openStore(c)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	sess := newSession(c, s, io.Discard)
+	sess.ProjectRebuild, sess.Rebuild = nil, nil
+	sid, err := sess.Choose(ctx)
+	if err != nil {
+		return err
+	}
+	n, err := workspace.ReviewDir(ctx, dir, s.DB, sid, id)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "reviewed %s against %s: %d citations stamped; commit %s\n", id, sid, n, project.AnnotationsDir)
+	return nil
+}

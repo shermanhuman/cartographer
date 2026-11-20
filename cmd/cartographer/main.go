@@ -408,6 +408,11 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		if err := need(1, "an annotation id"); err != nil {
 			return err
 		}
+		if _, err := os.Stat(workspacePath(c.workspace)); err != nil {
+			// No cartographer.toml: a project member checkout, whose
+			// .cartographer/annotations this edits for you to commit.
+			return reviewMember(ctx, w, &c, pos[0])
+		}
 		cfg, err := workspace.Load(c.workspace)
 		if err != nil {
 			return err
