@@ -413,7 +413,7 @@ func checkMember(s *Settings, slug, commit, project, anchor string) error {
 // readSettings reads and parses a member's repo.toml at commit.
 func readSettings(ctx context.Context, dir, commit, slug string) (*Settings, error) {
 	b, err := ReadAt(ctx, dir, commit, SettingsFile)
-	if errors.Is(err, errNoFile) {
+	if errors.Is(err, ErrNoFile) {
 		return nil, &StepError{slug, commit, "settings", fmt.Errorf("no %s on its fetched branch: run `cartographer project init %s` to write a starter one, then commit it to the branch", SettingsFile, dir)}
 	}
 	if err != nil {
@@ -495,7 +495,7 @@ func (r *Runner) Head(ctx context.Context, from string) (Result, error) {
 		pins, err := ResolvePins(func(p string) ([]byte, error) {
 			b, err := os.ReadFile(filepath.Join(m.Path, filepath.FromSlash(p)))
 			if errors.Is(err, os.ErrNotExist) {
-				return nil, errNoFile
+				return nil, ErrNoFile
 			}
 			return b, err
 		}, ms)

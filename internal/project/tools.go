@@ -59,7 +59,7 @@ var pinFiles = []string{"mise.toml", ".mise.toml", ".tool-versions"}
 
 // Pins reads the language versions (Languages) a repo pins in its own
 // mise.toml, .mise.toml or .tool-versions (the first that names a language
-// wins). read returns errNoFile for a missing file. A table pin gives its
+// wins). read returns ErrNoFile for a missing file. A table pin gives its
 // version; an array its first entry.
 func Pins(read func(path string) ([]byte, error)) (map[string]string, error) {
 	pins := map[string]string{}
@@ -73,7 +73,7 @@ func Pins(read func(path string) ([]byte, error)) (map[string]string, error) {
 	}
 	for _, f := range pinFiles {
 		b, err := read(f)
-		if errors.Is(err, errNoFile) {
+		if errors.Is(err, ErrNoFile) {
 			continue
 		}
 		if err != nil {
@@ -213,10 +213,10 @@ func (m *Mise) ensure(ctx context.Context, t Tool) ([]string, error) {
 		if m.Log != nil {
 			fmt.Fprintf(m.Log, "mise: installing %s\n", t.Spec())
 		}
-		m.Installs = append(m.Installs, t.Spec())
 		if _, err := m.mise(ctx, "install", t.Spec()); err != nil {
 			return nil, fmt.Errorf("%s: mise can't provide it: %w", t.Spec(), err)
 		}
+		m.Installs = append(m.Installs, t.Spec())
 		if _, err := m.mise(ctx, "where", t.Spec()); err != nil {
 			return nil, fmt.Errorf("%s: still not installed after mise install: %w", t.Spec(), err)
 		}

@@ -336,3 +336,8 @@ func (x *h) state0() *project.State {
 }
 
 func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
+
+func execGit(dir string, args ...string) (string, error) {
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}

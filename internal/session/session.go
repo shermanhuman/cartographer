@@ -557,9 +557,16 @@ func (s *Session) chooseRepo(ctx context.Context, co fresh.Checkout) (string, st
 	}
 	latest := map[string]string{} // workspace -> newest snapshot (all is newest first)
 	var names []string
+	hasMain := map[string]bool{}
 	for _, si := range all {
-		if registered(regs, si.Workspace) != nil && si.Source != "main" {
-			continue // a registered project's map comes only from its fetched mains
+		hasMain[si.Workspace] = hasMain[si.Workspace] || si.Source == "main"
+	}
+	for _, si := range all {
+		// A registered project's map comes only from its fetched mains; a
+		// store holding none (one `refresh --head` built) has its "your
+		// checkouts" maps.
+		if registered(regs, si.Workspace) != nil && si.Source != "main" && (si.Source != "head" || hasMain[si.Workspace]) {
+			continue
 		}
 		if _, ok := latest[si.Workspace]; !ok {
 			latest[si.Workspace] = si.ID

@@ -113,8 +113,9 @@ func Fetched(ctx context.Context, dir, branch string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// errNoFile is ReadAt's answer for a path the commit doesn't have.
-var errNoFile = errors.New("no such file")
+// ErrNoFile is ReadAt's answer for a path the commit doesn't have (and
+// what a Pins reader returns for a missing file).
+var ErrNoFile = errors.New("no such file")
 
 // ReadAt returns path's content at commit in the checkout at dir.
 func ReadAt(ctx context.Context, dir, commit, path string) ([]byte, error) {
@@ -124,7 +125,7 @@ func ReadAt(ctx context.Context, dir, commit, path string) ([]byte, error) {
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == nil {
 			if exec.Command("git", "-C", dir, "cat-file", "-e", commit+"^{commit}").Run() == nil {
-				return nil, errNoFile
+				return nil, ErrNoFile
 			}
 		}
 		return nil, fmt.Errorf("git cat-file %s:%s: %v: %s", commit, path, err, strings.TrimSpace(errb.String()))
