@@ -1,0 +1,605 @@
+{
+  "facts_version": 2,
+  "producer": {
+    "name": "rust-analyzer",
+    "version": "0.3.3121-standalone",
+    "call_precision": "precise"
+  },
+  "repo": "fixture",
+  "revision": "r1",
+  "files": [
+    {
+      "path": "crates/alpha/src/main.rs",
+      "language": "rust",
+      "category": "source"
+    },
+    {
+      "path": "crates/beta/src/main.rs",
+      "language": "rust",
+      "category": "source"
+    },
+    {
+      "path": "crates/maker/src/lib.rs",
+      "language": "rust",
+      "category": "source"
+    },
+    {
+      "path": "crates/shapes/build.rs",
+      "language": "rust",
+      "category": "source"
+    },
+    {
+      "path": "crates/shapes/src/geo.rs",
+      "language": "rust",
+      "category": "source"
+    },
+    {
+      "path": "crates/shapes/src/lib.rs",
+      "language": "rust",
+      "category": "source"
+    },
+    {
+      "path": "crates/shapes/tests/api.rs",
+      "language": "rust",
+      "category": "test"
+    }
+  ],
+  "modules": [
+    {
+      "id": "fixture:crates/alpha",
+      "name": "crates/alpha",
+      "namespace": [
+        "crates/alpha"
+      ],
+      "file": "crates/alpha/src/main.rs",
+      "line": 4,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/beta",
+      "name": "crates/beta",
+      "namespace": [
+        "crates/beta"
+      ],
+      "file": "crates/beta/src/main.rs",
+      "line": 1,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes",
+      "name": "crates/shapes",
+      "namespace": [
+        "crates/shapes"
+      ],
+      "file": "crates/shapes/src/lib.rs",
+      "line": 13,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes.Shape",
+      "name": "crates/shapes.Shape",
+      "namespace": [
+        "crates/shapes"
+      ],
+      "file": "crates/shapes/src/lib.rs",
+      "line": 6,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes/build",
+      "name": "crates/shapes/build",
+      "namespace": [
+        "crates/shapes/build"
+      ],
+      "file": "crates/shapes/build.rs",
+      "line": 2,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes/tests/api",
+      "name": "crates/shapes/tests/api",
+      "namespace": [
+        "crates/shapes/tests/api"
+      ],
+      "file": "crates/shapes/tests/api.rs",
+      "line": 6,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes::geo",
+      "name": "crates/shapes::geo",
+      "namespace": [
+        "crates/shapes",
+        "geo"
+      ],
+      "file": "crates/shapes/src/geo.rs",
+      "line": 48,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Circle",
+      "name": "crates/shapes::geo.Circle",
+      "namespace": [
+        "crates/shapes",
+        "geo"
+      ],
+      "file": "crates/shapes/src/geo.rs",
+      "line": 13,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Circle[impl From\u003cf64\u003e]",
+      "name": "crates/shapes::geo.Circle[impl From\u003cf64\u003e]",
+      "namespace": [
+        "crates/shapes",
+        "geo"
+      ],
+      "file": "crates/shapes/src/geo.rs",
+      "line": 36,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Circle[impl From\u003cu32\u003e]",
+      "name": "crates/shapes::geo.Circle[impl From\u003cu32\u003e]",
+      "namespace": [
+        "crates/shapes",
+        "geo"
+      ],
+      "file": "crates/shapes/src/geo.rs",
+      "line": 42,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Circle[impl Shape]",
+      "name": "crates/shapes::geo.Circle[impl Shape]",
+      "namespace": [
+        "crates/shapes",
+        "geo"
+      ],
+      "file": "crates/shapes/src/geo.rs",
+      "line": 23,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Square[impl Shape]",
+      "name": "crates/shapes::geo.Square[impl Shape]",
+      "namespace": [
+        "crates/shapes",
+        "geo"
+      ],
+      "file": "crates/shapes/src/geo.rs",
+      "line": 29,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:crates/shapes::geo::tests",
+      "name": "crates/shapes::geo::tests",
+      "namespace": [
+        "crates/shapes",
+        "geo",
+        "tests"
+      ],
+      "file": "crates/shapes/src/geo.rs",
+      "line": 78,
+      "language": "rust"
+    }
+  ],
+  "functions": [
+    {
+      "id": "fixture:crates/alpha.main/0",
+      "module": "fixture:crates/alpha",
+      "name": "main",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "crates/alpha/src/main.rs",
+      "line": 4,
+      "fingerprint": "e329caf5df2e353d"
+    },
+    {
+      "id": "fixture:crates/beta.main/0",
+      "module": "fixture:crates/beta",
+      "name": "main",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "crates/beta/src/main.rs",
+      "line": 1,
+      "fingerprint": "1e818b6555d7f9c9"
+    },
+    {
+      "id": "fixture:crates/shapes.Shape.area/0",
+      "module": "fixture:crates/shapes.Shape",
+      "name": "area",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "trait_method",
+      "file": "crates/shapes/src/lib.rs",
+      "line": 6,
+      "fingerprint": "e73a31a7feb9bff6"
+    },
+    {
+      "id": "fixture:crates/shapes.Shape.label/0",
+      "module": "fixture:crates/shapes.Shape",
+      "name": "label",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "method",
+      "file": "crates/shapes/src/lib.rs",
+      "line": 7,
+      "fingerprint": "b18ed5a2a1d31d51"
+    },
+    {
+      "id": "fixture:crates/shapes.built_by_script/0",
+      "module": "fixture:crates/shapes",
+      "name": "built_by_script",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "crates/shapes/src/lib.rs",
+      "line": 13,
+      "fingerprint": "28c0d0117352709e"
+    },
+    {
+      "id": "fixture:crates/shapes/build.main/0",
+      "module": "fixture:crates/shapes/build",
+      "name": "main",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "crates/shapes/build.rs",
+      "line": 2,
+      "fingerprint": "1a42db7885c97d8f"
+    },
+    {
+      "id": "fixture:crates/shapes/tests/api.api/0",
+      "module": "fixture:crates/shapes/tests/api",
+      "name": "api",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "crates/shapes/tests/api.rs",
+      "line": 6,
+      "fingerprint": "00312e5c5fb3065f",
+      "test": true
+    },
+    {
+      "id": "fixture:crates/shapes/tests/api.setup/0",
+      "module": "fixture:crates/shapes/tests/api",
+      "name": "setup",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "crates/shapes/tests/api.rs",
+      "line": 10,
+      "fingerprint": "0e71315ada8cfb2c"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Circle.new/1",
+      "module": "fixture:crates/shapes::geo.Circle",
+      "name": "new",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "associated_function",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 13,
+      "fingerprint": "4c7c65d781a82921"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Circle.scale/1",
+      "module": "fixture:crates/shapes::geo.Circle",
+      "name": "scale",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "method",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 17,
+      "fingerprint": "baec863418682c3b"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Circle[impl From\u003cf64\u003e].from/1",
+      "module": "fixture:crates/shapes::geo.Circle[impl From\u003cf64\u003e]",
+      "name": "from",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "associated_function",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 36,
+      "fingerprint": "001ec5f28f37dc92"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Circle[impl From\u003cu32\u003e].from/1",
+      "module": "fixture:crates/shapes::geo.Circle[impl From\u003cu32\u003e]",
+      "name": "from",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "associated_function",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 42,
+      "fingerprint": "efbb6d9b6d6d5059"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Circle[impl Shape].area/0",
+      "module": "fixture:crates/shapes::geo.Circle[impl Shape]",
+      "name": "area",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "method",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 23,
+      "fingerprint": "7aded44479f574a7"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.Square[impl Shape].area/0",
+      "module": "fixture:crates/shapes::geo.Square[impl Shape]",
+      "name": "area",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "method",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 29,
+      "fingerprint": "2b720ec9a74252ba"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.area_of/1",
+      "module": "fixture:crates/shapes::geo",
+      "name": "area_of",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "function",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 53,
+      "fingerprint": "6359776cbb69c360"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.copy_tile/1",
+      "module": "fixture:crates/shapes::geo",
+      "name": "copy_tile",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "function",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 95,
+      "fingerprint": "84661a21576466c9"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.grow/1",
+      "module": "fixture:crates/shapes::geo",
+      "name": "grow",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "function",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 58,
+      "fingerprint": "42ab3b930dcc27af"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.linux_only/0",
+      "module": "fixture:crates/shapes::geo",
+      "name": "linux_only",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 64,
+      "fingerprint": "d20d0610a589bcc3"
+    },
+    {
+      "id": "fixture:crates/shapes::geo.total/1",
+      "module": "fixture:crates/shapes::geo",
+      "name": "total",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "function",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 48,
+      "fingerprint": "f984ae651595cb2e"
+    },
+    {
+      "id": "fixture:crates/shapes::geo::tests.grows/0",
+      "module": "fixture:crates/shapes::geo::tests",
+      "name": "grows",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 78,
+      "fingerprint": "c2149b8885093f43",
+      "test": true
+    },
+    {
+      "id": "fixture:crates/shapes::geo::tests.helper/0",
+      "module": "fixture:crates/shapes::geo::tests",
+      "name": "helper",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 83,
+      "fingerprint": "7e31f3c8d88609aa",
+      "test": true
+    }
+  ],
+  "calls": [
+    {
+      "from": "fixture:crates/alpha.main/0",
+      "to": "fixture:crates/shapes::geo.Circle.new/1",
+      "kind": "call",
+      "file": "crates/alpha/src/main.rs",
+      "line": 5,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/alpha.main/0",
+      "to": "fixture:crates/shapes::geo.total/1",
+      "kind": "call",
+      "file": "crates/alpha/src/main.rs",
+      "line": 8,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/alpha.main/0",
+      "to": "fixture:crates/shapes::geo.Circle[impl From\u003cf64\u003e].from/1",
+      "kind": "call",
+      "file": "crates/alpha/src/main.rs",
+      "line": 9,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/alpha.main/0",
+      "to": "fixture:crates/shapes::geo.area_of/1",
+      "kind": "call",
+      "file": "crates/alpha/src/main.rs",
+      "line": 13,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/beta.main/0",
+      "to": "fixture:crates/shapes::geo.linux_only/0",
+      "kind": "call",
+      "file": "crates/beta/src/main.rs",
+      "line": 2,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/beta.main/0",
+      "to": "fixture:crates/shapes.built_by_script/0",
+      "kind": "call",
+      "file": "crates/beta/src/main.rs",
+      "line": 3,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/shapes::geo.Circle[impl From\u003cf64\u003e].from/1",
+      "to": "fixture:crates/shapes::geo.Circle.new/1",
+      "kind": "call",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 37,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/shapes::geo.Circle[impl From\u003cu32\u003e].from/1",
+      "to": "fixture:crates/shapes::geo.Circle.new/1",
+      "kind": "call",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 43,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/shapes::geo.total/1",
+      "to": "fixture:crates/shapes::geo.Circle[impl Shape].area/0",
+      "kind": "dispatch",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 49,
+      "precision": "heuristic"
+    },
+    {
+      "from": "fixture:crates/shapes::geo.total/1",
+      "to": "fixture:crates/shapes::geo.Square[impl Shape].area/0",
+      "kind": "dispatch",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 49,
+      "precision": "heuristic"
+    },
+    {
+      "from": "fixture:crates/shapes::geo.area_of/1",
+      "to": "fixture:crates/shapes::geo.Circle[impl Shape].area/0",
+      "kind": "dispatch",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 54,
+      "precision": "heuristic"
+    },
+    {
+      "from": "fixture:crates/shapes::geo.area_of/1",
+      "to": "fixture:crates/shapes::geo.Square[impl Shape].area/0",
+      "kind": "dispatch",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 54,
+      "precision": "heuristic"
+    },
+    {
+      "from": "fixture:crates/shapes::geo.grow/1",
+      "to": "fixture:crates/shapes::geo.Circle.scale/1",
+      "kind": "call",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 59,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/shapes::geo.grow/1",
+      "to": "fixture:crates/shapes::geo.Circle[impl Shape].area/0",
+      "kind": "call",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 60,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/shapes::geo::tests.grows/0",
+      "to": "fixture:crates/shapes::geo.Circle.new/1",
+      "kind": "call",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 79,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/shapes::geo::tests.grows/0",
+      "to": "fixture:crates/shapes::geo.grow/1",
+      "kind": "call",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 80,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/shapes::geo::tests.grows/0",
+      "to": "fixture:crates/shapes::geo::tests.helper/0",
+      "kind": "call",
+      "file": "crates/shapes/src/geo.rs",
+      "line": 80,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/shapes.Shape.label/0",
+      "to": "fixture:crates/shapes::geo.Circle[impl Shape].area/0",
+      "kind": "dispatch",
+      "file": "crates/shapes/src/lib.rs",
+      "line": 8,
+      "precision": "heuristic"
+    },
+    {
+      "from": "fixture:crates/shapes.Shape.label/0",
+      "to": "fixture:crates/shapes::geo.Square[impl Shape].area/0",
+      "kind": "dispatch",
+      "file": "crates/shapes/src/lib.rs",
+      "line": 8,
+      "precision": "heuristic"
+    },
+    {
+      "from": "fixture:crates/shapes/tests/api.api/0",
+      "to": "fixture:crates/shapes/tests/api.setup/0",
+      "kind": "call",
+      "file": "crates/shapes/tests/api.rs",
+      "line": 7,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:crates/shapes/tests/api.setup/0",
+      "to": "fixture:crates/shapes::geo.Circle.new/1",
+      "kind": "call",
+      "file": "crates/shapes/tests/api.rs",
+      "line": 11,
+      "precision": "precise"
+    }
+  ],
+  "stats": [
+    {
+      "language": "rust",
+      "call_sites": 26,
+      "in_repo": 15,
+      "dispatch": 3,
+      "external": 8,
+      "unresolved": 0,
+      "refs": 1,
+      "not_extracted": 0
+    }
+  ]
+}

@@ -20,6 +20,7 @@ import (
 	"github.com/shermanhuman/cartographer/internal/output"
 	"github.com/shermanhuman/cartographer/internal/query"
 	"github.com/shermanhuman/cartographer/internal/render"
+	"github.com/shermanhuman/cartographer/internal/scip"
 	"github.com/shermanhuman/cartographer/internal/server"
 	"github.com/shermanhuman/cartographer/internal/session"
 	"github.com/shermanhuman/cartographer/internal/snapshot"
@@ -78,6 +79,9 @@ Building (in a workspace with cartographer.toml):
   publish <snapshot-dir>      pack and publish as a GitHub release, prune old ones
   review <annotation-id>      mark an annotation reviewed against the snapshot's code
   validate-facts <file>...    check extractor plugin output (facts v1)
+  extract scip --lang go|rust --repo NAME --root DIR [--revision REV] [--rust-build-scripts=false]
+                              index a repository with scip-go or rust-analyzer (found on
+                              PATH) and print its facts v2 document
   plugins-dir                 print the directory of the bundled extractor plugins
 
 Agents:
@@ -128,6 +132,8 @@ type common struct {
 	open                                        bool
 	pdf, svg, page, snippet                     bool
 	around, context, table, annotation, outFile string
+	lang, repo, root, revision                  string
+	rustBuildScripts                            bool
 }
 
 type refFlags map[string]string
@@ -189,6 +195,11 @@ func flags(name string, c *common) *flag.FlagSet {
 	fs.StringVar(&c.table, "table", "", "export: table to show")
 	fs.StringVar(&c.annotation, "annotation", "", "export: annotation (journey, investigation, note) to show")
 	fs.StringVar(&c.outFile, "o", "", "export: output file")
+	fs.StringVar(&c.lang, "lang", "", "extract: go or rust")
+	fs.StringVar(&c.repo, "repo", "", "extract: repository name (the id prefix)")
+	fs.StringVar(&c.root, "root", ".", "extract: repository root")
+	fs.StringVar(&c.revision, "revision", "", "extract: revision the root is at")
+	fs.BoolVar(&c.rustBuildScripts, "rust-build-scripts", true, "extract: run Rust build scripts and proc macros")
 	return fs
 }
 
@@ -388,6 +399,20 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		}
 		fmt.Fprintf(w, "reviewed %s against %s: %d citations stamped; commit the annotation file\n", pos[0], sid, n)
 		return nil
+	case "extract":
+		if len(pos) != 1 || pos[0] != "scip" {
+			return errors.New("usage: cartographer extract scip --lang go|rust --repo NAME --root DIR [--revision REV]")
+		}
+		d, err := scip.Extract(ctx, scip.RunOptions{
+			Options:          scip.Options{Lang: c.lang, Repo: c.repo, Root: c.root, Revision: c.revision},
+			RustBuildScripts: c.rustBuildScripts,
+		})
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(d)
 	case "plugins-dir":
 		dir, err := plugins.Extract(workspace.DefaultCacheDir())
 		if err != nil {
