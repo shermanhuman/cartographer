@@ -249,7 +249,11 @@ func (v *View) Detail() []string {
 		if len(d) > 16 {
 			d = d[:16]
 		}
-		out = append(out, fmt.Sprintf("inputs digest %s · tools %s", d, strings.Join(tools, " ")))
+		line := "tools " + strings.Join(tools, " ")
+		if d != "" {
+			line = "inputs digest " + d + " · " + line
+		}
+		out = append(out, line)
 	}
 	return out
 }
