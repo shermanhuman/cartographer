@@ -48,6 +48,26 @@ func newServer(t *testing.T, imported bool) *httptest.Server {
 	return srv
 }
 
+// fixtureV2 is the facts-v2 snapshot: sales reaches admin's route
+// POST /api/v1/sales/cold/check through an interface dispatch and an HTTP link.
+const fixtureV2 = "../../testdata/workspace-v2/snapshot"
+
+// serverOver serves a store holding the snapshot in dir.
+func serverOver(t *testing.T, dir string) *httptest.Server {
+	t.Helper()
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if _, err := s.Import(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(Options{Store: s, Version: "test"}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func get(t *testing.T, srv *httptest.Server, path string, want int) (string, http.Header) {
 	t.Helper()
 	res, err := http.Get(srv.URL + path)
@@ -415,12 +435,13 @@ func TestJSContracts(t *testing.T) {
 		t.Skip("node not on PATH; run `mise exec -- go test ./...` to include the UI tests")
 	}
 	srv := newServer(t, true)
+	v2 := serverOver(t, fixtureV2)
 	tests, _ := filepath.Glob("../../web/scripts/*.test.js")
 	if len(tests) == 0 {
 		t.Fatal("no UI tests found")
 	}
 	cmd := exec.Command(node, append([]string{"--test"}, tests...)...)
-	cmd.Env = append(os.Environ(), "CARTOGRAPHER_URL="+srv.URL+"/", "CARTOGRAPHER_FIXTURE="+fixture)
+	cmd.Env = append(os.Environ(), "CARTOGRAPHER_URL="+srv.URL+"/", "CARTOGRAPHER_FIXTURE="+fixture, "CARTOGRAPHER_V2_URL="+v2.URL+"/")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("node --test failed: %v\n%s", err, out)
@@ -637,5 +658,27 @@ func TestTableKindInPayloads(t *testing.T) {
 	shard := getJSON[obj](t, srv, "/api/entity/public.customers")
 	if shard["table_kind"] != "view" || shard["kind"] != "table" {
 		t.Errorf("shard: %v", shard)
+	}
+}
+
+// The overview draws edges from the shared edge query, so an HTTP link from
+// one repository to another's route counts like a call.
+func TestOverviewShowsCrossRepoHTTPEdge(t *testing.T) {
+	srv := serverOver(t, fixtureV2)
+	ov := getJSON[obj](t, srv, "/api/overview")
+	edges := list(asObj(asObj(ov["views"])["home"])["edges"])
+	if len(edges) != 1 {
+		t.Fatalf("home edges: %v", edges)
+	}
+	e := asObj(edges[0])
+	if e["from"] != "s:sales" || e["to"] != "s:admin" || e["label"] != "1 HTTP link" || e["precision"] != "heuristic" {
+		t.Errorf("cross-repo edge: %v", e)
+	}
+	cat := byID(getJSON[[]obj](t, srv, "/api/catalog"))
+	if r := cat["admin:route:POST /api/v1/sales/cold/check"]; r["kind"] != "route" || r["label"] != "POST /api/v1/sales/cold/check" {
+		t.Errorf("route catalog entry: %v", r)
+	}
+	if s := cat["s:admin"]; s["summary"] != "2 modules · 1 route at ccccccc" {
+		t.Errorf("admin repository: %v", s)
 	}
 }

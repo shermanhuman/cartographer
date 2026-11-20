@@ -4,7 +4,7 @@ import {createJourneyBrowser} from './journey-browser.js';
 import {createFileBrowser} from './file-browser.js';
 import {createSchemaBrowser} from './schema-browser.js';
 import {createContextBrowser} from './context-browser.js';
-import {functionNeighborhood, layeredLayout} from './graph-model.js';
+import {functionNeighborhood, layeredLayout, edgeLabel, hopLabel} from './graph-model.js';
 import {exportSVG, footerText} from './export.js';
 import {esc, badge, reviewText, text} from './util.js';
 const $ = s => document.querySelector(s);
@@ -18,10 +18,10 @@ let overview, catalog, entities, state, status, snapshots, currentGraph, renderT
 let fileBrowser, schemaBrowser, contextBrowser, fileManifest, schemaIndex, journeyBrowser;
 let transform={x:0,y:0,z:1}, dimensions={w:1000,h:600}, lastLayoutKey='', drawn=[];
 const cache = new Map();
-const kinds = {module:'Module',function:'Function',table:'Table',service:'Repository',external:'External source',file:'Tracked file',context:'Context',annotation:'Annotation'};
-const views = ['home','modules','tables','contexts','entity'];
+const kinds = {module:'Module',function:'Function',route:'Route',table:'Table',service:'Repository',external:'External source',file:'Tracked file',context:'Context',annotation:'Annotation'};
+const views = ['home','modules','tables','contexts','entity','path'];
 const shortRepo=r=>r||'database';
-const icon=e=>`<span class="tech-icon">${e?.icon?`<img src="assets/${esc(e.icon)}.svg" alt="">`:e?.kind==='function'?'ƒ':e?.kind==='table'?'▤':e?.kind==='module'?'◇':e?.kind==='context'?'◫':e?.kind==='annotation'?'✎':'↗'}</span>`;
+const icon=e=>`<span class="tech-icon">${e?.icon?`<img src="assets/${esc(e.icon)}.svg" alt="">`:e?.kind==='function'?'ƒ':e?.kind==='route'?'⇄':e?.kind==='table'?'▤':e?.kind==='module'?'◇':e?.kind==='context'?'◫':e?.kind==='annotation'?'✎':'↗'}</span>`;
 const link=(url,label)=>url?`<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(label)} ↗</a>`:esc(label);
 const action=(id,label,sub='')=>`<button class="inspector-link" data-go="${esc(id)}">${esc(label)}${sub?`<small>${esc(sub)}</small>`:''}</button>`;
 const fmtDate=s=>{const d=new Date(s);return isNaN(d)?String(s||''):d.toLocaleString()};
@@ -31,7 +31,7 @@ function byId(id){return entities.get(id)}
 function parent(e){return e?.parent?byId(e.parent):e}
 function journeyOf(view){return Object.hasOwn(journeys,view)?journeys[view]:null}
 async function detail(e){if(!e?.shard)return e||{};if(!cache.has(e.shard))cache.set(e.shard,getJSON(api('entity/'+encodeURIComponent(e.shard))).catch(error=>{cache.delete(e.shard);throw error}));const d=await cache.get(e.shard);return e.kind==='function'?(d.functions?.[e.id]||{}):d}
-function parse(){const p=new URLSearchParams(location.hash.slice(1));const print=p.get('print');return {view:p.get('view')||'home',entity:p.get('entity')||'',focus:p.get('focus')||'',tab:p.get('tab')||'overview',page:Math.max(0,Number(p.get('page'))||0),trail:p.get('trail')||'',filter:p.get('filter')||'',file:p.get('file')||'',table:p.get('table')||'',cluster:p.get('cluster')||'',context:p.get('context')||'',step:p.get('step')||'',investigation:p.get('investigation')||'',checkpoint:Math.max(0,Number(p.get('checkpoint'))||0),depth:Math.max(0,Math.min(4,Number(p.get('depth'))||0)),snapshot:p.get('snapshot')||'',print:['page','snippet'].includes(print)?print:''}}
+function parse(){const p=new URLSearchParams(location.hash.slice(1));const print=p.get('print');return {view:p.get('view')||'home',entity:p.get('entity')||'',focus:p.get('focus')||'',tab:p.get('tab')||'overview',page:Math.max(0,Number(p.get('page'))||0),trail:p.get('trail')||'',filter:p.get('filter')||'',file:p.get('file')||'',table:p.get('table')||'',cluster:p.get('cluster')||'',context:p.get('context')||'',step:p.get('step')||'',investigation:p.get('investigation')||'',checkpoint:Math.max(0,Number(p.get('checkpoint'))||0),depth:Math.max(0,Math.min(4,Number(p.get('depth'))||0)),from:p.get('from')||'',to:p.get('to')||'',snapshot:p.get('snapshot')||'',print:['page','snippet'].includes(print)?print:''}}
 function hashOf(s){const p=new URLSearchParams();for(const [k,v]of Object.entries(s))if(v!==''&&v!==0)p.set(k,v);return p.toString()}
 function navigate(next,replace=false){const merged={...state,...next};history[replace?'replaceState':'pushState']({},'',`${location.pathname}${location.search}#${hashOf(merged)}`);lastHash=location.hash;state=merged;render()}
 function investigate(id,index=0){const check=investigationState(id,index);if(!check)return;navigate({context:'',step:'',tab:'overview',page:0,trail:'',...check})}
@@ -62,6 +62,7 @@ async function graph(){
   if(state.view==='modules'){await ensureBrowser('modules');return {title:'Code explorer',subtitle:'Browse repositories and folders. Select a file, inspect its functions, then open a relationship graph.',nodes:[],edges:[],type:'TRACKED FILES · PINNED REVISIONS',note:`${fileManifest.repositories.reduce((n,r)=>n+r.count,0).toLocaleString()} files across ${fileManifest.repositories.length} repositories. Function details cover the files an extractor parsed.`,browser:true}}
   if(state.view==='tables'){await ensureBrowser('tables');return {title:'Data structure',subtitle:'Find a table or column. Inspect columns, keys, indexes, relationships and code mentions in one place.',nodes:[],edges:[],type:'SCHEMA SNAPSHOT',note:`All ${schemaIndex.length} tables are browsable. Foreign keys are schema facts; code mentions are textual candidates. No live database is queried.`,browser:true}}
   if(state.view==='contexts'){await ensureBrowser('contexts');return {title:'Contexts',subtitle:'Module clusters by namespace: their modules, the tables their code mentions, and the docs that describe them.',nodes:[],edges:[],type:'MODULE NAMESPACE CLUSTERS',note:`${overview.contexts.length} contexts across ${new Set(overview.contexts.map(c=>c.repo)).size} repositories. Contexts are derived from module names, not reviewed boundaries.`,browser:true}}
+  if(state.view==='path')return pathGraph();
   const e=byId(state.entity);if(!e)return {title:'Entity not found',subtitle:'This link refers to an entity outside the selected snapshot.',nodes:[],edges:[],note:'Use search to find a current entity or return to System overview.',type:'UNKNOWN ENTITY',error:`entity ${state.entity} not found in snapshot ${status.snapshot}`};
   const d=await detail(e), title=e.label;
   let nodes=[],edges=[],note='',pages=1,total=0;
@@ -74,13 +75,13 @@ async function graph(){
     note='All resolved module dependencies in the extracted call graph. These are calls across module boundaries, not execution order. Dynamic and unresolved calls are not represented.';
   }else if(e.kind==='function'&&state.depth>1){
     const g=await getJSON(api('graph',{id:e.id,depth:state.depth}));
-    nodes=layeredLayout(g);edges=g.edges.map(x=>({from:x.from,to:x.to,label:`${x.sites} call site${x.sites===1?'':'s'}`,precision:x.precision}));
+    nodes=layeredLayout(g);edges=g.edges.map(x=>({from:x.from,to:x.to,label:edgeLabel(x),precision:x.precision}));
     note=`Call neighbourhood to depth ${g.depth}: callers left, callees right.${g.hidden?` ${g.hidden} more nodes are hidden; run cartographer impact ${e.id}.`:''} ${esc(d.external_or_unresolved_sites)} external or unresolved call sites from this function are not drawn.`;
-  }else if(e.kind==='function'){
+  }else if(e.kind==='function'||e.kind==='route'){
     const neighborhood=functionNeighborhood(e.id,d),{incoming,outgoingOnly,selfSites}=neighborhood;const height=Math.max(incoming.length,outgoingOnly.length,1)*158;
     nodes=[{id:e.id,x:345,y:(height-126)/2},...incoming.map((n,i)=>({id:n.id,x:20,y:i*158})),...outgoingOnly.map((n,i)=>({id:n.id,x:675,y:i*158}))];
-    edges=neighborhood.edges.map(n=>({from:n.from,to:n.to,label:`${n.sites} call site${n.sites===1?'':'s'}`,precision:n.precision}));
-    note=`Focused neighbourhood: ${d.in.length} resolved callers, ${d.out.length} resolved callees; reciprocal calls keep both arrows. ${selfSites} self-recursive call sites are listed in Code but not drawn as loops. ${esc(d.external_or_unresolved_sites)} external, generated or unresolved call sites are not drawn. Add &depth=2 to the link for a wider view.`;
+    edges=neighborhood.edges.map(n=>({from:n.from,to:n.to,label:edgeLabel(n),precision:n.precision}));
+    note=e.kind==='route'?`Route ${e.label} in ${e.repo}: its handler on the right, and on the left the functions linked to it by HTTP references (${d.callers.length}). HTTP links are never precise: heuristic when the caller's configuration names a Service running ${e.repo}, candidate when only ${e.repo} has a matching route.`:`Focused neighbourhood: ${d.in.length} resolved callers, ${d.out.length} resolved callees; reciprocal calls keep both arrows. ${selfSites} self-recursive call sites are listed in Code but not drawn as loops. ${esc(d.external_or_unresolved_sites)} external, generated or unresolved call sites are not drawn. Add &depth=2 to the link for a wider view.`;
   }else if(e.kind==='table'){
     const relationships=d.relationships.filter(r=>byId(r.from)&&byId(r.to));const ids=[...new Set(relationships.flatMap(r=>[r.from,r.to]))].filter(id=>id!==e.id);total=ids.length;
     const mentions=[...new Set((d.references||[]).map(r=>r.function).filter(id=>id&&byId(id)))];
@@ -91,12 +92,22 @@ async function graph(){
     const ids=(e.members||e.modules||e.tables||[]).filter(id=>byId(id));nodes=[{id:e.id,x:315,y:20},...grid(ids,225)];edges=nodes.slice(1).map(n=>({from:e.id,to:n.id,label:e.kind==='annotation'?'cites':'contains'}));
     note=e.kind==='annotation'?'Entities this annotation cites. Review status is attached in Docs.':e.kind==='context'?'Modules in this namespace cluster. Use Contexts for tables and docs.':'Largest modules or tables in this repository. Use Code explorer or Data structure for the full inventory.';
   }
-  return {title,subtitle:e.full+(e.kind==='function'?' · Focused call neighbourhood':` · ${kinds[e.kind]}`),nodes,edges,note,pages,total,type:e.kind==='function'?'EXTRACTED CALL SITES':e.kind==='table'?'FOREIGN KEYS + CODE MENTIONS':'STRUCTURAL DRILL-DOWN'};
+  return {title,subtitle:e.full+(e.kind==='function'?' · Focused call neighbourhood':` · ${kinds[e.kind]}`),nodes,edges,note,pages,total,type:e.kind==='function'?'EXTRACTED CALL SITES':e.kind==='route'?'HTTP LINKS + HANDLER':e.kind==='table'?'FOREIGN KEYS + CODE MENTIONS':'STRUCTURAL DRILL-DOWN'};
+}
+// The shortest chain between state.from and state.to, laid out left to
+// right; each arrow names the hop's kind and precision (/api/path).
+async function pathGraph(){
+  const p=await getJSON(api('path',{from:state.from,to:state.to}));
+  const nodes=p.steps.map((s,i)=>({id:s.id,x:20+i*300,y:(i%2)*90}));
+  const edges=p.steps.slice(1).map((s,i)=>({from:p.steps[i].id,to:s.id,label:hopLabel(s),precision:s.precision}));
+  const links=p.steps.filter(s=>s.provenance).map(s=>`${s.short}: ${s.precision}, ${s.provenance.replaceAll(' -> ',' → ')}`);
+  return {title:'Path',subtitle:p.steps.length?p.summary:`No path between ${p.from} and ${p.to} within 8 hops.`,nodes,edges,type:p.reverse?'SHORTEST PATH · REVERSE DIRECTION':'SHORTEST PATH',
+    note:p.steps.length?`${p.steps.length-1} hop(s)${p.reverse?', found from the second entity to the first':''}. Each arrow names its kind (call, dispatch, http, route) and precision.${links.length?' HTTP evidence: '+links.join('; ')+'.':''}${p.notes.length?' '+p.notes.join(' '):''}`:'Unresolved and dynamic calls are not traced.'};
 }
 
 function badgeOf(e){
   if(e.kind==='annotation')return [reviewText(e.status),e.status==='reviewed'?'gray':'amber'];
-  return [e.kind==='module'?`${e.count} functions`:e.kind==='table'?`${e.count} columns`:e.kind==='function'?'Source function':e.kind==='context'?`${e.count} modules`:e.kind==='service'?`${e.count} ${e.repo?'modules':'tables'}`:e.kind==='external'?'External dependency':shortRepo(e.repo),''];
+  return [e.kind==='module'?`${e.count} functions`:e.kind==='table'?`${e.count} columns`:e.kind==='function'?'Source function':e.kind==='route'?`${e.count} HTTP caller${e.count===1?'':'s'}`:e.kind==='context'?`${e.count} modules`:e.kind==='service'?`${e.count} ${e.repo?'modules':'tables'}`:e.kind==='external'?'External dependency':shortRepo(e.repo),''];
 }
 function nodeBadge(e){const [text,tone]=badgeOf(e);return badge(text,tone)}
 function draw(g){
@@ -130,7 +141,13 @@ function zoom(factor){const c=$('#canvas'),z=Math.max(.15,Math.min(2,transform.z
 
 function expandableItems(items,render,label,visible=30){const first=items.slice(0,visible).map(render).join('');if(items.length<=visible)return first;return first+`<details class="additional-references"><summary>${items.length-visible} more ${esc(label)} (${items.length} total)</summary>${items.slice(visible).map(render).join('')}</details>`}
 function relatedTableLinks(ids){return `<h3>Related tables (${ids.length})</h3>`+expandableItems(ids,id=>action(id,byId(id)?.label||id,'Textual mention · candidate'),'tables')}
-function sectionList(label,items){return `<h3>${esc(label)} (${items.length})</h3>`+(items.length?items.map(n=>action(n.id,byId(n.id)?.label||n.id,`${byId(n.id)?.full||n.id} · ${n.sites} call site${n.sites===1?'':'s'}${n.precision?' · '+n.precision:''}`)).join(''):'<p>None resolved in the snapshot.</p>')}
+function sectionList(label,items){return `<h3>${esc(label)} (${items.length})</h3>`+(items.length?items.map(n=>action(n.id,byId(n.id)?.label||n.id,`${byId(n.id)?.full||n.id} · ${edgeLabel(n)}${n.precision?' · '+n.precision:''}${n.provenance?' · '+n.provenance.replaceAll(' -> ',' → '):''}`)).join(''):'<p>None resolved in the snapshot.</p>')}
+// A route's overview: method and path, where it is registered, its handler,
+// and the functions that reach it through HTTP links with their evidence.
+function routeOverview(e,d){
+  const h=d.handler,hl=h&&byId(h.id);
+  return `<p>HTTP route served by ${esc(d.repo)}. Its callers are HTTP links: never precise, heuristic when the caller's configuration names a Service running this repository, candidate when only this repository has a matching route.</p><div class="kv"><span>Method</span><span>${esc(d.method||'any')}</span></div><div class="kv"><span>Path</span><span>${esc(d.path)}</span></div><div class="kv"><span>Repository</span><span>${esc(d.repo)}</span></div>${d.file?`<div class="kv"><span>Registered</span><span>${link(d.url,`${d.file}:${d.line}`)}</span></div>`:''}<h3>Handler</h3>${h?action(h.id,hl?.label||h.id,`${hl?.full||h.id}${h.precision?' · '+h.precision:''}`):'<p>The extractor did not name a handler.</p>'}<h3>Callers through HTTP links (${d.callers.length})</h3>${d.callers.map(c=>action(c.id,byId(c.id)?.label||c.label||c.id,`${c.repo} · ${c.file}:${c.line} · ${c.precision}${c.provenance?' · '+c.provenance.replaceAll(' -> ',' → '):''}`)).join('')||'<p>No HTTP reference in the map links to it.</p>'}`;
+}
 function docsList(d){
   const docs=d.docs||[],anns=d.annotations||[];
   let html=`<h3>Docs mentioning it (${docs.length})</h3>`+(docs.length?docs.map(x=>`<div class="inspector-link">${link(x.url,x.title)}<small>${esc(x.repo)} / ${esc(x.path)}:${esc(x.line)}</small></div>`).join(''):'<p>No tracked Markdown mentions it.</p>');
@@ -146,17 +163,20 @@ async function inspect(e,token){
   const ctx=resolveJourney(state.view,state.context),step=resolveStep(ctx,state.step);
   if(ctx&&step){$('#inspector-header').insertAdjacentHTML('afterbegin',`<div class="inspector-context">Inspecting within ${esc(journeys[ctx].title)}<button data-return-journey>↩ ${esc(step.title)}</button></div>`)}
   if(e&&['module','function','table','context'].includes(e.kind))$('#inspector-header').insertAdjacentHTML('beforeend',`<div class="inspector-tools"><button data-browse-source="${esc(e.id)}">${e.kind==='table'?'Open full schema':e.kind==='context'?'Open in Contexts':'Open file tree'} ↗</button><button data-open-graph="${esc(e.id)}">${e.kind==='table'?'Relationships':e.kind==='module'?'Module dependencies':e.kind==='context'?'Context graph':'Call neighbourhood'} ↗</button></div>`);
+  if(e&&['function','route'].includes(e.kind)){const from=state.from&&state.from!==e.id?byId(state.from):null;$('#inspector-header').insertAdjacentHTML('beforeend',`<div class="inspector-tools"><button data-path-from="${esc(e.id)}">Path from here</button>${from?`<button data-path-to="${esc(e.id)}">Path from ${esc(from.label)} to here ↗</button>`:''}</div>`)}
   const tabs=['overview','code','data','docs'];$('#inspector-tabs').innerHTML=tabs.map(t=>`<button data-tab="${t}" class="${state.tab===t?'selected':''}">${t[0].toUpperCase()+t.slice(1)}</button>`).join('');
   if(!e){$('#inspector-content').innerHTML=['modules','tables','contexts'].includes(state.view)?'<p>Select a file, function, table or context to inspect its source, data and docs here.</p><div class="note">Browsing does not imply complete function extraction or a completed design review.</div>':`<p>Start with a repository, a journey, or search (⌘K). Every node links code, data and docs at pinned revisions.</p><div class="note">This map is an imported snapshot served from this machine. ${esc(freshnessSummary()||'Working-copy freshness has not been checked.')}</div>`;return}
   if(e.kind==='file'){$('#inspector-content').innerHTML=`<p>${esc(e.file)}</p><div class="kv"><span>Category</span><span>${esc(e.category)}</span></div><div class="kv"><span>Source revision</span><span>${esc(overview.manifest.sources[e.repo]?.slice(0,10)||'snapshot')}</span></div><p>${link(e.url,'Open source at snapshot revision')}</p><div class="note">This file has no indexed function details. That is an extraction limit, not a claim that it contains no behaviour.</div>`;return}
   $('#inspector-content').innerHTML='<p>Loading source details…</p>';const d=await detail(e);if(token!==renderToken)return;
   let html='';const go=`<button class="primary" ${['module','function','table','context'].includes(e.kind)?'data-browse-source':'data-open-graph'}="${esc(e.id)}">${e.kind==='table'?'Open full schema':['module','function'].includes(e.kind)?'Open source file':e.kind==='context'?'Open in Contexts':'Explore graph'} →</button>`;
   const ctxId=d.context||e.context, nDocs=(d.docs||[]).length+(d.annotations||[]).length;
-  if(state.tab==='overview'){
+  if(state.tab==='overview'&&e.kind==='route')html=routeOverview(e,d)+go;
+  else if(state.tab==='overview'){
     html=`<p>${esc(e.summary||(e.kind==='function'?'Source-defined function. Explore its callers and callees; dynamic calls may be unresolved.':e.kind==='table'?`Table in ${e.domain}. Inspect columns and links, then follow code mentions.`:e.kind==='context'?'Modules that share a namespace prefix.':e.kind==='annotation'?'A human-written explanation that cites map entities.':'Source module inventory.'))}</p><div class="kv"><span>Repository</span><span>${esc(e.repo||'—')}</span></div><div class="kv"><span>Source revision</span><span>${esc(overview.manifest.sources[e.repo]?.slice(0,10)||'snapshot')}</span></div>${d.file&&d.line?`<div class="kv"><span>Location</span><span>${link(d.url,`${d.file}:${d.line}`)}</span></div>`:''}${ctxId&&byId(ctxId)?`<div class="kv"><span>Context</span><span><button class="text-link inline" data-go="${esc(ctxId)}">${esc(byId(ctxId).label)}</button></span></div>`:''}${e.count?`<div class="kv"><span>${e.kind==='table'?'Columns':e.kind==='module'?'Source functions':'Members'}</span><span>${esc(e.count)}</span></div>`:''}${e.kind==='annotation'?annotationDetail(d)+`<div class="kv"><span>Review</span><span>${esc(reviewText(e.status))}</span></div>`:''}${go}<h3>Attached context</h3><button class="inspector-link" data-tab="docs">${nDocs} docs and annotations <small>Markdown that mentions it · reviewed explanations that cite it</small></button>${e.kind==='function'&&e.parent?action(e.parent,'Back to '+parent(e).label,'Containing module'):''}`;
   }else if(state.tab==='code'){
     const source=d.url;html=source?`<p>${link(source,'Open source at snapshot revision')}</p>`:'';
     if(e.kind==='function')html+=`<p>${esc(d.file)}:${esc(d.line)}<br>${esc(d.kind)} · ${esc(d.language||'')}</p>${sectionList('Resolved callers',d.in||[])}${sectionList('Resolved callees',d.out||[])}<div class="note">${esc(d.external_or_unresolved_sites)} call sites point outside the map or could not be resolved. Absence of a static edge does not prove absence of a runtime call.</div>`;
+    else if(e.kind==='route')html+=`<p>${esc(d.method||'any method')} ${esc(d.path)}</p>${sectionList('Callers through HTTP links',d.in||[])}${sectionList('Handler',d.out||[])}<div class="note">HTTP links are found by method and path with repository-level evidence; data flow is not traced.</div>`;
     else if(e.kind==='module')html+=`<h3>Defined functions (${Object.keys(d.functions).length})</h3>${Object.values(d.functions).sort((a,b)=>a.name.localeCompare(b.name)).map(f=>action(f.id,byId(f.id)?.label||f.id,`${f.kind} · line ${f.line}`)).join('')}`;
     else if(e.kind==='table')html+=`<div class="note">These are textual mentions, including comments and query fragments (candidate). They are not proven read/write edges.</div><h3>Code mentions (${(d.references||[]).length})</h3>${expandableItems(d.references||[],r=>`<div class="inspector-link">${r.function&&byId(r.function)?action(r.function,byId(r.function).label):link(r.url,r.file+':'+r.line)}<small>${esc(r.repo)} · ${esc((r.text||'').trim())}</small></div>`,'references',35)||'<p>No code mentions.</p>'}`;
     else html+=(e.members||e.modules||e.tables||[]).filter(id=>byId(id)).map(id=>action(id,byId(id).label,byId(id).full)).join('')||'<p>No members.</p>';
@@ -198,7 +218,7 @@ async function render(){
     $('#context-strip').innerHTML=ctx&&step?`<div>Exploring from <strong>${esc(journeys[ctx].title)} / ${esc(step.title)}</strong></div><div class="context-actions"><button data-return-journey>↩ Return to journey</button><button data-clear-context>Leave journey</button></div>`:'';
     $('#file-browser-host').hidden=state.view!=='modules';$('#schema-browser-host').hidden=state.view!=='tables';$('#context-browser-host').hidden=state.view!=='contexts';
     $('#list-toggle').hidden=Boolean(g.browser||g.journey);
-    $('#toolbar-note').textContent=g.browser||g.journey?'':'Edges: precise = resolved by the extractor · heuristic = matched by name across repositories · candidate = textual';
+    $('#toolbar-note').textContent=g.browser||g.journey?'':'Edges: precise = resolved by the extractor · heuristic = matched by name, interface dispatch or configured service · candidate = textual or path-only';
     if(g.journey||g.browser){$('#canvas').hidden=true;$('#list-view').hidden=true;$('.map-controls').hidden=true;$('#minimap').hidden=true;$('.legend').hidden=true;drawn=[]}
     if(g.journey){
       $('#entity-count').textContent=journeyOf(state.view).steps.length+' steps · cited code and review status';
@@ -245,6 +265,8 @@ document.addEventListener('click',event=>{const b=event.target.closest('button,a
   else if(b.dataset.browseRepository)browseRepository(b.dataset.browseRepository);
   else if(b.dataset.browseSource)browseSource(b.dataset.browseSource);
   else if(b.dataset.openGraph)openGraph(b.dataset.openGraph);
+  else if(b.dataset.pathFrom){navigate({from:b.dataset.pathFrom});toast(`Path start: ${byId(b.dataset.pathFrom)?.label||b.dataset.pathFrom}. Select another function or route, then choose “Path from … to here”.`)}
+  else if(b.dataset.pathTo){listMode=false;navigate({view:'path',to:b.dataset.pathTo,entity:'',focus:'',tab:'overview',page:0,trail:''})}
   else if(b.dataset.go)explore(b.dataset.go);
   else if(b.dataset.select)select(b.dataset.select);
   else if(b.dataset.tab)navigate({tab:b.dataset.tab});
@@ -257,7 +279,7 @@ $('#search-open').onclick=openSearch;$('#global-search').oninput=search;$('#prov
 $('#global-search').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();const row=$('[data-search-result]');if(row)row.click()}};
 document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'){event.preventDefault();if(!$('#search-dialog').open)openSearch()}});
 $('#copy-link').onclick=async()=>{try{const {print,...rest}=state;await navigator.clipboard.writeText(location.href.split('#')[0]+'#'+hashOf({...rest,snapshot:SNAPSHOT||status.snapshot}));toast('Link copied · opens this snapshot, view and selection')}catch{toast('Copy this page’s address from the address bar.')}};
-$('#copy-embed').onclick=async()=>{const id=state.focus||state.entity,e=byId(id);if(!e||!['function','module','table','context'].includes(e.kind))return toast('Select a function, module, table or context to copy its embed.');try{const md=await getText(api('embed',{id}));await navigator.clipboard.writeText(md);toast('Embed copied · paste into a GitHub issue or PR')}catch(error){toast(error.message||'Could not copy the embed.')}};
+$('#copy-embed').onclick=async()=>{const id=state.focus||state.entity,e=byId(id);if(!e||!['function','route','module','table','context'].includes(e.kind))return toast('Select a function, route, module, table or context to copy its embed.');try{const md=await getText(api('embed',{id}));await navigator.clipboard.writeText(md);toast('Embed copied · paste into a GitHub issue or PR')}catch(error){toast(error.message||'Could not copy the embed.')}};
 $('#save-pdf').onclick=()=>{preparePrint($('#export-mode').value);window.print()};
 $('#download-svg').onclick=()=>{if(!canExportSVG())return toast('Open a graph view to download it as SVG.');const url=URL.createObjectURL(new Blob([buildSVG()],{type:'image/svg+xml'}));const a=document.createElement('a');a.href=url;a.download=`cartographer-${String(currentGraph.title).replace(/[^A-Za-z0-9._-]+/g,'-')}.svg`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)};
 $('#fit').onclick=fit;$('#minimap').onclick=fit;$('#zoom-in').onclick=()=>zoom(1.2);$('#zoom-out').onclick=()=>zoom(1/1.2);$('#list-toggle').onclick=()=>{listMode=!listMode;draw(currentGraph)};
@@ -275,7 +297,7 @@ try{
   entities=new Map(catalog.map(e=>[e.id,e]));applyOverview(annotations.find(a=>a.kind==='overview'));state=parse();if(state.print)document.body.dataset.print=state.print;
   showFreshness();showSnapshots();showJourneyNav();
   $('#workspace-name').textContent=String(overview.manifest.workspace||'workspace').toUpperCase();$('#workspace-title').textContent=overview.manifest.workspace||'Workspace';$('#sidebar-snapshot').textContent=`${status.snapshot} · served on 127.0.0.1 only`;document.title=`System Map · ${overview.manifest.workspace} · cartographer`;
-  $('#footer-counts').textContent=`${catalog.filter(e=>e.kind==='module').length} modules · ${catalog.filter(e=>e.kind==='function').length.toLocaleString()} functions · ${catalog.filter(e=>e.kind==='table').length} tables · ${status.provenance}`;
+  $('#footer-counts').textContent=`${catalog.filter(e=>e.kind==='module').length} modules · ${catalog.filter(e=>e.kind==='function').length.toLocaleString()} functions · ${(n=>`${n} route${n===1?'':'s'}`)(catalog.filter(e=>e.kind==='route').length)} · ${catalog.filter(e=>e.kind==='table').length} tables · ${status.provenance}`;
   await render();
   if(state.print)preparePrint(state.print);
   await document.fonts?.ready;await frame();

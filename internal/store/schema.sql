@@ -249,8 +249,10 @@ CREATE TABLE IF NOT EXISTS inventory (
 
 -- Every resolved edge, one shape: calls (call, dispatch, ...), route -> handler
 -- ('route') and function -> route ('http'). Readers that follow edges use this.
+-- +to_id keeps the planner on calls_from for a from_id lookup (to_id IS NOT
+-- NULL would otherwise pick calls_to and scan the snapshot's calls).
 CREATE VIEW IF NOT EXISTS edges AS
-  SELECT snapshot_id, from_id, to_id, kind, precision, repo, file, line FROM calls WHERE to_id IS NOT NULL
+  SELECT snapshot_id, from_id, to_id, kind, precision, repo, file, line FROM calls WHERE +to_id IS NOT NULL
   UNION ALL
   SELECT snapshot_id, id, handler_id, 'route', precision, repo, file, line FROM routes WHERE handler_id != ''
   UNION ALL

@@ -97,11 +97,11 @@ func New(o Options) *mcp.Server {
 			nonNegative(&in.Limit, &in.Offset)
 			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) { return q.Find(ctx, in.Terms, in.Limit, in.Offset) })
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "map_entity", Description: "Explain one function, module, table, context or annotation: location, top callers/callees, tables, docs, review status."},
+	mcp.AddTool(s, &mcp.Tool{Name: "map_entity", Description: "Explain one function, HTTP route, module, table, context or annotation: location, top callers/callees (a route: its handler and HTTP callers with provenance), tables, docs, review status."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in Ref) (*mcp.CallToolResult, any, error) {
 			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) { return q.Show(ctx, in.Ref) })
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "map_callers", Description: "Who calls a function (or any function of a module, file, context, or code mentioning a table); cross-repo callers flagged."},
+	mcp.AddTool(s, &mcp.Tool{Name: "map_callers", Description: "Who calls a function or route (or any function of a module, file, context, or code mentioning a table), through calls, dispatch, routes and HTTP links; cross-repo callers flagged."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in Traverse) (*mcp.CallToolResult, any, error) {
 			nonNegative(&in.Depth, &in.Limit, &in.Offset)
 			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) {
@@ -120,7 +120,7 @@ func New(o Options) *mcp.Server {
 			nonNegative(&in.Depth, &in.Limit, &in.Offset)
 			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) { return q.Impact(ctx, in.Ref, in.Depth, in.Limit, in.Offset) })
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "map_path", Description: "Shortest call path between two functions (how A reaches B)."},
+	mcp.AddTool(s, &mcp.Tool{Name: "map_path", Description: "Shortest path between two functions or routes (how A reaches B), each hop with its kind (call, dispatch, http, route) and precision, and an HTTP hop's provenance."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in PathIn) (*mcp.CallToolResult, any, error) {
 			return run(ctx, in.Budget, func(q *query.Q) (*output.Doc, error) { return q.Path(ctx, in.From, in.To) })
 		})

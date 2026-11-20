@@ -82,7 +82,7 @@ func Embed(ctx context.Context, q *query.Q, ref string) (string, error) {
 	case e.Repo != "":
 		fmt.Fprintf(&b, "| Location | %s |\n", e.Repo)
 	}
-	if e.Kind != "function" {
+	if e.Kind != "function" && e.Kind != "route" {
 		fmt.Fprintf(&b, "| Functions | %d |\n", len(nb.Start))
 	}
 	fmt.Fprintf(&b, "| Callers | %d |\n", len(nb.Callers))

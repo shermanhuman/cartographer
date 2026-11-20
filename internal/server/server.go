@@ -109,6 +109,9 @@ func New(o Options) http.Handler {
 		depth, _ := strconv.Atoi(r.URL.Query().Get("depth"))
 		return graph(r.Context(), q, r.URL.Query().Get("id"), depth)
 	}))
+	mux.HandleFunc("GET /api/path", a.with(func(r *http.Request, q *query.Q) (any, error) {
+		return pathView(r.Context(), q, r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+	}))
 	mux.HandleFunc("GET /api/embed", a.text(func(r *http.Request, q *query.Q) (string, error) {
 		return render.Embed(r.Context(), q, r.URL.Query().Get("id"))
 	}))
