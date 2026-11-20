@@ -109,3 +109,16 @@ func git2(dir string, args ...string) (string, error) {
 	out, err := execGit(dir, args...)
 	return out, err
 }
+
+func TestIdentifyKeepsTheRemotesCase(t *testing.T) {
+	x := newH(t)
+	for _, u := range []string{"git@github.com:Acme-Labs/Shop-App.git", "https://github.com/Acme-Labs/Shop-App", "ssh://git@github.com/Acme-Labs/Shop-App.git/"} {
+		co := t.TempDir()
+		git(t, co, "init", "-q")
+		git(t, co, "remote", "add", "origin", u)
+		if got := project.Identify(context.Background(), co); got != "Acme-Labs/Shop-App" {
+			t.Errorf("%s: %q", u, got)
+		}
+	}
+	_ = x
+}

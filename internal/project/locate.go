@@ -169,9 +169,8 @@ func Identify(ctx context.Context, dir string) string {
 		if !ok {
 			continue
 		}
-		n := fresh.NormalizeURL(u)
-		slug, ok := strings.CutPrefix(n, "github.com/")
-		if !ok || !ValidSlug(slug) {
+		slug := githubSlug(u)
+		if slug == "" {
 			continue
 		}
 		if key == "remote.origin.url" {
@@ -182,4 +181,24 @@ func Identify(ctx context.Context, dir string) string {
 		}
 	}
 	return first
+}
+
+// githubSlug is the owner/name of a github.com remote URL, in the URL's
+// own case (fetch URLs and url.insteadOf rules are case-sensitive), or "".
+func githubSlug(u string) string {
+	n := fresh.NormalizeURL(u)
+	if !strings.HasPrefix(n, "github.com/") {
+		return ""
+	}
+	// NormalizeURL lowercases; cut the same suffix of the original.
+	raw := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(u), "/"), ".git")
+	slug := n[len("github.com/"):]
+	if len(raw) < len(slug) || !strings.EqualFold(raw[len(raw)-len(slug):], slug) {
+		return ""
+	}
+	slug = raw[len(raw)-len(slug):]
+	if !ValidSlug(slug) {
+		return ""
+	}
+	return slug
 }
