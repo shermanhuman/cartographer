@@ -606,6 +606,11 @@ defmodule Cartographer.ElixirSource do
       {verb, _} when verb in @route_verbs ->
         {env, route_skip(acc, env, meta, "#{verb} with an unexpected shape")}
 
+      # match :*, "/any", C, :a (and match [:get, :post], ...): its verb
+      # comes first, so the "/" path check below would miss it.
+      {"match", [_verb, path | _]} when is_binary(path) ->
+        {env, route_skip(acc, env, meta, "match")}
+
       {other, [path | _]} when is_binary(path) ->
         if String.starts_with?(path, "/"),
           do: {env, route_skip(acc, env, meta, other)},

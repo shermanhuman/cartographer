@@ -321,15 +321,16 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{kind: "duplicate_route", file: "lib/admin_web/router.ex"}] =
                Enum.filter(doc.notes, &(&1.kind == "duplicate_route"))
 
-      # live_dashboard, forward, live and a non-literal path are counted;
-      # pipe_through and pipelines are not routes.
-      assert %{not_extracted: 4, dispatch: 0, refs: 0} = stats(doc)
+      # live_dashboard, forward, live, match and a non-literal path are
+      # counted; pipe_through and pipelines are not routes.
+      assert %{not_extracted: 5, dispatch: 0, refs: 0} = stats(doc)
 
       assert skips(web("admin")) == [
                {43, "live_dashboard"},
                {44, "forward"},
                {50, "live"},
-               {57, "get with a non-literal path"}
+               {57, "get with a non-literal path"},
+               {58, "match"}
              ]
 
       refute Map.has_key?(doc, :http_refs)

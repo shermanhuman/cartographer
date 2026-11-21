@@ -55,5 +55,6 @@ defmodule AdminWeb.Router do
     # A later scope repeating a route Phoenix already matched: noted, left out.
     get "/missing", MissingController, :show
     get @dynamic_path, PageController, :home
+    match :*, "/any", PageController, :home
   end
 end

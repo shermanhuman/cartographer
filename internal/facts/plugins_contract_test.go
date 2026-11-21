@@ -118,8 +118,8 @@ func TestElixirPluginWebContract(t *testing.T) {
 	if check == nil || check.Handler != "admin:AdminWeb.API.V1.SalesColdController.check/2" || check.Precision != Precise {
 		t.Errorf("admin: POST /api/v1/sales/cold/check = %+v; routes %+v", check, admin.Routes)
 	}
-	if admin.Stats[0].NotExtracted != 4 {
-		t.Errorf("admin: not_extracted = %d, want 4", admin.Stats[0].NotExtracted)
+	if admin.Stats[0].NotExtracted != 5 { // live_dashboard, forward, live, match, a non-literal path
+		t.Errorf("admin: not_extracted = %d, want 5", admin.Stats[0].NotExtracted)
 	}
 
 	rosearch := run("rosearch", "lib")
