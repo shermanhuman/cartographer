@@ -437,6 +437,10 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		fmt.Fprintf(w, "reviewed %s against %s: %d citations stamped; commit the annotation file\n", pos[0], sid, n)
 		return nil
 	case "extract":
+		// A cancelled build SIGTERMs the indexer: stop it and remove the
+		// index's temporary directory rather than leave it behind.
+		ctx, stop := withSignals(ctx)
+		defer stop()
 		var d *facts.Doc
 		var err error
 		switch {
