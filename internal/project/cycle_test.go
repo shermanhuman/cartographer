@@ -13,6 +13,7 @@ import (
 	"github.com/shermanhuman/cartographer/internal/project"
 	"github.com/shermanhuman/cartographer/internal/rebuild"
 	"github.com/shermanhuman/cartographer/internal/session"
+	"github.com/shermanhuman/cartographer/internal/store"
 )
 
 // A pushed commit is mapped by the first command once the last fetch is
@@ -449,5 +450,21 @@ func TestCorruptStateIsReported(t *testing.T) {
 	}
 	if n := strings.Count(log.String(), "isn't rebuilt"); n != 1 {
 		t.Errorf("logged %d times:\n%s", n, log.String())
+	}
+}
+
+// A prune that fails after the import doesn't turn the import into a
+// failed build.
+func TestPruneFailureAfterImportIsNotABuildFailure(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	defer project.SetPrune(func(context.Context, *store.Store) error { return errors.New("disk I/O error") })()
+	res, err := x.runner().Cycle(context.Background(), "shop", true)
+	if err != nil || !res.Imported {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if st := x.state0(); st.Failed != nil || st.Imported == "" {
+		t.Errorf("state after a failed prune: %+v (failed %+v)", st, st.Failed)
 	}
 }

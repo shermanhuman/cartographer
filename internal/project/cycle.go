@@ -102,6 +102,9 @@ func (r *Runner) fail(ctx context.Context, name string, st *State, digest string
 	return err
 }
 
+// prune removes old maps after an import (tests replace it).
+var prune = func(ctx context.Context, s *store.Store) error { return s.Prune(ctx, store.DefaultKeep) }
+
 // hookLocked runs at the start of every cycle, under the lock (tests).
 var hookLocked = func() {}
 
@@ -217,8 +220,10 @@ func (r *Runner) buildImport(ctx context.Context, name, source string, inputs []
 	if _, err := r.Store.Import(ctx, out); err != nil {
 		return "", &StepError{Step: "import", Err: err}
 	}
-	if err := r.Store.Prune(ctx, store.DefaultKeep); err != nil {
-		return "", err
+	// The map is in: a failed prune only leaves old maps behind, so it is
+	// logged, not reported as a failed build.
+	if err := prune(ctx, r.Store); err != nil {
+		r.logf("pruning old maps failed (the new map is imported): %v", err)
 	}
 	r.logf("imported %s", m.ID)
 	return m.ID, nil
