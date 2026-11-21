@@ -27,11 +27,17 @@ type pair struct{ From, To string }
 
 type refKey struct{ Repo, Table, Function, File string }
 
+type edgeInfo struct {
+	Precision string   // best precision
+	Kinds     []string // call, dispatch, http, route, …
+}
+
 type snapFacts struct {
 	id    string
 	fns   map[string]dfn
-	edges map[pair]string // best precision
-	refs  map[refKey]int  // first line
+	nodes map[string]dfn // every edge endpoint: fns and routes
+	edges map[pair]edgeInfo
+	refs  map[refKey]int // first line
 	repos []query.Repo
 }
 
@@ -43,7 +49,7 @@ func loadFacts(ctx context.Context, db *sql.DB, sid string) (*snapFacts, error) 
 	if n == 0 {
 		return nil, fmt.Errorf("diff: no snapshot %q in the store (see `cartographer snapshots`)", sid)
 	}
-	f := &snapFacts{id: sid, fns: map[string]dfn{}, edges: map[pair]string{}, refs: map[refKey]int{}}
+	f := &snapFacts{id: sid, fns: map[string]dfn{}, nodes: map[string]dfn{}, edges: map[pair]edgeInfo{}, refs: map[refKey]int{}}
 	rows, err := db.QueryContext(ctx, `
 	  SELECT f.id, f.repo, f.module, coalesce(m.name, ''), f.name, f.arity, f.min_arity, f.fingerprint, f.file, f.line
 	    FROM functions f LEFT JOIN modules m ON m.snapshot_id = f.snapshot_id AND m.id = f.module
@@ -63,28 +69,33 @@ func loadFacts(ctx context.Context, db *sql.DB, sid string) (*snapFacts, error) 
 			d.Label = mod + "." + d.Label
 		}
 		f.fns[d.ID] = d
+		f.nodes[d.ID] = d
 	}
 	rows.Close()
-	rows, err = db.QueryContext(ctx, `SELECT from_id, to_id, group_concat(DISTINCT precision) FROM calls WHERE snapshot_id = ? AND to_id IS NOT NULL GROUP BY 1, 2`, sid)
+	// Routes are edge endpoints too: an HTTP link ends at one, and a route
+	// leads to its handler.
+	rows, err = db.QueryContext(ctx, `SELECT id, repo, name, file, line FROM nodes WHERE snapshot_id = ? AND kind = 'route'`, sid)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
-		var p pair
-		var precs string
-		if err := rows.Scan(&p.From, &p.To, &precs); err != nil {
+		var d dfn
+		if err := rows.Scan(&d.ID, &d.Repo, &d.Name, &d.File, &d.Line); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		best := ""
-		for _, pr := range strings.Split(precs, ",") {
-			if query.PrecisionRank(pr) > query.PrecisionRank(best) {
-				best = pr
-			}
-		}
-		f.edges[p] = best
+		d.Label = d.Name
+		f.nodes[d.ID] = d
 	}
 	rows.Close()
+	q := &query.Q{S: &store.Store{DB: db}, Snapshot: sid}
+	all, err := q.AllEdges(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range all {
+		f.edges[pair{e.From, e.To}] = edgeInfo{e.Precision, e.Kinds}
+	}
 	rows, err = db.QueryContext(ctx, `SELECT repo, table_id, function_id, file, min(line) FROM table_refs WHERE snapshot_id = ? GROUP BY 1, 2, 3, 4`, sid)
 	if err != nil {
 		return nil, err
@@ -99,7 +110,6 @@ func loadFacts(ctx context.Context, db *sql.DB, sid string) (*snapFacts, error) 
 		f.refs[k] = line
 	}
 	rows.Close()
-	q := &query.Q{S: &store.Store{DB: db}, Snapshot: sid}
 	if f.repos, err = q.Repos(ctx); err != nil {
 		return nil, err
 	}
@@ -423,11 +433,12 @@ func Diff(ctx context.Context, s *store.Store, baseID, headID string) (string, e
 					continue
 				}
 				listed[h.ID] = true
-				via := head.fns[h.Via].Label
+				via := head.nodes[h.Via].Label
 				if via == "" {
 					via = h.Via
 				}
-				l := fmt.Sprintf("- d%d %s → `%s` [%s]", h.Depth, link(h.Label, h.Repo, h.File, h.Line), via, h.Precision)
+				tag := strings.TrimSpace(h.Precision + " " + strings.Join(query.Edge{Kinds: h.Kinds}.Notable(), " "))
+				l := fmt.Sprintf("- d%d %s → `%s` [%s]", h.Depth, link(h.Label, h.Repo, h.File, h.Line), via, tag)
 				if h.Test {
 					l += " · test"
 				}
@@ -547,9 +558,9 @@ func Diff(ctx context.Context, s *store.Store, baseID, headID string) (string, e
 		var nodes []mnode
 		for _, id := range nodeIDs {
 			keep[id] = true
-			f, ok := head.fns[id]
+			f, ok := head.nodes[id]
 			if !ok {
-				f = base.fns[id]
+				f = base.nodes[id]
 			}
 			label := f.Label
 			if label == "" {
@@ -562,8 +573,8 @@ func Diff(ctx context.Context, s *store.Store, baseID, headID string) (string, e
 			if !keep[p.From] || !keep[p.To] || p.From == p.To || (!focusSet[p.From] && !focusSet[p.To] && !changedEdge[p]) {
 				continue
 			}
-			if pr, ok := head.edges[p]; ok {
-				links = append(links, mlink{From: p.From, To: p.To, Label: edgeLabel(0, pr), Dotted: pr != "precise" && pr != ""})
+			if ed, ok := head.edges[p]; ok {
+				links = append(links, mlink{From: p.From, To: p.To, Label: edgeLabel(0, ed.Precision, ed.Kinds), Dotted: ed.Precision != "precise" && ed.Precision != ""})
 			} else {
 				links = append(links, mlink{From: p.From, To: p.To, Label: "removed", Dotted: true, Style: "stroke:#d73a49,stroke-width:2px,stroke-dasharray:4 3"})
 			}

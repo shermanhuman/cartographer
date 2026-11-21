@@ -16,6 +16,10 @@ import (
 	"github.com/shermanhuman/cartographer/internal/ident"
 )
 
+// BinaryVersion is the running cartographer's version, part of every map id
+// (bundle.MapID). main sets it.
+var BinaryVersion = "dev"
+
 // Import loads a snapshot directory, replacing any snapshot of the same
 // workspace with the same id.
 func (s *Store) Import(ctx context.Context, dir string) (string, error) {
@@ -66,6 +70,26 @@ type importer struct {
 	vocab     map[string]int
 	seenFiles map[string]bool
 	seenCtx   map[string]bool // context ids, unique across facts documents
+
+	routes   []routeRow
+	refs     []refRow
+	urls     map[string][]facts.ConfigURL // repo -> config URLs
+	services []serviceRow
+}
+
+type routeRow struct {
+	facts.Route
+	repo string
+}
+
+type refRow struct {
+	facts.HTTPRef
+	repo string
+}
+
+type serviceRow struct {
+	facts.Service
+	repo string
 }
 
 func (im *importer) exec(query string, args ...any) error {
@@ -94,9 +118,25 @@ func js(v any) string {
 
 func (im *importer) run() error {
 	m := im.b.Manifest
-	if err := im.exec(`INSERT INTO snapshots(id, workspace, created_at, imported_at, manifest) VALUES (?,?,?,?,?)`,
-		m.ID, m.Workspace, m.CreatedAt, time.Now().UTC().Format(time.RFC3339), js(m)); err != nil {
+	mapID := ""
+	if im.b.Dir != "" {
+		var err error
+		if mapID, err = bundle.MapID(im.b.Dir, BinaryVersion); err != nil {
+			return err
+		}
+	}
+	source := m.Source
+	if source == "" {
+		source = "published"
+	}
+	if err := im.exec(`INSERT INTO snapshots(id, workspace, created_at, imported_at, manifest, source, map_id) VALUES (?,?,?,?,?,?,?)`,
+		m.ID, m.Workspace, m.CreatedAt, time.Now().UTC().Format(time.RFC3339), js(m), source, mapID); err != nil {
 		return err
+	}
+	for _, inv := range m.Inventory {
+		if err := im.exec(`INSERT INTO inventory(snapshot_id, repo, ext, files) VALUES (?,?,?,?)`, im.sid, inv.Repo, inv.Ext, inv.Files); err != nil {
+			return err
+		}
 	}
 	for _, r := range m.Repos {
 		if err := im.exec(`INSERT INTO repos(snapshot_id, name, url, revision) VALUES (?,?,?,?)`, im.sid, r.Name, r.URL, r.Revision); err != nil {
@@ -123,11 +163,17 @@ func (im *importer) run() error {
 		if err := im.tableRefs(d); err != nil {
 			return err
 		}
+		if err := im.v2(d); err != nil {
+			return err
+		}
 		for _, n := range d.Notes {
 			if err := im.exec(`INSERT INTO notes(snapshot_id, repo, kind, file, message) VALUES (?,?,?,?,?)`, im.sid, d.Repo, n.Kind, n.File, n.Message); err != nil {
 				return err
 			}
 		}
+	}
+	if err := im.link(); err != nil {
+		return err
 	}
 	if err := im.docs(); err != nil {
 		return err
@@ -210,8 +256,8 @@ func (im *importer) definitions(d *facts.Doc) error {
 			return fmt.Errorf("function %s: arity range %d..%d out of bounds (0..%d)", f.ID, f.MinArity, f.Arity, facts.MaxArity)
 		}
 		im.funcs[f.ID], im.fnRepo[f.ID] = f, repo
-		if err := im.exec(`INSERT INTO functions(snapshot_id, id, repo, module, name, arity, min_arity, kind, file, line, clauses, fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-			im.sid, f.ID, repo, f.Module, f.Name, f.Arity, f.MinArity, f.Kind, f.File, f.Line, js(nonNil(f.Clauses)), f.Fingerprint); err != nil {
+		if err := im.exec(`INSERT INTO functions(snapshot_id, id, repo, module, name, arity, min_arity, kind, file, line, clauses, fingerprint, test) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			im.sid, f.ID, repo, f.Module, f.Name, f.Arity, f.MinArity, f.Kind, f.File, f.Line, js(nonNil(f.Clauses)), f.Fingerprint, f.Test); err != nil {
 			return err
 		}
 		if err := im.entity(f.ID, "function", label(f, im.modules)); err != nil {
@@ -235,6 +281,20 @@ func (im *importer) definitions(d *facts.Doc) error {
 			return err
 		}
 	}
+	for _, r := range d.Routes {
+		if err := im.exec(`INSERT INTO routes(snapshot_id, id, repo, method, path, handler_id, file, line, precision) VALUES (?,?,?,?,?,?,?,?,?)`,
+			im.sid, r.ID, repo, r.Method, r.Path, r.Handler, r.File, r.Line, r.Precision); err != nil {
+			return err
+		}
+		im.routes = append(im.routes, routeRow{Route: r, repo: repo})
+		lbl := r.Path
+		if r.Method != "" {
+			lbl = r.Method + " " + r.Path
+		}
+		if err := im.entity(r.ID, "route", lbl); err != nil {
+			return err
+		}
+	}
 	for _, fk := range d.ForeignKeys {
 		if err := im.exec(`INSERT INTO foreign_keys(snapshot_id, name, from_table, from_columns, to_table, to_columns) VALUES (?,?,?,?,?,?)`,
 			im.sid, fk.Name, fk.FromTable, js(fk.FromColumns), fk.ToTable, js(fk.ToColumns)); err != nil {
@@ -251,8 +311,13 @@ func nonNil[T any](s []T) []T {
 	return s
 }
 
-// label renders a function as Module.name/arity.
+// label renders a function as Module.name/arity: its id without the repo
+// prefix when the id has one (Go and Rust ids carry the receiver type, which
+// Module.name would drop), else built from the module.
 func label(f facts.Function, modules map[string]facts.Module) string {
+	if i := strings.Index(f.ID, ":"); i > 0 && strings.HasSuffix(f.ID, fmt.Sprintf("%s/%d", f.Name, f.Arity)) {
+		return f.ID[i+1:]
+	}
 	if mo, ok := modules[f.Module]; ok {
 		return fmt.Sprintf("%s.%s/%d", mo.Name, f.Name, f.Arity)
 	}
@@ -288,7 +353,7 @@ func (im *importer) calls(d *facts.Doc, idx *targetIndex) error {
 				target = fmt.Sprintf("%s/%d", c.Target.Name, c.Target.Arity)
 			}
 		}
-		if to == "" && c.Target != nil && c.Kind != "dynamic" && !strings.HasPrefix(c.Kind, "js_") {
+		if to == "" && c.Target != nil && resolvable(c.Kind) {
 			to, precision = idx.resolve(d.Repo, im.callerModule(c.From), *c.Target, defPrecision)
 		}
 		if to != "" && precision == "" {
@@ -304,6 +369,14 @@ func (im *importer) calls(d *facts.Doc, idx *targetIndex) error {
 		}
 	}
 	return nil
+}
+
+// resolvable reports whether a call of this kind may be resolved by name.
+// dynamic and js_* calls lack lexical binding; unresolved is a producer's
+// explicit "no target" (SCIP: call syntax the indexer gave no symbol), so a
+// same-named local function must not become its precise callee.
+func resolvable(kind string) bool {
+	return kind != "dynamic" && kind != "unresolved" && !strings.HasPrefix(kind, "js_")
 }
 
 func (im *importer) callerModule(fnID string) string {
@@ -593,4 +666,39 @@ func rawOr(a bundle.Annotation) string {
 		return string(a.Raw)
 	}
 	return js(a)
+}
+
+// v2 stores a document's version-2 sections other than routes (stored with
+// the definitions, since edges may point at them).
+func (im *importer) v2(d *facts.Doc) error {
+	if im.urls == nil {
+		im.urls = map[string][]facts.ConfigURL{}
+	}
+	for _, r := range d.HTTPRefs {
+		if err := im.exec(`INSERT INTO http_refs(snapshot_id, repo, from_id, method, path, base, file, line) VALUES (?,?,?,?,?,?,?,?)`,
+			im.sid, d.Repo, r.From, r.Method, r.Path, r.Base, r.File, r.Line); err != nil {
+			return err
+		}
+		im.refs = append(im.refs, refRow{HTTPRef: r, repo: d.Repo})
+	}
+	for _, c := range d.ConfigURLs {
+		if err := im.exec(`INSERT INTO config_urls(snapshot_id, repo, key, value, file, line) VALUES (?,?,?,?,?,?)`,
+			im.sid, d.Repo, c.Key, c.Value, c.File, c.Line); err != nil {
+			return err
+		}
+		im.urls[d.Repo] = append(im.urls[d.Repo], c)
+	}
+	for _, sv := range d.Services {
+		im.services = append(im.services, serviceRow{Service: sv, repo: d.Repo})
+	}
+	for _, st := range d.Stats {
+		if err := im.exec(`INSERT INTO stats(snapshot_id, repo, language, call_sites, in_repo, dispatch, external, unresolved, refs, not_extracted) VALUES (?,?,?,?,?,?,?,?,?,?)
+		  ON CONFLICT(snapshot_id, repo, language) DO UPDATE SET call_sites = call_sites + excluded.call_sites, in_repo = in_repo + excluded.in_repo,
+		    dispatch = dispatch + excluded.dispatch, external = external + excluded.external, unresolved = unresolved + excluded.unresolved,
+		    refs = refs + excluded.refs, not_extracted = not_extracted + excluded.not_extracted`,
+			im.sid, d.Repo, st.Language, st.CallSites, st.InRepo, st.Dispatch, st.External, st.Unresolved, st.Refs, st.NotExtracted); err != nil {
+			return err
+		}
+	}
+	return nil
 }

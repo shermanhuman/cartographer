@@ -11,66 +11,16 @@ import (
 	"github.com/shermanhuman/cartographer/internal/output"
 )
 
-// edge is an aggregated caller->callee relationship.
-type edge struct {
-	From, To  string
-	Sites     int
-	Precision string // best precision across sites
-}
-
-func better(a, b string) string {
-	rank := map[string]int{"precise": 3, "heuristic": 2, "candidate": 1}
-	if rank[b] > rank[a] {
-		return b
-	}
-	return a
-}
-
-// edges returns aggregated resolved calls into (reverse) or out of ids.
-func (q *Q) edges(ctx context.Context, ids []string, reverse bool) ([]edge, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	col, other := "from_id", "to_id"
-	if reverse {
-		col, other = "to_id", "from_id"
-	}
-	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	args := []any{q.Snapshot}
-	for _, id := range ids {
-		args = append(args, id)
-	}
-	rows, err := q.S.DB.QueryContext(ctx, fmt.Sprintf(`
-	  SELECT from_id, to_id, count(*), group_concat(DISTINCT precision)
-	    FROM calls WHERE snapshot_id = ? AND to_id IS NOT NULL AND %s IN (%s)
-	   GROUP BY from_id, to_id ORDER BY %s, %s`, col, ph, col, other), args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []edge
-	for rows.Next() {
-		var e edge
-		var precs string
-		if err := rows.Scan(&e.From, &e.To, &e.Sites, &precs); err != nil {
-			return nil, err
-		}
-		for _, p := range strings.Split(precs, ",") {
-			e.Precision = better(e.Precision, p)
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
-}
-
 type hop struct {
 	Entity
-	Depth     int    `json:"depth"`
-	Via       string `json:"via"` // the node it calls / is called by
-	Sites     int    `json:"sites"`
-	Precision string `json:"precision"`
-	Context   string `json:"context,omitempty"`
-	Test      bool   `json:"test,omitempty"`
+	Depth      int      `json:"depth"`
+	Via        string   `json:"via"` // the node it calls / is called by
+	Sites      int      `json:"sites"`
+	Precision  string   `json:"precision"`
+	Kinds      []string `json:"kinds,omitempty"`      // of the edge to or from Via
+	Provenance string   `json:"provenance,omitempty"` // of an HTTP link
+	Context    string   `json:"context,omitempty"`
+	Test       bool     `json:"test,omitempty"`
 }
 
 // walk does a BFS over calls from the start ids, up to depth levels.
@@ -103,11 +53,8 @@ func (q *Q) walk(ctx context.Context, start []string, depth int, reverse bool) (
 			if ent == nil {
 				continue
 			}
-			h := hop{Entity: *ent, Depth: d, Via: via, Sites: e.Sites, Precision: e.Precision}
-			q.S.DB.QueryRowContext(ctx, `SELECT m.context FROM functions f JOIN modules m ON m.snapshot_id = f.snapshot_id AND m.id = f.module WHERE f.snapshot_id = ? AND f.id = ?`, q.Snapshot, node).Scan(&h.Context)
-			var cat string
-			q.S.DB.QueryRowContext(ctx, `SELECT category FROM files WHERE snapshot_id = ? AND repo = ? AND path = ?`, q.Snapshot, ent.Repo, ent.File).Scan(&cat)
-			h.Test = cat == "test" || strings.HasPrefix(ent.File, "test/")
+			h := hop{Entity: *ent, Depth: d, Via: via, Sites: e.Sites, Precision: e.Precision, Kinds: e.Kinds, Provenance: e.Provenance}
+			h.Context, h.Test = q.contextAndTest(ctx, *ent)
 			out = append(out, h)
 			next = append(next, node)
 		}
@@ -116,8 +63,43 @@ func (q *Q) walk(ctx context.Context, start []string, depth int, reverse bool) (
 	return out, nil
 }
 
+// contextAndTest returns a node's context and whether it is test code: a
+// function marked test, or one in a file categorised test or under test/ or
+// tests/.
+func (q *Q) contextAndTest(ctx context.Context, e Entity) (string, bool) {
+	var context string
+	var test bool
+	q.S.DB.QueryRowContext(ctx, `SELECT coalesce(m.context, ''), f.test FROM functions f LEFT JOIN modules m ON m.snapshot_id = f.snapshot_id AND m.id = f.module WHERE f.snapshot_id = ? AND f.id = ?`, q.Snapshot, e.ID).Scan(&context, &test)
+	if test {
+		return context, true
+	}
+	var cat string
+	q.S.DB.QueryRowContext(ctx, `SELECT category FROM files WHERE snapshot_id = ? AND repo = ? AND path = ?`, q.Snapshot, e.Repo, e.File).Scan(&cat)
+	return context, cat == "test" || strings.HasPrefix(e.File, "test/") || strings.HasPrefix(e.File, "tests/")
+}
+
+// edgeTag is an edge's precision and, when it isn't a direct call, its kind
+// and an HTTP link's provenance: "precise", "heuristic dispatch",
+// "heuristic http: config.yaml cold.admin_url → admin".
+func edgeTag(precision string, kinds []string, provenance string) string {
+	s := precision
+	for _, k := range kinds {
+		if notable[k] {
+			s += " " + k
+		}
+	}
+	s = strings.TrimSpace(s)
+	if provenance != "" {
+		s += ": " + arrows(provenance)
+	}
+	return s
+}
+
+// arrows writes a provenance's "->" as "→".
+func arrows(s string) string { return strings.ReplaceAll(s, " -> ", " → ") }
+
 func (q *Q) hopLine(h hop, rootRepo string) string {
-	s := fmt.Sprintf("d%d FN %s  %s  [%s]", h.Depth, h.ID, q.Loc(h.Repo, h.File, h.Line), h.Precision)
+	s := fmt.Sprintf("d%d %s %s  %s  [%s]", h.Depth, abbrev(h.Kind), h.ID, q.Loc(h.Repo, h.File, h.Line), edgeTag(h.Precision, h.Kinds, h.Provenance))
 	if h.Sites > 1 {
 		s += fmt.Sprintf(" ×%d", h.Sites)
 	}
@@ -130,11 +112,12 @@ func (q *Q) hopLine(h hop, rootRepo string) string {
 	return s
 }
 
-// functionsOf expands an entity into the function ids it stands for.
+// functionsOf expands an entity into the edge endpoints it stands for: its
+// functions, and a file's routes too. A function or route stands for itself.
 func (q *Q) functionsOf(ctx context.Context, e *Entity) ([]string, string, error) {
 	var query string
 	switch e.Kind {
-	case "function":
+	case "function", "route":
 		return []string{e.ID}, "", nil
 	case "module":
 		query = `SELECT id FROM functions WHERE snapshot_id = ? AND module = ? ORDER BY id`
@@ -143,9 +126,9 @@ func (q *Q) functionsOf(ctx context.Context, e *Entity) ([]string, string, error
 	case "context":
 		query = `SELECT f.id FROM functions f JOIN modules m ON m.snapshot_id = f.snapshot_id AND m.id = f.module WHERE f.snapshot_id = ? AND m.context = ? ORDER BY f.id`
 	case "file":
-		query = `SELECT id FROM functions WHERE snapshot_id = ? AND 'file:' || repo || ':' || file = ? ORDER BY id`
+		query = `SELECT id FROM nodes WHERE snapshot_id = ? AND 'file:' || repo || ':' || file = ? ORDER BY id`
 	default:
-		return nil, "", fmt.Errorf("%s %s has no functions to trace", e.Kind, e.ID)
+		return nil, "", &ErrNoFunctions{Kind: e.Kind, ID: e.ID}
 	}
 	rows, err := q.S.DB.QueryContext(ctx, query, q.Snapshot, e.ID)
 	if err != nil {
@@ -249,6 +232,33 @@ func (q *Q) Show(ctx context.Context, ref string) (*output.Doc, error) {
 			d.L("unresolved/external call sites: %d (dynamic, imported or outside the map)", unresolved)
 		}
 		q.tableRefsOf(ctx, d, `function_id = ?`, e.ID)
+	case "route":
+		r, err := q.Route(ctx, e.ID)
+		if err != nil {
+			return nil, err
+		}
+		method := r.Method
+		if method == "" {
+			method = "any method"
+		}
+		d.L("route %s %s · repo %s · %s", method, r.Path, r.Repo, q.Loc(r.Repo, r.File, r.Line))
+		if r.Handler != "" {
+			if h, _ := q.get(ctx, r.Handler); h != nil {
+				d.L("handler: %s  [%s]", q.entityLine(*h), edgeTag(r.Precision, nil, ""))
+			} else {
+				d.L("handler: %s  [%s]", r.Handler, edgeTag(r.Precision, nil, ""))
+			}
+		} else {
+			d.L("handler: not named by the extractor")
+		}
+		d.L("callers through HTTP links (%d):", len(r.Callers))
+		for i, c := range r.Callers {
+			if i == 8 {
+				d.L("  …+%d more (map_callers)", len(r.Callers)-8)
+				break
+			}
+			d.L("  %s %s  %s  [%s]", abbrev(c.Kind), c.ID, q.Loc(c.Repo, c.LinkFile, c.LinkLine), edgeTag(c.Precision, []string{"http"}, c.Provenance))
+		}
 	case "module":
 		rows, err := q.S.DB.QueryContext(ctx, `SELECT id, line FROM functions WHERE snapshot_id = ? AND module = ? ORDER BY line`, q.Snapshot, e.ID)
 		if err != nil {
@@ -531,10 +541,29 @@ func (q *Q) Impact(ctx context.Context, ref string, depth, limit, offset int) (*
 	return d, nil
 }
 
-// Path finds the shortest call chain from a to b (or b to a). A module,
-// context, file or table stands for its functions (see functionsOf); the
-// chain runs between the functions it actually connects.
-func (q *Q) Path(ctx context.Context, from, to string) (*output.Doc, error) {
+// Step is one node of a path; the edge fields describe the edge into it
+// from the previous step (empty on the first).
+type Step struct {
+	Entity
+	Kinds      []string `json:"kinds,omitempty"`
+	Precision  string   `json:"precision,omitempty"`
+	Provenance string   `json:"provenance,omitempty"`
+}
+
+// Chain is a shortest path between two entities.
+type Chain struct {
+	From, To *Entity // as asked
+	Reverse  bool    // found from To to From
+	Steps    []Step  // empty when no path exists within maxPathHops
+	Notes    []string
+}
+
+const maxPathHops = 8
+
+// FindPath finds the shortest chain from a to b, or else from b to a. A
+// module, context, file or table stands for its functions (see
+// functionsOf); the chain runs between the nodes it actually connects.
+func (q *Q) FindPath(ctx context.Context, from, to string) (*Chain, error) {
 	a, err := q.Resolve(ctx, from)
 	if err != nil {
 		return nil, err
@@ -551,70 +580,148 @@ func (q *Q) Path(ctx context.Context, from, to string) (*output.Doc, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &output.Doc{}
-	q.header(ctx, d)
+	c := &Chain{From: a, To: b}
+	for _, n := range []string{anote, bnote} {
+		if n != "" {
+			c.Notes = append(c.Notes, n)
+		}
+	}
 	for _, dir := range []struct {
-		src, dst   *Entity
-		srcF, dstF []string
-		label      string
-	}{{a, b, af, bf, "calls"}, {b, a, bf, af, "calls (reverse direction)"}} {
-		chain, err := q.bfsPath(ctx, dir.srcF, dir.dstF, 8)
+		src, dst []string
+		reverse  bool
+	}{{af, bf, false}, {bf, af, true}} {
+		steps, err := q.bfsPath(ctx, dir.src, dir.dst, maxPathHops)
 		if err != nil {
 			return nil, err
 		}
-		if chain == nil {
-			continue
+		if steps != nil {
+			c.Steps, c.Reverse = steps, dir.reverse
+			return c, nil
 		}
-		first, last := chain[0], chain[len(chain)-1]
-		d.H("path %s → %s: %d hop(s), %s", first, last, len(chain)-1, dir.label)
-		for _, end := range []struct {
-			e  *Entity
-			fn string
-		}{{dir.src, first}, {dir.dst, last}} {
-			if end.e.ID != end.fn {
-				d.H("%s %s → FN %s", abbrev(end.e.Kind), end.e.ID, end.fn)
-			}
-		}
-		for _, note := range []string{anote, bnote} {
-			if note != "" {
-				d.H("%s", note)
-			}
-		}
-		for i, id := range chain {
-			ent, _ := q.get(ctx, id)
-			if ent == nil {
-				continue
-			}
-			d.L("%d %s", i, q.entityLine(*ent))
-		}
-		return d, nil
 	}
-	d.H("no call path between %s and %s within 8 hops (unresolved/dynamic calls are not traced)", a.ID, b.ID)
 	for _, e := range []struct {
 		e  *Entity
 		fs []string
 	}{{a, af}, {b, bf}} {
 		if len(e.fs) == 0 {
-			d.H("%s %s has no functions", abbrev(e.e.Kind), e.e.ID)
+			c.Notes = append(c.Notes, fmt.Sprintf("%s %s has no functions", abbrev(e.e.Kind), e.e.ID))
 		}
+	}
+	return c, nil
+}
+
+// Summary is the chain on one line: a plain call is "→"; any other hop names
+// its kind and precision, "⇢ dispatch (heuristic) →", and an HTTP hop its
+// route and evidence, "⇢ http POST /x (heuristic: config.yaml key → repo) →".
+func (c *Chain) Summary() string {
+	var b strings.Builder
+	for i, s := range c.Steps {
+		if i == 0 {
+			b.WriteString(ShortLabel(s.Entity))
+			continue
+		}
+		e := edge{Kinds: s.Kinds}
+		var kinds []string // a precise route -> handler hop reads as a call
+		for _, k := range e.Notable() {
+			if k != "route" || s.Precision != "precise" {
+				kinds = append(kinds, k)
+			}
+		}
+		plain := len(kinds) == 0 && (s.Precision == "precise" || s.Precision == "")
+		switch {
+		case s.Kind == "route" && e.Has("http"):
+			fmt.Fprintf(&b, " ⇢ http %s (%s", ShortLabel(s.Entity), orUnknown(s.Precision))
+			if s.Provenance != "" {
+				b.WriteString(": " + arrows(s.Provenance))
+			}
+			b.WriteString(")")
+			continue // the route is named; its handler follows
+		case plain:
+			b.WriteString(" → ")
+		default:
+			label := strings.Join(kinds, "+")
+			if label == "" {
+				label = "call"
+			}
+			fmt.Fprintf(&b, " ⇢ %s (%s) → ", label, orUnknown(s.Precision))
+		}
+		b.WriteString(ShortLabel(s.Entity))
+	}
+	return b.String()
+}
+
+func orUnknown(p string) string {
+	if p == "" {
+		return "unknown"
+	}
+	return p
+}
+
+// Path renders FindPath: the chain on one line, then one line per node with
+// the kind and precision of the edge into it.
+func (q *Q) Path(ctx context.Context, from, to string) (*output.Doc, error) {
+	c, err := q.FindPath(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	d := &output.Doc{}
+	q.header(ctx, d)
+	if len(c.Steps) == 0 {
+		d.H("no call path between %s and %s within %d hops (unresolved/dynamic calls are not traced)", c.From.ID, c.To.ID, maxPathHops)
+		for _, n := range c.Notes {
+			if strings.HasSuffix(n, "has no functions") {
+				d.H("%s", n)
+			}
+		}
+		return d, nil
+	}
+	src, dst, label := c.From, c.To, "calls"
+	if c.Reverse {
+		src, dst, label = c.To, c.From, "calls (reverse direction)"
+	}
+	first, last := c.Steps[0], c.Steps[len(c.Steps)-1]
+	d.H("path %s → %s: %d hop(s), %s", first.ID, last.ID, len(c.Steps)-1, label)
+	for _, end := range []struct {
+		e    *Entity
+		node Step
+	}{{src, first}, {dst, last}} {
+		if end.e.ID != end.node.ID {
+			d.H("%s %s → %s %s", abbrev(end.e.Kind), end.e.ID, abbrev(end.node.Kind), end.node.ID)
+		}
+	}
+	for _, n := range c.Notes {
+		d.H("%s", n)
+	}
+	d.L("%s", c.Summary())
+	for i, s := range c.Steps {
+		line := fmt.Sprintf("%d %s", i, q.entityLine(s.Entity))
+		if i > 0 {
+			kind := strings.Join(s.Kinds, "+")
+			line += fmt.Sprintf("  ← %s [%s]", kind, edgeTag(s.Precision, nil, s.Provenance))
+		}
+		d.L("%s", line)
 	}
 	return d, nil
 }
 
-// bfsPath finds a shortest chain of calls from any of src to any of dst.
-func (q *Q) bfsPath(ctx context.Context, src, dst []string, maxDepth int) ([]string, error) {
+// bfsPath finds a shortest chain of edges from any of src to any of dst.
+func (q *Q) bfsPath(ctx context.Context, src, dst []string, maxDepth int) ([]Step, error) {
 	target := map[string]bool{}
 	for _, id := range dst {
 		target[id] = true
 	}
-	prev := map[string]string{}
+	type back struct {
+		from string
+		e    edge
+	}
+	prev := map[string]*back{}
 	var frontier []string
 	for _, id := range src {
 		if target[id] {
-			return []string{id}, nil
+			return q.steps(ctx, []string{id}, nil)
 		}
 		if _, ok := prev[id]; !ok {
-			prev[id] = ""
+			prev[id] = nil
 			frontier = append(frontier, id)
 		}
 	}
@@ -628,19 +735,47 @@ func (q *Q) bfsPath(ctx context.Context, src, dst []string, maxDepth int) ([]str
 			if _, ok := prev[e.To]; ok {
 				continue
 			}
-			prev[e.To] = e.From
+			prev[e.To] = &back{e.From, e}
 			if target[e.To] {
-				var chain []string
-				for n := e.To; n != ""; n = prev[n] {
-					chain = append([]string{n}, chain...)
+				var ids []string
+				var into []edge
+				for n := e.To; ; {
+					ids = append([]string{n}, ids...)
+					b := prev[n]
+					if b == nil {
+						break
+					}
+					into = append([]edge{b.e}, into...)
+					n = b.from
 				}
-				return chain, nil
+				return q.steps(ctx, ids, into)
 			}
 			next = append(next, e.To)
 		}
 		frontier = next
 	}
 	return nil, nil
+}
+
+// steps resolves a chain of ids; into[i] is the edge into ids[i+1].
+func (q *Q) steps(ctx context.Context, ids []string, into []edge) ([]Step, error) {
+	out := make([]Step, 0, len(ids))
+	for i, id := range ids {
+		ent, err := q.get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if ent == nil {
+			ent = &Entity{ID: id, Kind: "function", Label: id}
+		}
+		s := Step{Entity: *ent}
+		if i > 0 {
+			e := into[i-1]
+			s.Kinds, s.Precision, s.Provenance = e.Kinds, e.Precision, e.Provenance
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 // TableKinds maps each table whose kind isn't a plain "table" (a view,
@@ -807,10 +942,13 @@ func (q *Q) Status(ctx context.Context) (*output.Doc, error) {
 		parts = append(parts, fmt.Sprintf("%d %s", n, c.label))
 	}
 	d.L("%s", strings.Join(parts, " · "))
-	var resolved, total int
-	q.S.DB.QueryRowContext(ctx, `SELECT count(to_id), count(*) FROM calls WHERE snapshot_id = ?`, q.Snapshot).Scan(&resolved, &total)
-	if total > 0 {
-		d.L("call sites resolved: %d of %d (%.0f%%); the rest are external, dynamic or imported", resolved, total, 100*float64(resolved)/float64(total))
+	if cov, err := q.Coverage(ctx); err != nil {
+		d.L("coverage unavailable: %v", err)
+	} else if len(cov) > 0 {
+		d.L("coverage")
+		for _, c := range cov {
+			d.L("  %s", c.Line())
+		}
 	}
 	rows, err := q.S.DB.QueryContext(ctx, `SELECT status, count(*) FROM annotations WHERE snapshot_id = ? GROUP BY 1 ORDER BY 1`, q.Snapshot)
 	if err == nil {

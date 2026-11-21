@@ -6,7 +6,7 @@ local SQLite file. Coding agents query it over MCP or the CLI with
 token-budgeted answers; people browse it in a local web UI and share views
 as Mermaid, PDF or SVG.
 
-> Status: v0.1 in development. Design and checklist:
+> Status: v0.2 in development. Design and checklist:
 > [cartographer v1](https://github.com/shermanhuman/cartographer/issues/1).
 
 ## Why
@@ -52,53 +52,100 @@ codex plugin marketplace add shermanhuman/cartographer  # Codex
 
 ## Map your project
 
-A workspace is a directory (usually its own repository) holding
-`cartographer.toml`, which lists the repositories one map covers and their
-extractor plugins, and `annotations/` (reviewed journeys). Clone it next to
-the repositories it maps and build from what you have checked out:
+A project is a set of repositories mapped together. Each mapped repository
+carries its own settings in a committed `.cartographer/` folder, and one
+repository, the anchor, lists the members. The map itself is never
+committed or published: every machine builds it locally from each member's
+default branch and keeps it in its own SQLite store.
 
-```sh
-cd ~/src && git clone git@github.com:my-org/my-project-map.git   # beside my-app, my-worker…
-cd my-project-map
-cartographer init                  # first time: writes a commented cartographer.toml
-cartographer build --local --import   # every sibling checkout at its HEAD, plugins, import
-cartographer workspace add .       # trust it: queries rebuild it when checkouts move on
-cd ../my-app                       # query from a mapped repository
-cartographer status                # snapshot, freshness against your checkouts
+```text
+my-app/.cartographer/repo.toml        my-worker/.cartographer/repo.toml
+  project = "shop"                      project = "shop"
+  members = [                           anchor = "my-org/my-app"
+    {repo = "my-org/my-app"},           extract = ["go"]
+    {repo = "my-org/my-worker"},        docs = ["README.md"]
+  ]
+  extract = ["elixir", "javascript"]
+  docs = ["README.md", "docs/billing.md"]
+my-app/.cartographer/annotations/     hand-written journeys and notes (optional)
 ```
 
-`build --local` needs no network and no token: each repository is taken at
-the `HEAD` of its checkout (a sibling of the workspace, or a path under
-`[checkouts]` in the user config). With `--import` it keeps the newest 10
-snapshots per workspace in the store (as `import` and `pull` do).
+`repo.toml` keys: `project`, `anchor` (another member's `owner/name`; omitted
+in the anchor), `members` (anchor only), `extract` (`go`, `rust`, `elixir`,
+`javascript`, `kubernetes`), `docs` (an audited list of Markdown to carry;
+`false` for none), and where needed `source_roots`, `images` (container
+images built from this repo, so Kubernetes Services resolve to it),
+`[schema]` (how to build the database schema; `postgres = "managed"` runs a
+throwaway PostgreSQL), `[rust] build_scripts` and `contexts_depth`.
 
-`workspace add <dir>` registers the workspace once, so the map keeps itself
-fresh. Registering is the trust step, like `mise trust`: a rebuild runs the
-workspace's plugin commands, so cartographer records a digest of
-`cartographer.toml` and rebuilds only workspaces you added, and only while
-that file is unchanged. After it changes (a pull of the map repository),
-`status` says `cartographer.toml changed since you registered it`: review
-it and run `workspace add` again. The digest covers `cartographer.toml`
-only, as with `mise trust`: after pulling the map repository, also review
-any scripts its commands run. A workspace merely found beside your
-repository is never run (`status` suggests the command). From then on, when you query from a checkout
-whose workspace checkout has commits past the snapshot, cartographer
-rebuilds in the background (a detached `build --local --import`; the MCP
-server builds in-process) and the header says `rebuilding since 10:42` until
-the next query answers from the new snapshot. Rebuilds map the checkouts the
-workspace lists, so a second clone or a worktree that is ahead is reported
-(`status` names the checkout the workspace builds) but rebuilds nothing.
+```sh
+cartographer project add ~/src/my-app     # or my-org/my-app; any member works
+cartographer status                       # map id, freshness, coverage, your work
+cartographer refresh                      # fetch and rebuild now
+cartographer project init ~/src/my-worker # a starter .cartographer/repo.toml, plus the git commands to commit it
+cartographer refresh --head --from ~/src/my-app --db /tmp/try.db   # try uncommitted settings in a scratch store
+cartographer status --db /tmp/try.db      # queries of that map need the same --db
+```
 
-Uncommitted edits are never built; their files stay marked ⚠. A failed
-rebuild shows `last rebuild failed 10:42: … (log: …)` and is retried after
-five minutes (six hours after one stopped at its 15-minute bound: run
-`build --local --import` by hand). Turn rebuilds off with `--no-rebuild`,
+`project add` reads the member's settings from its fetched default branch,
+follows the anchor's member list, finds each member's checkout (a
+`[checkouts]` entry, a sibling, or a repository under `checkout_roots`,
+default `~/github`, whose remote is that GitHub repository), shows what it
+will trust and asks. Registering trusts the members' default branches:
+rebuilds run the schema step, rust-analyzer's build scripts and the
+commands members declare. A member with no checkout gets its `git clone`
+command; nothing is cloned for you. The project's maps are built into the
+store `project add` ran against (its `--db`) and no other; `refresh --head`
+refuses that store and the default one.
+
+From then on the map keeps itself current. When you use cartographer (a query
+or `status`, an MCP tool call, the web map loading its status; not `project`,
+`refresh`, `snapshots`, `review`, `hook` or `mapped`) against the project's
+store and the last fetch is over 15 minutes old, a background rebuild fetches each member's default
+branch into `refs/cartographer/<branch>` (your branches, files, `origin/*`
+and tags are never touched), and rebuilds when anything moved. The query in
+hand answers from the current map; the next one gets the new map. Each map
+has an id, the hash of its contents: two machines showing the same id have
+the same map. The header says what's mapped and how your checkout differs:
+
+```text
+map 7f3c9a1e · main as fetched 6 min ago · your checkout: fix/dialer, 2 ahead, 1 uncommitted, 3 files differ from the map
+```
+
+If anything fails (a member missing, settings that don't parse, an
+extractor error), nothing is imported: the previous map keeps answering and
+the header names the repository, the step and the log. A failed set of
+inputs is retried after six hours, when a fetch finds a new commit (the next
+fetch, up to 15 minutes after the push), or by `cartographer refresh`. Turn automatic rebuilds off with `--no-rebuild`,
 `CARTOGRAPHER_NO_REBUILD=1`, or `auto_rebuild = false` in the user config.
 
-Bundled extractor plugins: `extract-elixir` (AST, precise calls with default
-arguments, pipes, captures, delegates), `extract-javascript` (inventory) and
-`extract-postgres-schema` (catalog capture from a disposable database). Any
-executable that prints [facts v1](docs/facts-format.md) JSON is a plugin.
+Building needs [mise](https://mise.jdx.dev): each extractor runs with the
+language version its repository pins (`mise.toml`, `.mise.toml` or
+`.tool-versions`), and the indexers (scip-go, rust-analyzer), PostgreSQL and
+the Node used for JavaScript inventories are pinned by the cartographer
+release. No other mise configuration is read. A tool mise doesn't have yet
+is installed before the build starts, each install with its own 30-minute
+limit, separate from the build's 15-minute limit; a failed install fails
+that set of inputs like any other step. Reading a map needs only the
+binary.
+
+Extractors: Go and Rust through SCIP indexers (`cartographer extract scip`:
+calls, interface and trait dispatch, `net/http` routes, HTTP requests), the
+bundled Elixir extractor (AST: calls, Phoenix routes, `Req` requests),
+JavaScript (inventory), Kubernetes manifests and URLs in YAML configuration
+(built in), and the PostgreSQL schema. Calls between services are linked
+from a request to the route it reaches, never as `precise`: see
+[the facts format](docs/facts-format.md).
+
+### Workspaces (0.1)
+
+The 0.1 layout still works: a workspace directory holding
+`cartographer.toml` that lists the repositories, registered with
+`workspace add <dir>` and rebuilt from each checkout's `HEAD` with
+`build --local --import`. A workspace with a registered project's name is
+ignored while the project is registered; `project remove` deletes the
+project's maps from its store, so the workspace's own map answers again and
+rebuilds as before.
 
 ## Query it
 
@@ -121,6 +168,7 @@ and where checkouts live when they aren't siblings of the repository you
 are in:
 
 ```toml
+checkout_roots = ["~/github", "~/src"]          # where project add looks for members (default ~/github)
 local_workspaces = ["~/src/my-project-map"]   # written by workspace add <dir>; a hand-listed entry still needs it (it records the trust digest)
 workspaces = ["my-org/my-project-map"]        # workspace add <owner/name>, pull
 # auto_rebuild = false

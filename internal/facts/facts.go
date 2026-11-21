@@ -1,6 +1,7 @@
-// Package facts defines the facts v1 interchange format that extractor
-// plugins emit, one document per repository (or one for a database schema).
-// See docs/facts-format.md.
+// Package facts defines the facts interchange format that extractor plugins
+// emit, one document per repository (or one for a database schema). Version 2
+// adds routes, HTTP references, config URLs, services, per-language stats and
+// test functions; version 1 documents are still read. See docs/facts-format.md.
 package facts
 
 import (
@@ -10,8 +11,12 @@ import (
 	"strings"
 )
 
-// Version is the facts format version this package reads and writes.
-const Version = 1
+// Version is the facts format version this package writes; MinVersion is the
+// oldest it reads. A version-1 document may not carry version-2 sections.
+const (
+	Version    = 2
+	MinVersion = 1
+)
 
 // Precision says how an edge was established.
 const (
@@ -34,6 +39,13 @@ type Doc struct {
 	ForeignKeys  []FK       `json:"foreign_keys,omitempty"`
 	TableRefs    []TableRef `json:"table_refs,omitempty"`
 	Notes        []Note     `json:"notes,omitempty"`
+
+	// Version 2.
+	Routes     []Route     `json:"routes,omitempty"`
+	HTTPRefs   []HTTPRef   `json:"http_refs,omitempty"`
+	ConfigURLs []ConfigURL `json:"config_urls,omitempty"`
+	Services   []Service   `json:"services,omitempty"`
+	Stats      []Stats     `json:"stats,omitempty"`
 }
 
 type Producer struct {
@@ -76,6 +88,9 @@ type Function struct {
 	// Fingerprint is an opaque hash of the function's source; annotations
 	// that cite the function go stale when it changes.
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// Test marks a test function (version 2): a Rust #[test] or a function in
+	// a #[cfg(test)] module, where the file category can't say so.
+	Test bool `json:"test,omitempty"`
 }
 
 // Call is one call site. Plugins either resolve To themselves or leave it
@@ -142,6 +157,66 @@ type Note struct {
 	Message string `json:"message"`
 }
 
+// Route is an HTTP endpoint a repository serves (version 2). Handler is the
+// function the router dispatches to, when the extractor could name it.
+type Route struct {
+	ID        string `json:"id"`
+	Method    string `json:"method,omitempty"` // GET, POST, ...; "" for any
+	Path      string `json:"path"`             // as registered, e.g. /api/v1/x/:id
+	Handler   string `json:"handler,omitempty"`
+	File      string `json:"file"`
+	Line      int    `json:"line,omitempty"`
+	Precision string `json:"precision,omitempty"` // of the route -> handler edge
+}
+
+// HTTPRef is a request a function builds to a path (version 2). Base names
+// where the base URL comes from (a config key or env var, see ConfigURL), when
+// the extractor knows; the core links refs to other repos' routes.
+type HTTPRef struct {
+	From   string `json:"from"`
+	Method string `json:"method,omitempty"`
+	Path   string `json:"path"` // interpolations as :name
+	Base   string `json:"base,omitempty"`
+	File   string `json:"file"`
+	Line   int    `json:"line,omitempty"`
+}
+
+// ConfigURL is a URL found in a repository's configuration (version 2): a
+// config file key or an environment variable default.
+type ConfigURL struct {
+	Key   string `json:"key"`   // e.g. cold.admin_url, env:BREAKDOWN_ADMIN_URL
+	Value string `json:"value"` // the URL
+	File  string `json:"file"`
+	Line  int    `json:"line,omitempty"`
+}
+
+// Service is a deployable unit from manifests (version 2): a Kubernetes
+// Deployment or Service.
+type Service struct {
+	Kind      string            `json:"kind"` // deployment | service
+	Name      string            `json:"name"`
+	Namespace string            `json:"namespace,omitempty"`
+	Image     string            `json:"image,omitempty"`    // deployment
+	Selector  map[string]string `json:"selector,omitempty"` // service
+	Labels    map[string]string `json:"labels,omitempty"`   // deployment pod labels
+	Env       map[string]string `json:"env,omitempty"`      // literal env values that are URLs
+	File      string            `json:"file"`
+	Line      int               `json:"line,omitempty"`
+}
+
+// Stats counts call sites by outcome for one language (version 2). A call
+// site counts once however many edges it gets.
+type Stats struct {
+	Language     string `json:"language"`
+	CallSites    int    `json:"call_sites"`
+	InRepo       int    `json:"in_repo"`
+	Dispatch     int    `json:"dispatch"`
+	External     int    `json:"external"`
+	Unresolved   int    `json:"unresolved"`
+	Refs         int    `json:"refs"`
+	NotExtracted int    `json:"not_extracted"`
+}
+
 // Decode reads one facts document, rejecting unknown fields.
 func Decode(r io.Reader) (*Doc, error) {
 	dec := json.NewDecoder(r)
@@ -160,13 +235,37 @@ func (e *ValidationError) Error() string {
 	return "facts: invalid document:\n  " + strings.Join(e.Problems, "\n  ")
 }
 
+// Version2Sections are the document sections a version 1 document may
+// not carry (with functions[].test).
+var Version2Sections = []string{"routes", "http_refs", "config_urls", "services", "stats"}
+
 // Validate checks required fields, id uniqueness and internal references.
 func (d *Doc) Validate() error {
 	var p []string
 	add := func(format string, a ...any) { p = append(p, fmt.Sprintf(format, a...)) }
 
-	if d.FactsVersion != Version {
-		add("$.facts_version: want %d, got %d", Version, d.FactsVersion)
+	if d.FactsVersion < MinVersion || d.FactsVersion > Version {
+		add("$.facts_version: want %d to %d, got %d", MinVersion, Version, d.FactsVersion)
+	}
+	if d.FactsVersion == 1 {
+		counts := []int{len(d.Routes), len(d.HTTPRefs), len(d.ConfigURLs), len(d.Services), len(d.Stats)}
+		for i, name := range Version2Sections { // in order: errors read the same every time
+			if counts[i] > 0 {
+				add("$.%s: needs facts_version 2", name)
+			}
+		}
+		for i, f := range d.Functions {
+			if f.Test {
+				add("$.functions[%d].test: needs facts_version 2", i)
+			}
+		}
+	}
+	precision := func(v, where string) {
+		switch v {
+		case "", Precise, Heuristic, Candidate:
+		default:
+			add("%s: unknown precision %q", where, v)
+		}
 	}
 	if d.Producer.Name == "" {
 		add("$.producer.name: required")
@@ -238,11 +337,7 @@ func (d *Doc) Validate() error {
 		if c.To != "" && !funcs[c.To] {
 			add("%s.to: unknown function %q", w, c.To)
 		}
-		switch c.Precision {
-		case "", Precise, Heuristic, Candidate:
-		default:
-			add("%s.precision: unknown precision %q", w, c.Precision)
-		}
+		precision(c.Precision, w+".precision")
 	}
 
 	tables := map[string]bool{}
@@ -276,6 +371,76 @@ func (d *Doc) Validate() error {
 		}
 		if r.Function != "" && !funcs[r.Function] {
 			add("%s.function: unknown function %q", w, r.Function)
+		}
+	}
+
+	routes := map[string]bool{}
+	for i, r := range d.Routes {
+		w := fmt.Sprintf("$.routes[%d]", i)
+		if r.ID == "" {
+			add("%s.id: required", w)
+		}
+		if routes[r.ID] {
+			add("%s.id: duplicate %q", w, r.ID)
+		}
+		routes[r.ID] = true
+		if !strings.HasPrefix(r.Path, "/") {
+			add("%s.path: must start with /", w)
+		}
+		if r.Method != "" && r.Method != strings.ToUpper(r.Method) {
+			add("%s.method: must be upper case", w)
+		}
+		if r.Handler != "" && !funcs[r.Handler] {
+			add("%s.handler: unknown function %q", w, r.Handler)
+		}
+		checkFile(r.File, w+".file")
+		precision(r.Precision, w+".precision")
+	}
+	for i, r := range d.HTTPRefs {
+		w := fmt.Sprintf("$.http_refs[%d]", i)
+		if !funcs[r.From] {
+			add("%s.from: unknown function %q", w, r.From)
+		}
+		if !strings.HasPrefix(r.Path, "/") {
+			add("%s.path: must start with /", w)
+		}
+		if r.Method != "" && r.Method != strings.ToUpper(r.Method) {
+			add("%s.method: must be upper case", w)
+		}
+		checkFile(r.File, w+".file")
+	}
+	for i, c := range d.ConfigURLs {
+		w := fmt.Sprintf("$.config_urls[%d]", i)
+		if c.Key == "" || c.Value == "" {
+			add("%s: key and value are required", w)
+		}
+		checkFile(c.File, w+".file")
+	}
+	for i, s := range d.Services {
+		w := fmt.Sprintf("$.services[%d]", i)
+		if s.Kind != "deployment" && s.Kind != "service" {
+			add("%s.kind: want deployment or service, got %q", w, s.Kind)
+		}
+		if s.Name == "" {
+			add("%s.name: required", w)
+		}
+		checkFile(s.File, w+".file")
+	}
+	langs := map[string]bool{}
+	for i, s := range d.Stats {
+		w := fmt.Sprintf("$.stats[%d]", i)
+		if s.Language == "" {
+			add("%s.language: required", w)
+		}
+		if langs[s.Language] {
+			add("%s.language: duplicate %q", w, s.Language)
+		}
+		langs[s.Language] = true
+		for _, n := range []int{s.CallSites, s.InRepo, s.Dispatch, s.External, s.Unresolved, s.Refs, s.NotExtracted} {
+			if n < 0 {
+				add("%s: counts must be >= 0", w)
+				break
+			}
 		}
 	}
 

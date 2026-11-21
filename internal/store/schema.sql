@@ -4,7 +4,10 @@ CREATE TABLE IF NOT EXISTS snapshots (
   workspace TEXT NOT NULL,
   created_at TEXT NOT NULL,
   imported_at TEXT NOT NULL,
-  manifest TEXT NOT NULL
+  manifest TEXT NOT NULL,
+  -- main | head | published: what the build mapped (manifest source; '' is published)
+  source TEXT NOT NULL DEFAULT 'published',
+  map_id TEXT NOT NULL DEFAULT ''  -- bundle.MapID, '' when unknown
 );
 
 CREATE TABLE IF NOT EXISTS repos (
@@ -49,6 +52,7 @@ CREATE TABLE IF NOT EXISTS functions (
   line INTEGER NOT NULL DEFAULT 0,
   clauses TEXT NOT NULL DEFAULT '[]',
   fingerprint TEXT NOT NULL DEFAULT '',
+  test INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (snapshot_id, id)
 );
 
@@ -158,3 +162,105 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entities USING fts5(
   words,
   tokenize = 'unicode61'
 );
+
+-- Facts version 2.
+CREATE TABLE IF NOT EXISTS routes (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  id TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  method TEXT NOT NULL DEFAULT '',
+  path TEXT NOT NULL,
+  handler_id TEXT NOT NULL DEFAULT '',
+  file TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0,
+  precision TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (snapshot_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS http_refs (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  from_id TEXT NOT NULL,
+  method TEXT NOT NULL DEFAULT '',
+  path TEXT NOT NULL,
+  base TEXT NOT NULL DEFAULT '',
+  file TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0
+);
+
+-- function -> route edges the linker found for http_refs; never precise.
+CREATE TABLE IF NOT EXISTS http_links (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  from_id TEXT NOT NULL,
+  route_id TEXT NOT NULL,
+  repo TEXT NOT NULL,          -- the caller's
+  precision TEXT NOT NULL,     -- heuristic | candidate
+  provenance TEXT NOT NULL DEFAULT '', -- why: config key or env value -> service
+  file TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS http_links_route ON http_links(snapshot_id, route_id);
+
+CREATE TABLE IF NOT EXISTS config_urls (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  file TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS services (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,          -- where the manifest lives
+  kind TEXT NOT NULL,          -- deployment | service
+  name TEXT NOT NULL,
+  namespace TEXT NOT NULL DEFAULT '',
+  image TEXT NOT NULL DEFAULT '',
+  target_repo TEXT NOT NULL DEFAULT '', -- the repo a deployment's image builds from
+  selector TEXT NOT NULL DEFAULT '{}',
+  labels TEXT NOT NULL DEFAULT '{}',
+  env TEXT NOT NULL DEFAULT '{}',
+  file TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS stats (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  language TEXT NOT NULL,
+  call_sites INTEGER NOT NULL DEFAULT 0,
+  in_repo INTEGER NOT NULL DEFAULT 0,
+  dispatch INTEGER NOT NULL DEFAULT 0,
+  external INTEGER NOT NULL DEFAULT 0,
+  unresolved INTEGER NOT NULL DEFAULT 0,
+  refs INTEGER NOT NULL DEFAULT 0,
+  not_extracted INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (snapshot_id, repo, language)
+);
+
+CREATE TABLE IF NOT EXISTS inventory (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  ext TEXT NOT NULL,
+  files INTEGER NOT NULL,
+  PRIMARY KEY (snapshot_id, repo, ext)
+);
+
+-- Every resolved edge, one shape: calls (call, dispatch, ...), route -> handler
+-- ('route') and function -> route ('http'). Readers that follow edges use this.
+-- +to_id keeps the planner on calls_from for a from_id lookup (to_id IS NOT
+-- NULL would otherwise pick calls_to and scan the snapshot's calls).
+CREATE VIEW IF NOT EXISTS edges AS
+  SELECT snapshot_id, from_id, to_id, kind, precision, repo, file, line FROM calls WHERE +to_id IS NOT NULL
+  UNION ALL
+  SELECT snapshot_id, id, handler_id, 'route', precision, repo, file, line FROM routes WHERE handler_id != ''
+  UNION ALL
+  SELECT snapshot_id, from_id, route_id, 'http', precision, repo, file, line FROM http_links;
+
+-- Every edge endpoint: functions and routes.
+CREATE VIEW IF NOT EXISTS nodes AS
+  SELECT snapshot_id, id, repo, module, name, file, line, 'function' AS kind FROM functions
+  UNION ALL
+  SELECT snapshot_id, id, repo, '', CASE method WHEN '' THEN path ELSE method || ' ' || path END, file, line, 'route' FROM routes;
+

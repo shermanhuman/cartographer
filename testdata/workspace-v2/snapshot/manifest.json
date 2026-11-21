@@ -1,0 +1,19 @@
+{
+  "snapshot_format": 2,
+  "id": "snapshot-20261120T000000Z",
+  "created_at": "2026-11-20T00:00:00Z",
+  "workspace": "v2",
+  "source": "main",
+  "repos": [
+    {"name": "admin", "url": "https://github.com/example/admin", "revision": "cccccccccccccccccccccccccccccccccccccccc"},
+    {"name": "sales", "url": "https://github.com/example/sales", "revision": "dddddddddddddddddddddddddddddddddddddddd"}
+  ],
+  "facts": ["facts/admin.json", "facts/sales.json"],
+  "contexts": {"depth": 2},
+  "inventory": [
+    {"repo": "admin", "ext": ".ex", "files": 2},
+    {"repo": "admin", "ext": ".yaml", "files": 1},
+    {"repo": "sales", "ext": ".go", "files": 3},
+    {"repo": "sales", "ext": ".yaml", "files": 1}
+  ]
+}

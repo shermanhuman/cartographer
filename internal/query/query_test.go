@@ -124,7 +124,7 @@ func TestShowTableContextStatus(t *testing.T) {
 	out = render(t)(q.Context(ctx, "Shop.Orders"))
 	has(t, out, "MOD shop-app:Shop.Orders  lib/shop/orders.ex  3 fn", "TBL public.orders ×1")
 	out = render(t)(q.Status(ctx))
-	has(t, out, "5 modules · 7 functions · 9 call sites", "call sites resolved: 7 of 9", "annotations: 1 needs_review")
+	has(t, out, "5 modules · 7 functions · 9 call sites", "6 of 8 call sites in repo (75%)", "annotations: 1 needs_review")
 }
 
 func TestChangedFilesAreMarked(t *testing.T) {

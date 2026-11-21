@@ -120,11 +120,19 @@ func Needed(rep *fresh.Report) bool {
 // own directory (StateDir), a lock file while a rebuild runs, a stamp of
 // the last outcome (with what a successful one imported), the last error,
 // the last log and the running build's scratch.
-type Dir struct{ Path string }
+type Dir struct {
+	Path string
+	// Flat keeps the state in Path itself rather than in a per-workspace
+	// directory below it (a project's state directory is already its own).
+	Flat bool
+}
 
 // StateDir is ws's state directory: the name made file-safe plus a hash of
 // the exact name, so distinct names ("a/b", "a_b") never share one.
 func (d Dir) StateDir(ws string) string {
+	if d.Flat {
+		return d.Path
+	}
 	safe := strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_' {
 			return r
@@ -341,6 +349,29 @@ func (d Dir) Built(ws, db string) (map[string]string, time.Time) {
 // over meanwhile (ErrLost). ErrRunning (nothing built or stamped) when the
 // lock is held.
 func (d Dir) Run(ws string, build func() (Result, error)) error {
+	var res Result
+	// The outcome is stamped before the lock is released: a rebuild that
+	// starts after this one must see its backoff, and a later rebuild's
+	// outcome must never be overwritten by this one's.
+	return d.hold(ws, func() error {
+		var err error
+		res, err = build()
+		return err
+	}, func(err error) {
+		if !errors.Is(err, context.Canceled) {
+			d.stamp(ws, res, err)
+		}
+	})
+}
+
+// Hold runs fn under ws's lock, refreshing it every Heartbeat, and records
+// nothing: the caller keeps its own state. ErrRunning when the lock is held;
+// ErrLost (wrapping fn's error) when it was taken over while fn ran.
+func (d Dir) Hold(ws string, fn func() error) error { return d.hold(ws, fn, nil) }
+
+// hold is Hold; finish, when set, runs with fn's error while the lock is
+// still ours (not after a takeover), before it is released.
+func (d Dir) hold(ws string, fn func() error, finish func(error)) error {
 	h, err := d.lock(ws)
 	if err != nil {
 		return err
@@ -360,7 +391,7 @@ func (d Dir) Run(ws string, build func() (Result, error)) error {
 			}
 		}
 	}()
-	res, err := build()
+	err = fn()
 	close(stop)
 	<-done
 	if !h.owned() {
@@ -369,8 +400,8 @@ func (d Dir) Run(ws string, build func() (Result, error)) error {
 		}
 		return ErrLost
 	}
-	if !errors.Is(err, context.Canceled) {
-		d.stamp(ws, res, err)
+	if finish != nil {
+		finish(err)
 	}
 	return err
 }
@@ -382,7 +413,11 @@ func (d Dir) Fail(ws string, err error) {
 	d.stamp(ws, Result{}, err)
 }
 
+// beforeStamp runs as each outcome is stamped (tests).
+var beforeStamp = func() {}
+
 func (d Dir) stamp(ws string, res Result, err error) {
+	beforeStamp()
 	var b strings.Builder
 	status := "ok"
 	if err != nil {

@@ -65,6 +65,11 @@ func TestToolsListedWithShortDescriptions(t *testing.T) {
 	if init := cs.InitializeResult(); init == nil || !strings.Contains(init.Instructions, "map_impact") || len(init.Instructions) > 1500 {
 		t.Errorf("instructions missing or too long")
 	}
+	// precise is static resolution by the extractor (SCIP for Go and
+	// Rust, the AST for Elixir), not a compiler's guarantee (A-P1).
+	if init := cs.InitializeResult(); init != nil && (strings.Contains(init.Instructions, "compiler") || !strings.Contains(init.Instructions, "[precise] edges are statically resolved")) {
+		t.Errorf("instructions describe precise edges as:\n%s", init.Instructions)
+	}
 }
 
 func TestCallersCompactText(t *testing.T) {

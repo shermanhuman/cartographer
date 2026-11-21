@@ -63,6 +63,11 @@ func TestElixirPluginContract(t *testing.T) {
 	if d.Producer.Name != "extract-elixir" || d.Producer.CallPrecision != Precise {
 		t.Errorf("producer = %+v", d.Producer)
 	}
+	if d.FactsVersion != 2 || len(d.Stats) != 1 || d.Stats[0].Language != "elixir" ||
+		d.Stats[0].CallSites != len(d.Calls) {
+		t.Errorf("facts_version %d, stats %+v (want version 2, one elixir entry counting %d calls)",
+			d.FactsVersion, d.Stats, len(d.Calls))
+	}
 	if d.Repo != "shop" || d.Revision != "0123456789abcdef" {
 		t.Errorf("repo/revision = %q/%q", d.Repo, d.Revision)
 	}
@@ -90,6 +95,51 @@ func TestElixirPluginContract(t *testing.T) {
 		if !tables[r.Table] {
 			t.Errorf("table_refs[%d]: %q is not in the schema facts", i, r.Table)
 		}
+	}
+}
+
+// The extractor's version-2 sections on fixtures shaped like a Phoenix admin
+// app, a client app with a Req wrapper, and a shared library whose one
+// request is built across functions.
+func TestElixirPluginWebContract(t *testing.T) {
+	web := "plugins/extract-elixir/test/web_fixture/"
+	run := func(repo, roots string) *Doc {
+		return runPlugin(t, "elixir", "plugins/extract-elixir/extract.exs",
+			"--repo", repo, "--root", web+repo, "--source-roots", roots)
+	}
+
+	admin := run("admin", "lib")
+	var check *Route
+	for i, r := range admin.Routes {
+		if r.ID == "admin:route:AdminWeb.Router:POST /api/v1/sales/cold/check" {
+			check = &admin.Routes[i]
+		}
+	}
+	if check == nil || check.Handler != "admin:AdminWeb.API.V1.SalesColdController.check/2" || check.Precision != Precise {
+		t.Errorf("admin: POST /api/v1/sales/cold/check = %+v; routes %+v", check, admin.Routes)
+	}
+	if admin.Stats[0].NotExtracted != 6 { // live_dashboard, forward, live, match, resources, a non-literal path
+		t.Errorf("admin: not_extracted = %d, want 6", admin.Stats[0].NotExtracted)
+	}
+
+	rosearch := run("rosearch", "lib")
+	refs := map[string]string{}
+	for _, r := range rosearch.HTTPRefs {
+		refs[r.Method+" "+r.Path] = r.From
+		if r.Base != "Rosearch.ApiClient" {
+			t.Errorf("rosearch: ref %+v: base want Rosearch.ApiClient", r)
+		}
+	}
+	if len(rosearch.HTTPRefs) != 6 || refs["GET /tenants/:p1/vehicle-cleanup"] != "rosearch:Rosearch.VehicleList.cleanup/3" || refs["POST /tenants/:p1/vehicle-cleanup/wont-fix"] != "rosearch:Rosearch.VehicleList.wont_fix/3" {
+		t.Errorf("rosearch: refs = %+v", rosearch.HTTPRefs)
+	}
+	if rosearch.Stats[0].NotExtracted != 1 {
+		t.Errorf("rosearch: not_extracted = %d, want 1", rosearch.Stats[0].NotExtracted)
+	}
+
+	sites := run("sites", "shared-libs/lib")
+	if len(sites.HTTPRefs) != 0 || sites.Stats[0].NotExtracted != 2 {
+		t.Errorf("sites: refs %+v, not_extracted %d; want none and 2", sites.HTTPRefs, sites.Stats[0].NotExtracted)
 	}
 }
 

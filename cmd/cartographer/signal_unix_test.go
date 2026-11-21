@@ -130,3 +130,40 @@ func TestSecondInterruptKillsThePlugins(t *testing.T) {
 	}
 	t.Errorf("plugin %d survived the second interrupt", pid)
 }
+
+// SIGTERM to `cartographer extract scip` (a cancelled build) stops the
+// indexer and removes the index's temporary directory.
+func TestExtractSignalRemovesItsTempDir(t *testing.T) {
+	bin, tmp, root := t.TempDir(), t.TempDir(), t.TempDir()
+	started := filepath.Join(t.TempDir(), "started")
+	os.WriteFile(filepath.Join(bin, "scip-go"), []byte("#!/bin/sh\ntouch '"+started+"'\nexec sleep 600\n"), 0o755)
+	os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module x\n"), 0o644)
+	self, _ := os.Executable()
+	cmd := exec.Command(self, "extract", "scip", "--lang", "go", "--repo", "x", "--root", root)
+	cmd.Env = append(os.Environ(), "CARTOGRAPHER_TEST_CLI=1", "TMPDIR="+tmp, "PATH="+bin+":/usr/bin:/bin")
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the indexer never started")
+		}
+	}
+	cmd.Process.Signal(syscall.SIGTERM)
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	select {
+	case <-exited:
+	case <-time.After(15 * time.Second):
+		t.Fatal("extract did not exit after SIGTERM")
+	}
+	if left, _ := filepath.Glob(filepath.Join(tmp, "cartographer-scip-*")); len(left) > 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}

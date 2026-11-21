@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/shermanhuman/cartographer/internal/fresh"
+	"github.com/shermanhuman/cartographer/internal/project"
 	"github.com/shermanhuman/cartographer/internal/query"
 	"github.com/shermanhuman/cartographer/internal/rebuild"
 	"github.com/shermanhuman/cartographer/internal/snapshot"
@@ -67,6 +68,15 @@ type Session struct {
 	// (rebuild.Dir in DataDir). It must return at once (spawn or go); the
 	// caller holds the session lock. nil never rebuilds.
 	Rebuild func(ws, dir string)
+	// StateDir holds the registered projects (project.StateDir); "" means
+	// none are considered.
+	StateDir string
+	// ProjectRebuild starts a cycle of a registered project when its last
+	// fetch attempt is Cadence old or it was never attempted (and none is
+	// running). It must return at once. nil never starts one.
+	ProjectRebuild func(name string)
+	// Now is the clock for project cadence (tests); nil is time.Now.
+	Now func() time.Time
 
 	ghMu   sync.Mutex // guards GitHub's lazy creation
 	pullMu sync.Mutex // one auto-pull at a time; guards warned
@@ -74,6 +84,24 @@ type Session struct {
 
 	mu   sync.Mutex // guards memo; held while computing it so bursts share one computation
 	memo *memo
+
+	startedMu sync.Mutex
+	started   map[string]time.Time // projects whose cycle this session started, and when
+	warnedOn  map[string]bool      // warnOnce keys (guarded by startedMu)
+}
+
+// warnOnce logs a warning the first time key comes up in this session.
+func (s *Session) warnOnce(key, format string, a ...any) {
+	s.startedMu.Lock()
+	defer s.startedMu.Unlock()
+	if s.warnedOn[key] {
+		return
+	}
+	if s.warnedOn == nil {
+		s.warnedOn = map[string]bool{}
+	}
+	s.warnedOn[key] = true
+	s.logf(format, a...)
 }
 
 // memo caches what one directory resolves to.
@@ -85,6 +113,10 @@ type memo struct {
 	reports map[string]*fresh.Report // snapshot id -> freshness
 	local   map[string]string        // workspace name -> registered workspace dir ("" none)
 	sibling map[string]string        // workspace name -> unregistered sibling workspace ("" none)
+	// projects are the registered projects; scheduled is set once their
+	// cycles were considered for this memo.
+	projects  []*project.Registration
+	scheduled bool
 }
 
 // DataDir is $CARTOGRAPHER_DATA, else $XDG_DATA_HOME/cartographer or
@@ -182,6 +214,7 @@ func (s *Session) current(ctx context.Context) *memo {
 		return m
 	}
 	m := &memo{at: time.Now(), cwd: s.Cwd, co: fresh.Find(ctx, s.Cwd), reports: map[string]*fresh.Report{}, local: map[string]string{}, sibling: map[string]string{}}
+	m.projects = s.registrations()
 	if ctx.Err() == nil {
 		s.memo = m
 	}
@@ -197,6 +230,7 @@ func (s *Session) resolve(ctx context.Context) (string, *fresh.Report, error) {
 		s.memo = nil
 	}
 	m := s.current(ctx)
+	s.scheduleProjects(m)
 	id := s.Snapshot
 	if id == "" {
 		if m.chosen == "" {
@@ -226,6 +260,7 @@ func (s *Session) Query(ctx context.Context) (*query.Q, *fresh.Report, error) {
 	}
 	q.Changed = rep.Changed
 	q.Staleness = rep.Summary()
+	q.Title = rep.Title
 	q.Notes = rep.Hints
 	return q, rep, nil
 }
@@ -234,7 +269,170 @@ func (s *Session) Query(ctx context.Context) (*query.Q, *fresh.Report, error) {
 func (s *Session) Fresh(ctx context.Context, id string) (*fresh.Report, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.freshFrom(ctx, s.current(ctx), id)
+	m := s.current(ctx)
+	s.scheduleProjects(m)
+	return s.freshFrom(ctx, m, id)
+}
+
+func (s *Session) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// registrations lists the projects registered with this session's store
+// (none without StateDir). A project registered with another store is
+// neither scheduled nor applied here: its builds go only to its own store.
+func (s *Session) registrations() []*project.Registration {
+	regs, err := project.List(s.StateDir)
+	if err != nil {
+		s.logf("cartographer: %v", err)
+	}
+	var out []*project.Registration
+	for _, r := range regs {
+		if r.InStore(s.DB) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func registered(regs []*project.Registration, ws string) *project.Registration {
+	for _, r := range regs {
+		if r.Name == ws {
+			return r
+		}
+	}
+	return nil
+}
+
+// scheduleProjects starts a cycle of each registered project that is due
+// (never attempted, or its last fetch attempt is project.Cadence old) and
+// not running, once per memo. The cycle itself decides, under the lock,
+// whether anything changed. The caller holds s.mu.
+func (s *Session) scheduleProjects(m *memo) {
+	if m.scheduled || s.ProjectRebuild == nil || s.Snapshot != "" {
+		return
+	}
+	m.scheduled = true
+	now := s.now()
+	for _, reg := range m.projects {
+		st, err := project.LoadState(s.StateDir, reg.Name)
+		if err != nil {
+			s.warnOnce("state "+reg.Name, "cartographer: project %s isn't rebuilt: %v", reg.Name, err)
+			continue
+		}
+		if !st.Due(now) {
+			continue
+		}
+		if _, running := project.Lock(s.StateDir, reg.Name).Running(reg.Name); running {
+			continue
+		}
+		s.startedMu.Lock()
+		if s.started == nil {
+			s.started = map[string]time.Time{}
+		}
+		s.started[reg.Name] = s.now().UTC().Truncate(time.Second)
+		s.startedMu.Unlock()
+		s.ProjectRebuild(reg.Name)
+	}
+}
+
+// memberOf names the registered member a checkout holds: by its recorded
+// path, else by any remote naming the member's GitHub URL ("" none).
+func memberOf(ctx context.Context, reg *project.Registration, co fresh.Checkout) string {
+	if co.Root == "" {
+		return ""
+	}
+	for _, mb := range reg.Members {
+		if samePath(mb.Path, co.Root) {
+			return mb.Name()
+		}
+	}
+	if slug := project.Identify(ctx, co.Root); slug != "" {
+		if mb, ok := reg.Member(slug); ok {
+			return mb.Name()
+		}
+	}
+	return ""
+}
+
+// projectReport is the freshness of a registered project's snapshot: the
+// recorded checkouts, except that the one the command runs in (a worktree,
+// a second clone) stands for its member, with the header and status
+// describing the map, the fetch and your checkout.
+func (s *Session) projectReport(ctx context.Context, m *memo, id string, reg *project.Registration, repos []fresh.Repo) *fresh.Report {
+	paths := map[string]string{}
+	for _, mb := range reg.Members {
+		if mb.Path != "" {
+			paths[mb.Name()] = mb.Path
+		}
+	}
+	yours := memberOf(ctx, reg, m.co)
+	if yours != "" {
+		paths[yours] = m.co.Root
+	}
+	rep := fresh.CheckWork(ctx, repos, paths)
+	st, err := project.LoadState(s.StateDir, reg.Name)
+	if err != nil {
+		st = &project.State{}
+	}
+	v := &project.View{Reg: reg, State: st, StateErr: err, Snapshot: id, Report: rep, Yours: yours, Now: s.now()}
+	if cfg, _ := userconfig.Load(); cfg != nil {
+		v.Roots = cfg.Roots()
+	}
+	if since, ok := project.Lock(s.StateDir, reg.Name).Running(reg.Name); ok {
+		v.Running = since
+	}
+	if si, ok, _ := s.Store.Info(ctx, id); ok {
+		v.MapID, v.Source = si.MapID, si.Source
+		v.Created, _ = time.Parse(time.RFC3339, si.CreatedAt)
+	}
+	v.Manifest, _ = s.Store.Manifest(ctx, id)
+	rep.Lead, rep.Detail, rep.Title, rep.Problems = v.Lead(), v.Detail(), v.Label(), v.Problems()
+	return rep
+}
+
+// ErrFirstBuild means a registered project has no map yet.
+type ErrFirstBuild struct {
+	Project string
+	Status  string
+}
+
+func (e *ErrFirstBuild) Error() string {
+	return fmt.Sprintf("no map of project %s yet: %s", e.Project, e.Status)
+}
+
+// firstBuild says why a registered project has no map yet and what will
+// build it: a build running or just started by this command, a failure,
+// automatic builds being off, or the next command after the cadence.
+func (s *Session) firstBuild(reg *project.Registration) error {
+	s.startedMu.Lock()
+	started := s.started[reg.Name]
+	s.startedMu.Unlock()
+	log := project.LogPath(s.StateDir, reg.Name)
+	st, err := project.LoadState(s.StateDir, reg.Name)
+	var status string
+	switch since, running := project.Lock(s.StateDir, reg.Name).Running(reg.Name); {
+	case running:
+		status = fmt.Sprintf("its first build is running since %s (log: %s)", since.Local().Format("15:04"), log)
+	case err != nil:
+		status = (&project.View{Reg: reg, State: &project.State{}, StateErr: err, Now: s.now()}).Problems()[0]
+	case st.Failed != nil && (started.IsZero() || !st.Failed.At.Before(started)):
+		// A failure since this command started the build (or none started).
+		v := &project.View{Reg: reg, State: st, Now: s.now()}
+		status = strings.Join(v.Problems(), "; ")
+	case !started.IsZero():
+		status = fmt.Sprintf("its first build has started in the background (log: %s); a later command answers from it, or run `cartographer refresh` to wait for it", log)
+	case s.ProjectRebuild == nil:
+		status = "automatic builds are off here (auto_rebuild = false, --no-rebuild or $CARTOGRAPHER_NO_REBUILD): run `cartographer refresh` to build it"
+	case !st.Attempt.IsZero():
+		status = fmt.Sprintf("its next build starts with a command after %s, or run `cartographer refresh`", st.Attempt.Add(project.Cadence).Local().Format("15:04"))
+	default:
+		status = "its first build starts with the next command, or run `cartographer refresh`"
+	}
+	return &ErrFirstBuild{Project: reg.Name, Status: status}
 }
 
 // freshFrom computes (or reuses) id's report, and with it decides once per
@@ -247,6 +445,39 @@ func (s *Session) freshFrom(ctx context.Context, m *memo, id string) (*fresh.Rep
 	repos, err := s.repos(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if ws, _ := s.Store.Workspace(ctx, id); ws != "" {
+		if reg := registered(m.projects, ws); reg != nil {
+			// A registered project: never the HEAD-based trigger, and a
+			// legacy workspace of the same name is ignored.
+			rep := s.projectReport(ctx, m, id, reg, repos)
+			if ctx.Err() == nil {
+				m.reports[id] = rep
+			}
+			return rep, nil
+		}
+		if si, ok, _ := s.Store.Info(ctx, id); ok && si.Source == "head" {
+			// A `refresh --head` map of an unregistered project: labelled
+			// "your checkouts" all the same, its checkouts found as usual.
+			cfg, _ := userconfig.Load()
+			if cfg == nil {
+				cfg = &userconfig.Config{}
+			}
+			reg := &project.Registration{Name: ws}
+			for name, p := range fresh.LocateFrom(ctx, repos, m.co, cfg.Checkouts) {
+				for _, r := range repos {
+					if r.Name == name {
+						slug := strings.TrimPrefix(fresh.NormalizeURL(r.URL), "github.com/")
+						reg.Members = append(reg.Members, project.Member{Repo: slug, Path: p})
+					}
+				}
+			}
+			rep := s.projectReport(ctx, m, id, reg, repos)
+			if ctx.Err() == nil {
+				m.reports[id] = rep
+			}
+			return rep, nil
+		}
 	}
 	cfg, _ := userconfig.Load()
 	if cfg == nil {
@@ -392,20 +623,48 @@ func (s *Session) chooseRepo(ctx context.Context, co fresh.Checkout) (string, st
 	if err != nil {
 		return "", "", err
 	}
+	regs := s.registrations()
 	if len(all) == 0 {
+		if len(regs) > 0 {
+			reg := regs[0]
+			for _, r := range regs {
+				if memberOf(ctx, r, co) != "" {
+					reg = r
+				}
+			}
+			return "", "", s.firstBuild(reg)
+		}
 		return "", "", store.ErrNoSnapshot
 	}
 	latest := map[string]string{} // workspace -> newest snapshot (all is newest first)
 	var names []string
 	for _, si := range all {
+		// A registered project's map comes only from its fetched mains
+		// (never a `head` or published snapshot of the same name).
+		if registered(regs, si.Workspace) != nil && si.Source != "main" {
+			continue
+		}
 		if _, ok := latest[si.Workspace]; !ok {
 			latest[si.Workspace] = si.ID
 			names = append(names, si.Workspace)
 		}
 	}
+	// The checkout is a registered project's member (by recorded path or
+	// remote): that project, or its first build.
+	for _, reg := range regs {
+		if name := memberOf(ctx, reg, co); name != "" {
+			if id, ok := latest[reg.Name]; ok {
+				return id, name, nil
+			}
+			return "", "", s.firstBuild(reg)
+		}
+	}
 	if co.Root == "" {
 		if len(names) == 1 {
 			return latest[names[0]], "", nil
+		}
+		if len(names) == 0 && len(regs) > 0 {
+			return "", "", s.firstBuild(regs[0])
 		}
 		return "", "", &ErrNotMapped{Workspaces: names}
 	}
@@ -490,14 +749,4 @@ func (s *Session) HasCode(ctx context.Context) bool {
 
 // samePath reports whether a and b name the same directory, through symlinks
 // (macOS temp dirs live under /var -> /private/var).
-func samePath(a, b string) bool {
-	if a == "" || b == "" {
-		return false
-	}
-	ra, err1 := filepath.EvalSymlinks(a)
-	rb, err2 := filepath.EvalSymlinks(b)
-	if err1 != nil || err2 != nil {
-		return filepath.Clean(a) == filepath.Clean(b)
-	}
-	return ra == rb
-}
+func samePath(a, b string) bool { return project.SamePath(a, b) }

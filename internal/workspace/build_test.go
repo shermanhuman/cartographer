@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -726,3 +727,64 @@ func TestSchemaKeyUsesTheResolvedCheckout(t *testing.T) {
 		t.Errorf("manifest %+v", m.Repos)
 	}
 }
+
+// fakeDB is a SchemaDB that hands out a new port each Start and records
+// stops.
+type fakeDB struct{ starts, stops int }
+
+func (f *fakeDB) Start(ctx context.Context, scratch string) (map[string]string, func(), error) {
+	f.starts++
+	if fi, err := os.Stat(scratch); err != nil || !fi.IsDir() {
+		return nil, nil, fmt.Errorf("no scratch directory %s", scratch)
+	}
+	return map[string]string{"pg_host": "127.0.0.1", "pg_port": strconv.Itoa(40000 + f.starts)}, func() { f.stops++ }, nil
+}
+
+func (f *fakeDB) Key() string { return "fake 1" }
+
+// A cartographer.toml [schema] with postgres = "managed" needs a database
+// runner, expands its {pg_port} in env and command, stops it, and keys
+// the cache on the unexpanded templates (another port hits the same key).
+func TestLegacyManagedSchemaDB(t *testing.T) {
+	ws, _, _ := setup(t)
+	c, _ := Load(ws)
+	fixture, _ := filepath.Abs("../../testdata/workspace-mini/snapshot")
+	seen := filepath.Join(t.TempDir(), "seen")
+	c.Schema.Postgres = "managed"
+	c.Schema.Env = map[string]string{"TEST_DB_PORT": "{pg_port}"}
+	c.Schema.Prepare = "echo env=$TEST_DB_PORT >> " + seen
+	c.Schema.Command = []string{"sh", "-c", "echo arg=$1 >> " + seen + "; cat " + fixture + "/facts/schema.json", "capture", "{pg_host}:{pg_port}"}
+	if _, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "needs a database runner") {
+		t.Fatalf("want a missing-runner error, got %v", err)
+	}
+	var keys []string
+	db := &fakeDB{}
+	for i := 0; i < 2; i++ {
+		cache := t.TempDir()
+		if _, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "s"), CacheDir: cache, SchemaDB: db}); err != nil {
+			t.Fatal(err)
+		}
+		k, _ := filepath.Glob(filepath.Join(cache, "schema", "*.json"))
+		keys = append(keys, filepath.Base(k[0]))
+	}
+	if got := mustRead(t, seen); got != "env=40001\narg=127.0.0.1:40001\nenv=40002\narg=127.0.0.1:40002\n" {
+		t.Errorf("prepare and capture saw:\n%s", got)
+	}
+	if db.starts != 2 || db.stops != 2 {
+		t.Errorf("starts %d stops %d", db.starts, db.stops)
+	}
+	if keys[0] != keys[1] {
+		t.Errorf("cache keys differ across ports: %v", keys)
+	}
+	managed, _ := schemaKey(context.Background(), c, "", Repo{}, "", "", db)
+	other, _ := schemaKey(context.Background(), c, "", Repo{}, "", "", &otherDB{db})
+	c.Schema.Postgres = ""
+	plain, _ := schemaKey(context.Background(), c, "", Repo{}, "", "", nil)
+	if managed == plain || managed == other {
+		t.Error("the postgres setting or the database's version isn't in the key")
+	}
+}
+
+type otherDB struct{ *fakeDB }
+
+func (otherDB) Key() string { return "fake 2" }

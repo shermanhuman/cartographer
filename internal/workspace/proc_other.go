@@ -12,5 +12,7 @@ func ownGroup(cmd *exec.Cmd) *procGroup { return &procGroup{} }
 func (g *procGroup) started()           {}
 func (g *procGroup) done()              {}
 
+func trackGroup(int) func() { return func() {} }
+
 // KillGroups does nothing here: console interrupts reach the commands.
 func KillGroups() {}

@@ -156,8 +156,10 @@ func writeMermaid(b *strings.Builder, comment string, nodes []mnode, links []mli
 	}
 }
 
-func edgeLabel(sites int, precision string) string {
-	var parts []string
+// edgeLabel names an edge's kind when it isn't a direct call (dispatch,
+// http, route), its precision when not precise, and its site count.
+func edgeLabel(sites int, precision string, kinds []string) string {
+	parts := query.Edge{Kinds: kinds}.Notable()
 	if precision != "" && precision != "precise" {
 		parts = append(parts, precision)
 	}
@@ -247,7 +249,7 @@ func buildNeighbourhood(ctx context.Context, q *query.Q, ref string, depth, max 
 		if !keep[ed.To] || ed.From == ed.To {
 			continue
 		}
-		nb.Links = append(nb.Links, mlink{From: ed.From, To: ed.To, Label: edgeLabel(ed.Sites, ed.Precision), Dotted: ed.Precision != "" && ed.Precision != "precise"})
+		nb.Links = append(nb.Links, mlink{From: ed.From, To: ed.To, Label: edgeLabel(ed.Sites, ed.Precision, ed.Kinds), Dotted: ed.Precision != "" && ed.Precision != "precise"})
 	}
 	return nb, nil
 }

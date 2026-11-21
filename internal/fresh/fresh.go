@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -25,6 +26,19 @@ type State struct {
 	Behind   int    // commits from Revision to local HEAD (-1 unknown)
 	Changed  map[string]bool
 	Note     string // why the state is unknown
+
+	// Filled by CheckWork (a registered project's "your work" line).
+	// Branch is the checked-out branch ("" detached or unknown); Ahead
+	// counts commits on HEAD the mapped revision lacks (the same number as
+	// Behind, seen from the checkout) and BehindMap commits of the mapped
+	// revision HEAD lacks, both -1 when unknown (the revision is missing, or
+	// lies past a shallow clone's boundary). Dirty lists uncommitted files
+	// (tracked changes and untracked files), sorted.
+	Branch           string
+	Ahead, BehindMap int
+	Dirty            []string
+	// Head is the checkout's HEAD commit ("" unknown).
+	Head string
 }
 
 // NoteRevisionMissing is the State.Note for a snapshot revision the local
@@ -37,9 +51,33 @@ type Report struct {
 	// Rebuild notes a local rebuild in progress or the last one's failure
 	// ("" when neither); see package rebuild.
 	Rebuild string
+	// Lead, when set, is the whole Summary (a registered project's header
+	// line), and Detail, when set, replaces Lines.
+	Lead   string
+	Detail []string
+	// Title, when set, names the map in headers ("map 7f3c9a1e").
+	Title string
 	// Hints are status-only advice about keeping the map fresh (e.g. a
 	// workspace to register); not part of Summary or Lines.
 	Hints []string
+	// Problems are what keeps a registered project's map behind (a failed
+	// build, a failing fetch, a rebuild running).
+	Problems []string
+}
+
+// Stale reports whether the map needs the reader's care: a checkout has
+// commits or files the map doesn't, a rebuild note, or a project problem.
+// A project's header line alone (Lead) is not staleness.
+func (r *Report) Stale() bool {
+	if len(r.Problems) > 0 || r.Rebuild != "" {
+		return true
+	}
+	for _, s := range r.Repos {
+		if s.Behind > 0 || len(s.Changed) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
@@ -278,6 +316,49 @@ func Check(ctx context.Context, repos []Repo, paths map[string]string) *Report {
 	return rep
 }
 
+// CheckWork is Check plus each checkout's branch, ahead/behind counts
+// against the mapped revision and uncommitted files (four more git execs
+// per repo).
+func CheckWork(ctx context.Context, repos []Repo, paths map[string]string) *Report {
+	rep := Check(ctx, repos, paths)
+	for i := range rep.Repos {
+		st := &rep.Repos[i]
+		st.Ahead, st.BehindMap = -1, -1
+		if st.Path == "" || !isDir(st.Path) {
+			continue
+		}
+		Work(ctx, st.Path, st.Revision, st)
+	}
+	return rep
+}
+
+// Work fills st's Branch, Head, Ahead, BehindMap and Dirty for the checkout
+// at dir against the mapped revision rev.
+func Work(ctx context.Context, dir, rev string, st *State) {
+	st.Ahead, st.BehindMap = -1, -1
+	st.Branch, _ = git(ctx, dir, "symbolic-ref", "--short", "-q", "HEAD")
+	st.Head = Head(ctx, dir)
+	if ValidRevision(rev) {
+		known := true
+		if sh, _ := git(ctx, dir, "rev-parse", "--is-shallow-repository"); sh == "true" {
+			_, err := git(ctx, dir, "merge-base", "--end-of-options", rev, "HEAD")
+			known = err == nil
+		}
+		if out, err := git(ctx, dir, "rev-list", "--left-right", "--count", "--end-of-options", rev+"...HEAD"); err == nil && known {
+			fmt.Sscanf(out, "%d %d", &st.BehindMap, &st.Ahead)
+		}
+	}
+	st.Dirty = nil
+	if out, err := gitRaw(ctx, dir, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"); err == nil {
+		for _, e := range strings.Split(out, "\x00") {
+			if len(e) > 3 {
+				st.Dirty = append(st.Dirty, e[3:])
+			}
+		}
+		sort.Strings(st.Dirty)
+	}
+}
+
 // Head returns the commit at HEAD of the checkout at dir ("" if none).
 func Head(ctx context.Context, dir string) string {
 	out, err := git(ctx, dir, "rev-parse", "--verify", "HEAD^{commit}")
@@ -309,6 +390,9 @@ func (r *Report) Changed(repo, file string) bool {
 
 // Summary is a one-line staleness note ("" when everything is current).
 func (r *Report) Summary() string {
+	if r.Lead != "" {
+		return r.Lead
+	}
 	var parts []string
 	for _, s := range r.Repos {
 		switch {
@@ -328,6 +412,9 @@ func (r *Report) Summary() string {
 
 // Lines describe every repository, for `status`.
 func (r *Report) Lines() []string {
+	if r.Detail != nil {
+		return r.Detail
+	}
 	var out []string
 	for _, s := range r.Repos {
 		rev := s.Revision

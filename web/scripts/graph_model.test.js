@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {functionNeighborhood, layeredLayout} from '../graph-model.js';
+import {functionNeighborhood, layeredLayout, edgeLabel, hopLabel} from '../graph-model.js';
 
 test('reciprocal calls retain both directed edges and one neighbor node', () => {
   const graph = functionNeighborhood('a', {
@@ -34,4 +34,18 @@ test('layered layout puts callers left, callees right and centres columns', () =
   assert.equal(at.c1.x, at.c2.x);
   assert.equal(at.f.y, 79, 'a single node is centred against the tallest column');
   assert.equal(at.c2.y - at.c1.y, 158);
+});
+
+test('edge kinds and provenance are carried through and named in labels', () => {
+  const graph = functionNeighborhood('r', {
+    in: [{id: 'f', sites: 1, precision: 'heuristic', kinds: ['http'], provenance: 'config.yaml cold.admin_url -> admin'}],
+    out: [{id: 'h', sites: 1, precision: 'precise', kinds: ['route']}]
+  });
+  assert.deepEqual(graph.edges[0], {from: 'f', to: 'r', sites: 1, precision: 'heuristic', kinds: ['http'], provenance: 'config.yaml cold.admin_url -> admin'});
+  assert.equal(edgeLabel(graph.edges[0]), '1 HTTP link');
+  assert.equal(edgeLabel(graph.edges[1]), 'route handler');
+  assert.equal(edgeLabel({sites: 2, kinds: ['call', 'dispatch']}), '2 call sites · dispatch');
+  assert.equal(edgeLabel({sites: 1, kinds: ['remote']}), '1 call site');
+  assert.equal(hopLabel({kinds: ['dispatch']}), 'dispatch');
+  assert.equal(hopLabel({kinds: ['local']}), 'call');
 });

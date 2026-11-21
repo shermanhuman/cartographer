@@ -130,12 +130,18 @@ func TestEmbedGolden(t *testing.T) {
 // editor for its JSON files.
 func fixtureCopy(t *testing.T) (string, func(rel string, f func(m map[string]any))) {
 	t.Helper()
+	return fixtureCopyOf(t, fixture)
+}
+
+// fixtureCopyOf is fixtureCopy for any snapshot directory.
+func fixtureCopyOf(t *testing.T, src string) (string, func(rel string, f func(m map[string]any))) {
+	t.Helper()
 	dir := t.TempDir()
-	err := filepath.WalkDir(fixture, func(p string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(fixture, p)
+		rel, _ := filepath.Rel(src, p)
 		if d.IsDir() {
 			return os.MkdirAll(filepath.Join(dir, rel), 0o755)
 		}
@@ -482,5 +488,53 @@ func TestDiffRemovedCallNotDangling(t *testing.T) {
 	})
 	if strings.Contains(got, "still calls") {
 		t.Errorf("no caller should dangle:\n%s", got)
+	}
+}
+
+// The diff reads the shared edge query: an HTTP link that appears between
+// snapshots is an added edge drawn between the repositories, and a changed
+// handler's blast radius reaches the caller in the other repository through
+// its route.
+func TestDiffShowsCrossRepoHTTPEdge(t *testing.T) {
+	const v2 = "../../testdata/workspace-v2/snapshot"
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	ctx := context.Background()
+	baseDir, eb := fixtureCopyOf(t, v2)
+	eb("facts/sales.json", func(m map[string]any) { delete(m, "http_refs") })
+	eb("facts/admin.json", func(m map[string]any) {
+		m["functions"].([]any)[0].(map[string]any)["fingerprint"] = "check-v0"
+	})
+	base, err := s.Import(ctx, baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headDir, eh := fixtureCopyOf(t, v2)
+	eh("manifest.json", func(m map[string]any) {
+		m["id"] = "snapshot-20261121T000000Z"
+		m["created_at"] = "2026-11-21T00:00:00Z"
+	})
+	head, err := s.Import(ctx, headDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Diff(ctx, s, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"**1** changed · **0** added · **0** removed functions · calls **+1 / −0** · **2** callers affected (1 cross-repo)",
+		"| body | [`AdminWeb.SalesColdController.check/2`]",
+		"- d1 [`POST /api/v1/sales/cold/check`](https://github.com/example/admin/blob/cccccccccccccccccccccccccccccccccccccccc/lib/admin_web/router.ex#L12) → `AdminWeb.SalesColdController.check/2` [precise route]",
+		"→ `POST /api/v1/sales/cold/check` [heuristic http] · ⇄ cross-repo",
+		`["POST /api/v1/sales/cold/check"]`,
+		`-.->|"http heuristic"|`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("diff lacks %q:\n%s", want, got)
+		}
 	}
 }
