@@ -59,3 +59,26 @@ esac
 		t.Errorf("the install's child %d outlived the cancel", pid)
 	}
 }
+
+// An install has its own deadline (F2-P5), separate from the build's: a
+// stalled `mise install` under a context without one still stops.
+func TestStalledInstallStopsAtItsDeadline(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "mise")
+	os.WriteFile(bin, []byte("#!/bin/sh\ncase $1 in\nwhere) exit 1 ;;\ninstall) exec sleep 300 ;;\nesac\n"), 0o755)
+	m := &project.Mise{Bin: bin, Dir: dir, InstallTimeout: time.Second}
+	// No deadline of its own; cancelled only when the test ends, so a
+	// failing run leaves nothing behind.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() { _, err := m.BinPaths(ctx, project.Tool{Name: "slow", Version: "1"}); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "limit") {
+			t.Errorf("a stalled install: %v, want its limit named", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("a stalled install ran past its deadline")
+	}
+}

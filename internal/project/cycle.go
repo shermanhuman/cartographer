@@ -482,7 +482,9 @@ func (r *Runner) resolvePins(ctx context.Context, in *Input) {
 }
 
 // installTools installs every tool the inputs' builds run that mise
-// doesn't have yet, then resolves their pins. A failed install is logged
+// doesn't have yet, then resolves their pins. It runs before the build,
+// so the installs aren't inside the build's limit (BuildTimeout); each has
+// its own (Mise.InstallTimeout). A failed install is logged
 // and kept with its input: the build's tools step fails on it and says
 // why, without running the installer again.
 func (r *Runner) installTools(ctx context.Context, inputs []Input) {

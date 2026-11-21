@@ -123,7 +123,10 @@ Building needs [mise](https://mise.jdx.dev): each extractor runs with the
 language version its repository pins (`mise.toml`, `.mise.toml` or
 `.tool-versions`), and the indexers (scip-go, rust-analyzer), PostgreSQL and
 the Node used for JavaScript inventories are pinned by the cartographer
-release. No other mise configuration is read. Reading a map needs only the
+release. No other mise configuration is read. A tool mise doesn't have yet
+is installed before the build starts, each install with its own 30-minute
+limit, separate from the build's 15-minute limit; a failed install fails
+that set of inputs like any other step. Reading a map needs only the
 binary.
 
 Extractors: Go and Rust through SCIP indexers (`cartographer extract scip`:

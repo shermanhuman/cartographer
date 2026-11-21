@@ -174,11 +174,22 @@ type Mise struct {
 	// Dir is where mise runs (any directory without config).
 	Dir string
 	Log io.Writer
+	// InstallTimeout bounds each `mise install` (default
+	// DefaultInstallTimeout).
+	InstallTimeout time.Duration
 
 	mu       sync.Mutex
 	paths    map[string][]string // spec -> bin paths
 	Installs []string            // specs installed by this Mise
 }
+
+// DefaultInstallTimeout bounds one tool's install (Erlang builds from
+// source on Linux). It is its own deadline: installs run before a
+// project's build (installTools), so they don't count against the build's
+// limit (rebuild.Timeout, 15 minutes), and a stalled one can't hold the
+// project's lock for longer than this. An install the build's own tools
+// step still makes is bounded by both.
+const DefaultInstallTimeout = 30 * time.Minute
 
 func (m *Mise) mise(ctx context.Context, args ...string) (string, error) {
 	return m.miseWith(ctx, nil, args...)
@@ -246,7 +257,17 @@ func (m *Mise) ensure(ctx context.Context, t Tool, before ...string) ([]string, 
 		if m.Log != nil {
 			fmt.Fprintf(m.Log, "mise: installing %s\n", t.Spec())
 		}
-		if _, err := m.miseWith(ctx, before, "install", t.Spec()); err != nil {
+		timeout := m.InstallTimeout
+		if timeout == 0 {
+			timeout = DefaultInstallTimeout
+		}
+		ictx, cancel := context.WithTimeout(ctx, timeout)
+		_, err := m.miseWith(ictx, before, "install", t.Spec())
+		cancel()
+		if err != nil {
+			if errors.Is(ictx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+				err = fmt.Errorf("%w (the install stopped after its %s limit)", err, timeout)
+			}
 			return nil, fmt.Errorf("%s: mise can't provide it: %w", t.Spec(), err)
 		}
 		m.Installs = append(m.Installs, t.Spec())
