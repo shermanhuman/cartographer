@@ -468,3 +468,30 @@ func TestPruneFailureAfterImportIsNotABuildFailure(t *testing.T) {
 		t.Errorf("state after a failed prune: %+v (failed %+v)", st, st.Failed)
 	}
 }
+
+// A prefix pin (elixir 1.19) is recorded as the version mise ran
+// (1.19.5-otp-28) in the manifest, and a newer installed patch changes the
+// inputs digest, so it rebuilds.
+func TestPrefixPinsResolveToTheInstalledVersion(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.push("sales", map[string]string{".tool-versions": "erlang 28.3.1\nelixir 1.19\n"})
+	x.register(sales)
+	r := x.runner()
+	res, err := r.Cycle(context.Background(), "shop", true)
+	if err != nil || !res.Imported {
+		t.Fatalf("%+v %v", res, err)
+	}
+	m, _ := x.s.Manifest(context.Background(), res.Snapshot)
+	if v := m.Tools["sales/elixir"]; v != "1.19.5-otp-28" {
+		t.Errorf("manifest sales/elixir = %q, want 1.19.5-otp-28", v)
+	}
+	x.fakeTool("elixir@1.19.6", "elixir", x.fakeElixir())
+	res, err = r.Cycle(context.Background(), "shop", true)
+	if err != nil || !res.Imported {
+		t.Fatalf("a newer patch of a prefix pin didn't rebuild: %+v %v", res, err)
+	}
+	if m, _ := x.s.Manifest(context.Background(), res.Snapshot); m.Tools["sales/elixir"] != "1.19.6" {
+		t.Errorf("manifest sales/elixir = %q, want 1.19.6", m.Tools["sales/elixir"])
+	}
+}

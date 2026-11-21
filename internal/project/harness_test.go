@@ -103,17 +103,22 @@ func sanitize(spec string) string {
 	return strings.NewReplacer(":", "_", "/", "_", "@", "_").Replace(spec)
 }
 
-// fakeMise answers where, install, bin-paths and env for tools under
-// x.tools (install succeeds only for those under x.tools/available).
+// fakeMise answers where, install, bin-paths, latest --installed and env
+// for tools under x.tools (install succeeds only for those under
+// x.tools/available). A version prefix (elixir@1.19) resolves to the
+// highest installed version it starts (elixir_1.19.6).
 func (x *h) fakeMise() {
 	script := `#!/bin/sh
 echo "$*" >> '` + x.miseLog + `'
 T='` + x.tools + `'
+san() { echo "$1" | tr ':/@' '___'; }
+resolve() { s=$(san "$1"); if [ -d "$T/$s" ]; then echo "$s"; return; fi; m=$(ls -d "$T/$s".* 2>/dev/null | sort -V | tail -1); [ -n "$m" ] && basename "$m"; }
 cmd=$1; shift
 case $cmd in
-where) s=$(echo "$1" | tr ':/@' '___'); [ -d "$T/$s" ] && echo "$T/$s" && exit 0; echo "$1 not installed" >&2; exit 1 ;;
-install) s=$(echo "$1" | tr ':/@' '___'); [ -d "$T/available/$s" ] && mv "$T/available/$s" "$T/$s" && exit 0; echo "no such version $1" >&2; exit 1 ;;
-bin-paths) s=$(echo "$1" | tr ':/@' '___'); echo "$T/$s/bin" ;;
+where) s=$(resolve "$1"); [ -n "$s" ] && echo "$T/$s" && exit 0; echo "$1 not installed" >&2; exit 1 ;;
+install) s=$(san "$1"); [ -d "$T/available/$s" ] && mv "$T/available/$s" "$T/$s" && exit 0; echo "no such version $1" >&2; exit 1 ;;
+bin-paths) s=$(resolve "$1"); echo "$T/$s/bin" ;;
+latest) s=$(resolve "$2"); [ -n "$s" ] && echo "${s#$(san "${2%@*}")_}"; exit 0 ;;
 env) echo '{"FAKE_MISE_ENV":"1"}' ;;
 *) echo "fake mise: $cmd" >&2; exit 2 ;;
 esac

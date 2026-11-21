@@ -154,7 +154,7 @@ func TestMiseFailsClosed(t *testing.T) {
 	b, _ := os.ReadFile(x.miseLog)
 	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 		for _, f := range strings.Fields(line)[1:] {
-			if f != "-J" && f != "erlang@28.3.1" && f != "elixir@1.19.5-otp-28" {
+			if f != "-J" && f != "--installed" && f != "erlang@28.3.1" && f != "elixir@1.19.5-otp-28" {
 				t.Errorf("mise asked about %s: %s", f, line)
 			}
 		}

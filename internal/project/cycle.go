@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -421,12 +422,41 @@ func (r *Runner) fetchAll(ctx context.Context, reg *Registration, st *State, env
 			return nil, &StepError{in.Repo, in.Commit, "tools", err}
 		}
 		in.Pins = pins
+		r.resolvePins(ctx, in)
 	}
 	// The anchor goes first (its contexts_depth applies).
 	sort.SliceStable(inputs, func(i, j int) bool {
 		return strings.EqualFold(inputs[i].Repo, reg.Anchor) && !strings.EqualFold(inputs[j].Repo, reg.Anchor)
 	})
 	return inputs, nil
+}
+
+// resolvePins replaces each repo pin a member's extractors use with the
+// concrete version mise runs for it (installing it if need be), so the
+// inputs digest and the manifest name what actually ran. A tool that can't
+// be resolved keeps its pin as written; the build then fails at its tools
+// step and says why.
+func (r *Runner) resolvePins(ctx context.Context, in *Input) {
+	if r.Mise == nil {
+		return
+	}
+	var pinned []Tool
+	for _, t := range toolsOf(*in) {
+		if in.Pins[t.Name] == t.Version && !slices.ContainsFunc(pinned, func(p Tool) bool { return p.Name == t.Name }) {
+			pinned = append(pinned, t)
+		}
+	}
+	if len(pinned) == 0 {
+		return
+	}
+	res, err := r.Mise.Resolve(ctx, pinned)
+	if err != nil {
+		r.logf("%s: tools: %v", in.Name(), err)
+		return
+	}
+	for _, t := range res {
+		in.Pins[t.Name] = t.Version
+	}
 }
 
 // ResolvePins is the one place a member's language versions come from:
@@ -548,7 +578,9 @@ func (r *Runner) Head(ctx context.Context, from string) (Result, error) {
 		if err != nil {
 			return Result{}, &StepError{spec.Repo, "", "tools", err}
 		}
-		inputs = append(inputs, Input{Member: m, Commit: fresh.Head(ctx, m.Path), Head: true, Settings: ms, Pins: pins})
+		in := Input{Member: m, Commit: fresh.Head(ctx, m.Path), Head: true, Settings: ms, Pins: pins}
+		r.resolvePins(ctx, &in)
+		inputs = append(inputs, in)
 	}
 	sort.SliceStable(inputs, func(i, j int) bool {
 		return strings.EqualFold(inputs[i].Repo, anchor) && !strings.EqualFold(inputs[j].Repo, anchor)

@@ -327,6 +327,36 @@ func (m *Mise) Env(ctx context.Context, tools []Tool) ([]string, error) {
 	return env, nil
 }
 
+// Resolve installs each tool mise doesn't have and returns them at the
+// concrete versions mise runs (go@1.25 -> go@1.25.3), in the same order:
+// the version a prefix pin means depends on what is installed, so the
+// inputs digest and the manifest record the resolved one.
+func (m *Mise) Resolve(ctx context.Context, tools []Tool) ([]Tool, error) {
+	var bins []string
+	got := map[string]string{}
+	for _, t := range installOrder(tools) {
+		p, err := m.ensure(ctx, t, bins...)
+		if err != nil {
+			return nil, err
+		}
+		bins = append(bins, p...)
+		out, err := m.mise(ctx, "latest", "--installed", t.Spec())
+		if err != nil {
+			return nil, err
+		}
+		v := strings.TrimSpace(out)
+		if v == "" || strings.ContainsAny(v, " \n") {
+			return nil, fmt.Errorf("%s: mise names no installed version (%q)", t.Spec(), v)
+		}
+		got[t.Spec()] = v
+	}
+	out := make([]Tool, len(tools))
+	for i, t := range tools {
+		out[i] = Tool{Name: t.Name, Version: got[t.Spec()]}
+	}
+	return out, nil
+}
+
 // BinPaths installs t when mise doesn't have it and returns its bin paths,
 // once each of bins resolves inside them.
 func (m *Mise) BinPaths(ctx context.Context, t Tool, bins ...string) ([]string, error) {
