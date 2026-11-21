@@ -131,7 +131,7 @@ func (im *importer) link() error {
 				continue
 			}
 			for _, b := range bases {
-				if pathMatch(r.Path, strings.TrimRight(b, "/")+ref.Path) {
+				if pathMatch(r.Path, strings.TrimRight(b, "/")+ref.Path, goSubtree(r.Route)) {
 					out = append(out, r)
 					break
 				}
@@ -214,31 +214,46 @@ func subset(sel, labels map[string]string) bool {
 }
 
 // pathMatch matches a route pattern against a request path. In the route,
-// :x, {x} and *x match one segment and {x...} the rest; in the request, a
-// :x segment (an interpolation) matches only a route parameter. The query
-// string is ignored.
-func pathMatch(route, req string) bool {
+// :x and {x} match one segment; *x (Phoenix, axum) and {x...} / {*x} match
+// the rest, which may be empty; and with subtree (a Go pattern ending in
+// /, other than "/" itself, which would match everything) the route is a
+// prefix. In the request, a :x segment (an interpolation) matches only a
+// route parameter. The query string is ignored.
+func pathMatch(route, req string, subtree bool) bool {
 	if i := strings.IndexByte(req, '?'); i >= 0 {
 		req = req[:i]
 	}
 	// Go's {$} anchors the end of a pattern; the segment itself matches nothing.
+	anchored := strings.HasSuffix(route, "{$}")
 	route = strings.TrimSuffix(route, "{$}")
+	subtree = subtree && !anchored && route != "/" && strings.HasSuffix(route, "/")
 	rs := strings.Split(strings.Trim(route, "/"), "/")
 	qs := strings.Split(strings.Trim(req, "/"), "/")
+	if len(qs) == 1 && qs[0] == "" {
+		qs = nil // "/" has no segments
+	}
+	if len(rs) == 1 && rs[0] == "" {
+		rs = nil
+	}
 	for i, seg := range rs {
-		param := strings.HasPrefix(seg, ":") || strings.HasPrefix(seg, "*") || (strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}"))
-		if strings.HasSuffix(seg, "...}") {
-			return i < len(qs)
+		if strings.HasPrefix(seg, "*") || strings.HasPrefix(seg, "{*") || strings.HasSuffix(seg, "...}") {
+			return i <= len(qs)
 		}
 		if i >= len(qs) {
 			return false
 		}
-		if param {
+		if strings.HasPrefix(seg, ":") || (strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}")) {
 			continue
 		}
 		if strings.HasPrefix(qs[i], ":") || seg != qs[i] {
 			return false
 		}
 	}
+	if subtree {
+		return len(qs) >= len(rs)
+	}
 	return len(rs) == len(qs)
 }
+
+// goSubtree reports a Go route, whose pattern ending in / is a subtree.
+func goSubtree(r facts.Route) bool { return strings.HasSuffix(r.File, ".go") }

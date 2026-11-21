@@ -18,9 +18,31 @@ func TestPathMatch(t *testing.T) {
 		{"/a/b", "/a", false},
 		{"/a", "/a/b", false},
 		{"/a/b", "/a/b?x=1", true},
+		{"/files/*rest", "/files/a/b", true}, // Phoenix and axum globs take the rest
+		{"/files/*rest", "/files", true},
+		{"/files/{*rest}", "/files/a/b", true}, // axum 0.8
+		{"/files/{rest...}", "/files", true},   // Go: the rest may be empty
+		{"/files/*rest", "/other/a", false},
+		{"/", "/", true},
 	} {
-		if got := pathMatch(c.route, c.req); got != c.ok {
+		if got := pathMatch(c.route, c.req, false); got != c.ok {
 			t.Errorf("pathMatch(%q, %q) = %v, want %v", c.route, c.req, got, c.ok)
+		}
+	}
+	// A Go pattern ending in / is a subtree; "/" alone stays exact.
+	for _, c := range []struct {
+		route, req string
+		ok         bool
+	}{
+		{"/static/", "/static/app.js", true},
+		{"/static/", "/static/css/a.css", true},
+		{"/static/", "/static", true},
+		{"/static/", "/other/x", false},
+		{"/", "/anything", false},
+		{"/static/{$}", "/static/x", false},
+	} {
+		if got := pathMatch(c.route, c.req, true); got != c.ok {
+			t.Errorf("Go pathMatch(%q, %q) = %v, want %v", c.route, c.req, got, c.ok)
 		}
 	}
 }

@@ -124,8 +124,10 @@ documents are merged. A link is never `precise`:
   route;
 - otherwise no link.
 
-Path matching: a route's `:x`, `{x}` and `*x` segments match any one segment,
-`{x...}` the rest, and Go's `{$}` anchors the end; a reference's `:pN`
+Path matching: a route's `:x` and `{x}` segments match any one segment;
+`*x` (Phoenix, axum), `{*x}` and `{x...}` match the rest, which may be empty;
+a Go pattern ending in `/` (other than `/` itself) matches its subtree; and
+Go's `{$}` anchors the end; a reference's `:pN`
 segment (any `:` segment of a reference) matches only a route parameter. The query string is ignored. Each
 link records its provenance (`config.yaml cold.admin_url -> breakdown-admin`).
 
