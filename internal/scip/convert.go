@@ -105,7 +105,7 @@ func Convert(opt Options, indexes []Index) (*facts.Doc, error) {
 	tool := indexes[0].Index.GetMetadata().GetToolInfo()
 	c.out = &facts.Doc{
 		FactsVersion: facts.Version,
-		Producer:     facts.Producer{Name: tool.GetName(), Version: tool.GetVersion(), CallPrecision: facts.Precise},
+		Producer:     facts.Producer{Name: tool.GetName(), Version: toolVersion(tool.GetVersion()), CallPrecision: facts.Precise},
 		Repo:         opt.Repo,
 		Revision:     opt.Revision,
 	}
@@ -767,4 +767,15 @@ func (c *conv) finish() {
 		return c.notes[i].File < c.notes[j].File
 	})
 	c.out.Notes = slices.Clip(c.notes)
+}
+
+// toolVersion keeps the first word of an indexer's version: builds of the
+// same release print different suffixes on different platforms
+// ("0.3.3121-standalone" on Linux, "0.3.3121-standalone (946b80a756
+// 2026-11-15)" on macOS), and the map id must not depend on that.
+func toolVersion(v string) string {
+	if f := strings.Fields(v); len(f) > 0 {
+		return f[0]
+	}
+	return v
 }
