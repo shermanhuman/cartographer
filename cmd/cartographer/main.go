@@ -149,7 +149,7 @@ type common struct {
 	open                                        bool
 	pdf, svg, page, snippet                     bool
 	around, context, table, annotation, outFile string
-	lang, repo, root, revision                  string
+	lang, repo, root, revision, cargoTargetDir  string
 	rustBuildScripts                            bool
 	yes, head                                   bool
 	from, projectName, anchor                   string
@@ -219,6 +219,7 @@ func flags(name string, c *common) *flag.FlagSet {
 	fs.StringVar(&c.root, "root", ".", "extract: repository root")
 	fs.StringVar(&c.revision, "revision", "", "extract: revision the root is at")
 	fs.BoolVar(&c.rustBuildScripts, "rust-build-scripts", true, "extract: run Rust build scripts and proc macros")
+	fs.StringVar(&c.cargoTargetDir, "cargo-target-dir", "", "extract: cargo's target directory for Rust (default: a throwaway one)")
 	fs.BoolVar(&c.yes, "yes", false, "project add: register without asking")
 	fs.BoolVar(&c.head, "head", false, "refresh: build the working copies as they are (with --from and its own --db)")
 	fs.StringVar(&c.from, "from", "", "refresh --head: a member checkout of the project to build")
@@ -443,6 +444,7 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 			d, err = scip.Extract(ctx, scip.RunOptions{
 				Options:          scip.Options{Lang: c.lang, Repo: c.repo, Root: c.root, Revision: c.revision},
 				RustBuildScripts: c.rustBuildScripts,
+				CargoTargetDir:   c.cargoTargetDir,
 			})
 		case len(pos) == 1 && pos[0] == "kubernetes":
 			d, err = extract.Kubernetes(c.repo, c.root, c.revision)

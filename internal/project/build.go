@@ -289,7 +289,7 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 				case "go", "rust":
 					argv = []string{o.Self, "extract", "scip", "--lang", ex, "--repo", name, "--root", t.root, "--revision", t.Commit}
 					if ex == "rust" {
-						argv = append(argv, fmt.Sprintf("--rust-build-scripts=%t", t.Settings.Rust.BuildScriptsOn()))
+						argv = append(argv, fmt.Sprintf("--rust-build-scripts=%t", t.Settings.Rust.BuildScriptsOn()), "--cargo-target-dir", CargoTargetDir(o.CacheDir, t.Repo))
 						if err := RustTargetAdd(ctx, env, o.Work); err != nil {
 							return nil, &StepError{t.Repo, t.Commit, "tools", err}
 						}
@@ -392,6 +392,13 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 	}
 	logf("snapshot %s: %d facts documents", m.ID, len(m.Facts))
 	return m, nil
+}
+
+// CargoTargetDir is a Rust member's cargo target directory: per repo, under
+// the cache, kept between builds so build scripts and proc macros don't
+// all run again (row 17).
+func CargoTargetDir(cacheDir, repo string) string {
+	return filepath.Join(cacheDir, "cargo-target", filepath.FromSlash(strings.ToLower(repo)))
 }
 
 // dropEmpty removes a --flag whose value is "" (an optional input).

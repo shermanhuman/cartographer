@@ -364,3 +364,42 @@ func TestCancelledCycleIsNotHeld(t *testing.T) {
 		t.Errorf("header: %s", r.header)
 	}
 }
+
+// A Rust member indexes with a cargo target directory of its own under the
+// cache, the same one at every build, so build script and proc-macro
+// output is kept between builds.
+func TestRustMemberKeepsItsCargoTargetDir(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.fakeTool("rust@1.99.1", "cargo", "#!/bin/sh\nexit 0\n")
+	x.fakeTool("rust@1.99.1", "rustup", "#!/bin/sh\nexit 0\n")
+	x.fakeTool(project.RustAnalyzer.Spec(), "rust-analyzer", "#!/bin/sh\nexit 0\n")
+	argv := filepath.Join(x.dir, "self.argv")
+	self := filepath.Join(x.dir, "cartographer")
+	os.WriteFile(self, []byte(`#!/bin/sh
+echo "$*" >> '`+argv+`'
+while [ $# -gt 0 ]; do case $1 in --repo) repo=$2; shift 2 ;; --revision) rev=$2; shift 2 ;; *) shift ;; esac; done
+printf '{"facts_version":2,"producer":{"name":"fake-scip","version":"1"},"repo":"%s","revision":"%s"}\n' "$repo" "$rev"
+`), 0o755)
+	x.repo("rs", map[string]string{".cartographer/repo.toml": settings("shop", "acme/admin", `extract = ["rust"]`), "mise.toml": "[tools]\nrust = \"1.99.1\"\n", "Cargo.toml": "[package]\nname = \"rs\"\n"})
+	x.push("admin", map[string]string{".cartographer/repo.toml": settings("shop", "", `members = [{repo = "acme/admin"}, {repo = "acme/sales"}, {repo = "acme/infra"}, {repo = "acme/rs"}]`, `extract = ["elixir"]`)})
+	x.register(sales)
+	r := x.runner()
+	r.Self = self
+	for range 2 {
+		if res, err := r.Cycle(context.Background(), "shop", true); err != nil || !res.Imported {
+			t.Fatalf("%+v %v", res, err)
+		}
+		x.push("rs", map[string]string{"src/lib.rs": "pub fn f() {}\n" + time.Now().String()})
+	}
+	want := "--cargo-target-dir " + filepath.Join(x.cache, "cargo-target", "acme", "rs")
+	runs := strings.Split(strings.TrimSpace(func() string { b, _ := os.ReadFile(argv); return string(b) }()), "\n")
+	if len(runs) != 2 {
+		t.Fatalf("extract scip ran %d times: %q", len(runs), runs)
+	}
+	for _, l := range runs {
+		if !strings.Contains(l, want) {
+			t.Errorf("extract scip %q lacks %q", l, want)
+		}
+	}
+}

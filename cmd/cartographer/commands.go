@@ -32,7 +32,7 @@ var commandFlags = map[string]string{
 	"mapped": "db no-pull", "hook": "db no-pull", "mcp": "db snapshot no-pull no-rebuild",
 	"init": "", "build": "db workspace out plugins import local background fetch fetch-only ref", "publish": "workspace", "review": "db snapshot workspace",
 	"validate-facts": "", "plugins-dir": "", "version": "",
-	"extract": "lang repo root revision rust-build-scripts",
+	"extract": "lang repo root revision rust-build-scripts cargo-target-dir",
 	"project": "db plugins yes project anchor", "refresh": "db plugins head from background",
 }
 
