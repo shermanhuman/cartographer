@@ -163,6 +163,9 @@ func refreshOne(ctx context.Context, w io.Writer, c *common, s *store.Store, nam
 	}()
 	r, err := newRunner(c, s, nil)
 	if err != nil {
+		if background {
+			return project.Result{}, startFailed(sd, name, err)
+		}
 		return project.Result{}, err
 	}
 	r.Log = &lazyWriter{open: open}
@@ -175,6 +178,34 @@ func refreshOne(ctx context.Context, w io.Writer, c *common, s *store.Store, nam
 		return res, fmt.Errorf("a refresh of %s is already running (log: %s)", name, project.LogPath(sd, name))
 	}
 	return res, err
+}
+
+// startFailed records an automatic refresh that failed before its cycle
+// could start (the plugins, the store): the detached child's stderr goes
+// nowhere, so the error goes to the project's log, and the state gets the
+// attempt and a "start" failure, which the header shows and which holds
+// the next automatic attempt to the cadence. It returns err.
+func startFailed(sd, name string, err error) error {
+	if _, lerr := project.Load(sd, name); lerr != nil {
+		return err // not registered: nothing to record against
+	}
+	os.MkdirAll(project.Dir(sd, name), 0o755)
+	logPath := project.LogPath(sd, name)
+	if f, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); ferr == nil {
+		fmt.Fprintf(f, "cartographer: the refresh could not start: %v\n", err)
+		f.Close()
+	}
+	st, serr := project.LoadState(sd, name)
+	if serr != nil {
+		st = &project.State{Fetch: map[string]project.FetchResult{}}
+	}
+	now := time.Now().UTC()
+	st.Attempt = now
+	st.Failed = &project.Failure{At: now, Step: "start", Message: err.Error(), Log: logPath}
+	if serr := project.SaveState(sd, name, st); serr != nil {
+		return errors.Join(err, serr)
+	}
+	return err
 }
 
 // lazyWriter opens the log on the first write (under the lock).
@@ -199,6 +230,9 @@ func refreshCmd(ctx context.Context, w io.Writer, c *common, pos []string, dbSet
 	defer stop()
 	s, err := openStore(c)
 	if err != nil {
+		if c.background && len(pos) == 1 {
+			return startFailed(project.StateDir(), pos[0], err)
+		}
 		return err
 	}
 	defer s.Close()

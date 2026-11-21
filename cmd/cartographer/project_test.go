@@ -201,3 +201,27 @@ func TestServeStatusOfProjectMap(t *testing.T) {
 		t.Errorf("a changed file: %v", st)
 	}
 }
+
+// An automatic refresh that can't start (here: its plugins are missing)
+// leaves the error in the project's log and an attempt with a "start"
+// failure in its state, so commands don't respawn it at once.
+func TestBackgroundRefreshStartFailureIsRecorded(t *testing.T) {
+	co, _ := cliProject(t)
+	db := filepath.Join(t.TempDir(), "carto.db")
+	cli(t, db, "project", "add", co, "--yes")
+	var buf bytes.Buffer
+	if err := run(context.Background(), []string{"refresh", "solo", "--background", "--plugins", filepath.Join(t.TempDir(), "missing"), "--db", db}, &buf); err == nil {
+		t.Fatal("refresh with missing plugins succeeded")
+	}
+	sd := project.StateDir()
+	st, err := project.LoadState(sd, "solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Attempt.IsZero() || st.Failed == nil || st.Failed.Step != "start" || st.Due(time.Now()) {
+		t.Errorf("state %+v (failed %+v): want an attempt and a start failure", st, st.Failed)
+	}
+	if b, _ := os.ReadFile(project.LogPath(sd, "solo")); !strings.Contains(string(b), "the refresh could not start") {
+		t.Errorf("log:\n%s", b)
+	}
+}
