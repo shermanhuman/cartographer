@@ -265,6 +265,20 @@ func deleteSnapshot(ctx context.Context, tx *sql.Tx, id string) error {
 	return err
 }
 
+// Relabel gives workspace's snapshots of source from the source to
+// instead, in the source column and the stored manifest ("published" is
+// stored as no source, as an imported manifest has). It returns how many
+// changed.
+func (s *Store) Relabel(ctx context.Context, workspace, from, to string) (int64, error) {
+	res, err := s.DB.ExecContext(ctx, `UPDATE snapshots SET source = ?3,
+		manifest = CASE WHEN ?3 = 'published' THEN json_remove(manifest, '$.source') ELSE json_set(manifest, '$.source', ?3) END
+		WHERE workspace = ?1 AND source = ?2`, workspace, from, to)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // Prune keeps the newest keep snapshots of each workspace and deletes the
 // rest, so a busy workspace never evicts a quiet one's snapshots.
 func (s *Store) Prune(ctx context.Context, keep int) error {

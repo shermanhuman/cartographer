@@ -358,10 +358,24 @@ func projectCmd(ctx context.Context, w io.Writer, c *common, pos []string) error
 		if len(pos) < 2 {
 			return usage
 		}
-		if err := project.Remove(sd, pos[1]); err != nil {
+		reg, err := project.Load(sd, pos[1])
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("project %s is not registered", pos[1])
+		} else if err != nil {
 			return err
 		}
-		fmt.Fprintf(w, "removed project %s; its maps stay in the store until pruned, and refs/cartographer/* stay in its checkouts\n", pos[1])
+		// Its maps stay, relabelled published, in the store it built into.
+		var s *store.Store
+		if _, err := os.Stat(reg.Store); reg.Store != "" && err == nil {
+			if s, err = store.Open(reg.Store); err != nil {
+				return err
+			}
+			defer s.Close()
+		}
+		if err := project.Remove(ctx, sd, pos[1], s); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "removed project %s; its maps stay in %s, labelled published, until pruned, and refs/cartographer/* stay in its checkouts\n", pos[1], reg.Store)
 		return nil
 	case "init":
 		if len(pos) < 2 {

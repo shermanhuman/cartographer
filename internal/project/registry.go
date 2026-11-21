@@ -1,6 +1,7 @@
 package project
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/shermanhuman/cartographer/internal/rebuild"
+	"github.com/shermanhuman/cartographer/internal/store"
 	"github.com/shermanhuman/cartographer/internal/workspace"
 )
 
@@ -138,15 +140,22 @@ func Save(stateDir string, r *Registration) error {
 	return workspace.WriteAtomic(regPath(stateDir, r.Name), append(b, '\n'))
 }
 
-// Remove deletes a registration and the project's state directory. Its
-// refs/cartographer/* refs stay in the checkouts (harmless; `git update-ref
-// -d` removes them).
-func Remove(stateDir, name string) error {
+// Remove deletes a registration and the project's state directory, and
+// relabels the project's main maps in s (its store; nil skips this)
+// published, so a legacy workspace of the same name is chosen and rebuilt by
+// the legacy rules again. Its refs/cartographer/* refs stay in the
+// checkouts (harmless; `git update-ref -d` removes them).
+func Remove(ctx context.Context, stateDir, name string, s *store.Store) error {
 	if _, err := Load(stateDir, name); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("project %s is not registered", name)
 		}
 		return err
+	}
+	if s != nil {
+		if _, err := s.Relabel(ctx, name, "main", "published"); err != nil {
+			return fmt.Errorf("relabel project %s's maps: %w", name, err)
+		}
 	}
 	if err := os.Remove(regPath(stateDir, name)); err != nil {
 		return err

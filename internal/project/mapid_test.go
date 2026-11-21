@@ -222,14 +222,13 @@ func TestSchemaCachedRunsOnce(t *testing.T) {
 }
 
 // legacySnapshot imports a snapshot of workspace "shop" that isn't a
-// project build: source "" (published) or a legacy build, created later
-// than any main one, mapping sales at rev.
-func (x *h) legacySnapshot(source, rev string) string {
+// project build: source "" (published, as a legacy build is) or "head",
+// created at the given time, mapping sales at rev.
+func (x *h) legacySnapshot(source, rev string, at time.Time) string {
 	x.t.Helper()
 	dir := x.t.TempDir()
-	sec := map[string]string{"": "00", "head": "01"}[source]
 	m := map[string]any{
-		"snapshot_format": 2, "id": "snapshot-20261125T0000" + sec + "Z-8d9001d3", "created_at": "2026-11-25T00:00:" + sec + "Z", "workspace": "shop",
+		"snapshot_format": 2, "id": "snapshot-" + at.UTC().Format("20060102T150405Z") + "-8d9001d3", "created_at": at.UTC().Format(time.RFC3339), "workspace": "shop",
 		"repos": []map[string]string{{"name": "sales", "url": "https://github.com/acme/sales", "revision": rev}},
 		"facts": []string{"facts/sales.json"},
 	}
@@ -248,8 +247,11 @@ func (x *h) legacySnapshot(source, rev string) string {
 }
 
 // The Mac case: a legacy local_workspaces entry and a project of the same
-// name. The project's main snapshots are chosen and the legacy one doesn't
-// build; after project remove the legacy one does.
+// name, the legacy map older than the project's. The project's main
+// snapshots are chosen and the legacy one doesn't build. project remove
+// relabels the project's maps published, so the legacy rules apply again:
+// the newest map of the name answers, and the legacy workspace rebuilds
+// from a checkout ahead of it.
 func TestLegacyWorkspaceOfSameNameIgnored(t *testing.T) {
 	x := newH(t)
 	_, sales, _ := x.world()
@@ -265,7 +267,8 @@ func TestLegacyWorkspaceOfSameNameIgnored(t *testing.T) {
 	if err := userconfig.AddLocalWorkspace(ws); err != nil {
 		t.Fatal(err)
 	}
-	legacy := x.legacySnapshot("", first)
+	// The real order: the legacy map (Nov 10) is older than the project's.
+	legacy := x.legacySnapshot("", first, time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC))
 	x.register(sales)
 	if _, err := x.runner().Cycle(context.Background(), "shop", true); err != nil {
 		t.Fatal(err)
@@ -291,11 +294,20 @@ func TestLegacyWorkspaceOfSameNameIgnored(t *testing.T) {
 	if id, n := command(); id != main.ID || n != 0 {
 		t.Fatalf("chose %s (want main %s), legacy builds %d", id, main.ID, n)
 	}
-	if err := project.Remove(x.state, "shop"); err != nil {
+	if err := project.Remove(context.Background(), x.state, "shop", x.s); err != nil {
 		t.Fatal(err)
 	}
-	if id, n := command(); id != legacy || n != 1 {
-		t.Fatalf("after project remove: chose %s (want legacy %s), legacy builds %d", id, legacy, n)
+	if _, ok, _ := x.s.Newest(context.Background(), "shop", "main"); ok {
+		t.Error("project remove left main snapshots of shop")
+	}
+	if si, _, _ := x.s.Info(context.Background(), main.ID); si.Source != "published" {
+		t.Errorf("the project's map is labelled %q after remove, want published", si.Source)
+	}
+	if si, _, _ := x.s.Info(context.Background(), legacy); si.Source != "published" {
+		t.Errorf("the legacy map is labelled %q", si.Source)
+	}
+	if id, n := command(); id != main.ID || n != 1 {
+		t.Fatalf("after project remove: chose %s (want the newest map %s), legacy builds %d (want 1)", id, main.ID, n)
 	}
 }
 
@@ -308,8 +320,8 @@ func TestPublishedSnapshotOfProjectNeverChosen(t *testing.T) {
 	if _, err := x.runner().Cycle(context.Background(), "shop", true); err != nil {
 		t.Fatal(err)
 	}
-	x.legacySnapshot("", git(t, sales, "rev-parse", "HEAD"))
-	x.legacySnapshot("head", git(t, sales, "rev-parse", "HEAD"))
+	x.legacySnapshot("", git(t, sales, "rev-parse", "HEAD"), time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC))
+	x.legacySnapshot("head", git(t, sales, "rev-parse", "HEAD"), time.Date(2026, 11, 25, 0, 0, 1, 0, time.UTC))
 	if x.snapshots() != 3 {
 		t.Fatalf("%d snapshots", x.snapshots())
 	}
@@ -368,7 +380,7 @@ func TestProjectBuildsOnlyIntoItsStore(t *testing.T) {
 	}
 
 	// The project's own store, holding only a head snapshot of its name.
-	x.legacySnapshot("head", git(t, sales, "rev-parse", "HEAD"))
+	x.legacySnapshot("head", git(t, sales, "rev-parse", "HEAD"), time.Date(2026, 11, 25, 0, 0, 1, 0, time.UTC))
 	own := &session.Session{Store: x.s, DB: x.db, Cwd: sales, StateDir: x.state, Now: x.clock}
 	var first *session.ErrFirstBuild
 	if id, err := own.Choose(context.Background()); !errors.As(err, &first) {
