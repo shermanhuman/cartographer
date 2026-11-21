@@ -72,14 +72,23 @@ func goArity(ft *ast.FuncType) int {
 // goPackageDir is the directory part of a Go function's id and its
 // module's id: the package directory; "." for the module root package
 // (whose function ids read ./<Type>.<name>, which no directory can start
-// with); and <dir>_test for an external test package (package p_test beside
-// package p), so its helpers don't merge with the package's own.
+// with); and, for an external test package (package p_test beside package
+// p), the directory with [test] ("app[test]"), so its helpers merge neither
+// with the package's own nor with those of a real package directory named
+// app_test (a nested module's): no package directory has "[" in it (the go
+// tool rejects it in an import path).
 func (c *conv) goPackageDir(d *doc, g *goFile) string {
 	dir := path.Dir(d.path)
 	if name := g.file.Name.Name; strings.HasSuffix(d.path, "_test.go") && strings.HasSuffix(name, "_test") && !c.goDirPackages()[dir][name] {
-		return dir + "_test"
+		return dir + "[test]"
 	}
 	return dir
+}
+
+// goNamespace is a Go package's namespace (contexts): its directory's
+// elements, an external test package's being its package's.
+func goNamespace(dir string) []string {
+	return strings.Split(strings.TrimSuffix(dir, "[test]"), "/")
 }
 
 // goDirPackages is, per directory, the package names its non-test files
@@ -131,7 +140,7 @@ func (c *conv) goName(f *fn) error {
 		prefix = "./"
 	}
 	f.f.ID = fmt.Sprintf("%s%s%s/%d", prefix, owner, f.f.Name, f.f.Arity)
-	f.key = moduleKey{id: dir, name: dir, namespace: strings.Split(dir, "/")}
+	f.key = moduleKey{id: dir, name: dir, namespace: goNamespace(dir)}
 	return nil
 }
 

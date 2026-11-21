@@ -220,13 +220,15 @@ func TestConvertGo(t *testing.T) {
 		}
 	}
 	// The root package's ids start with ./ (its config.Load is not
-	// config/'s Load), and package app_test's helper is not app's.
-	for _, id := range []string{"fixture:./config.Load/0", "fixture:./Routes/1", "fixture:config.Load/0", app + "helper/0", "fixture:app_test.helper/0", "fixture:app_test.TestExternal/1"} {
+	// config/'s Load). An external test package is its directory with
+	// [test]: app's (package app_test) helper is not app's.
+	for _, id := range []string{"fixture:./config.Load/0", "fixture:./Routes/1", "fixture:config.Load/0", app + "helper/0",
+		"fixture:app[test].helper/0", "fixture:app[test].TestExternal/1"} {
 		if !slices.Contains(ids, id) {
 			t.Errorf("missing %s", id)
 		}
 	}
-	wantEdges(t, d, "fixture:app_test.TestExternal/1", 9, "fixture:app_test.helper/0 call precise")
+	wantEdges(t, d, "fixture:app[test].TestExternal/1", 9, "fixture:app[test].helper/0 call precise")
 	for _, n := range d.Notes {
 		if n.Kind == "duplicate_definition" {
 			t.Errorf("note: %+v", n)
@@ -568,6 +570,45 @@ func TestCfgTest(t *testing.T) {
 	} {
 		if got := cfgTest(attr); got != want {
 			t.Errorf("cfgTest(%s) = %v, want %v", attr, got, want)
+		}
+	}
+}
+
+// A nested Go module in a directory named like app's external test package
+// (app_test/, its own go.mod, beside app/'s package app_test): both are
+// indexed, and their ids stay apart (A-M9). The two committed indexes
+// stand in for the two modules.
+func TestConvertGoNestedModuleNamedLikeATestPackage(t *testing.T) {
+	root := t.TempDir()
+	if err := os.CopyFS(root, os.DirFS(goFixture.dir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(filepath.Join(root, "app_test"), os.DirFS(statsFixture.dir)); err != nil {
+		t.Fatal(err)
+	}
+	var idx []Index
+	for _, m := range []struct{ dir, fx string }{{".", goFixture.dir}, {"app_test", statsFixture.dir}} {
+		ix, err := ReadIndex(filepath.Join(m.fx, "index.scip"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx = append(idx, Index{Dir: m.dir, Index: ix})
+	}
+	d, err := Convert(Options{Lang: Go, Repo: "fixture", Root: root, Revision: "r1"}, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := fnIDs(d)
+	for _, id := range []string{"fixture:app[test].helper/0", "fixture:app[test].TestExternal/1", "fixture:app_test.helper/0", "fixture:app_test.Use/0"} {
+		if !slices.Contains(ids, id) {
+			t.Errorf("missing %s", id)
+		}
+	}
+	wantEdges(t, d, "fixture:app[test].TestExternal/1", 9, "fixture:app[test].helper/0 call precise")
+	wantEdges(t, d, "fixture:app_test.Use/0", 15, "fixture:app_test.helper/0 call precise")
+	for _, n := range d.Notes {
+		if n.Kind == "duplicate_definition" {
+			t.Errorf("note: %+v", n)
 		}
 	}
 }

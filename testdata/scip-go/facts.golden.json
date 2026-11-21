@@ -76,10 +76,10 @@
       "language": "go"
     },
     {
-      "id": "fixture:app_test",
-      "name": "app_test",
+      "id": "fixture:app[test]",
+      "name": "app[test]",
       "namespace": [
-        "app_test"
+        "app"
       ],
       "file": "app/external_test.go",
       "line": 7,
@@ -394,8 +394,8 @@
       "fingerprint": "8a72a539df408be9"
     },
     {
-      "id": "fixture:app_test.TestExternal/1",
-      "module": "fixture:app_test",
+      "id": "fixture:app[test].TestExternal/1",
+      "module": "fixture:app[test]",
       "name": "TestExternal",
       "arity": 1,
       "min_arity": 1,
@@ -405,8 +405,8 @@
       "fingerprint": "a2d1fdc1069fddba"
     },
     {
-      "id": "fixture:app_test.helper/0",
-      "module": "fixture:app_test",
+      "id": "fixture:app[test].helper/0",
+      "module": "fixture:app[test]",
       "name": "helper",
       "arity": 0,
       "min_arity": 0,
@@ -507,8 +507,8 @@
       "precision": "precise"
     },
     {
-      "from": "fixture:app_test.TestExternal/1",
-      "to": "fixture:app_test.helper/0",
+      "from": "fixture:app[test].TestExternal/1",
+      "to": "fixture:app[test].helper/0",
       "kind": "call",
       "file": "app/external_test.go",
       "line": 9,
