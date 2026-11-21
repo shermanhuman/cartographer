@@ -84,6 +84,7 @@ cartographer status                       # map id, freshness, coverage, your wo
 cartographer refresh                      # fetch and rebuild now
 cartographer project init ~/src/my-worker # a starter .cartographer/repo.toml, plus the git commands to commit it
 cartographer refresh --head --from ~/src/my-app --db /tmp/try.db   # try uncommitted settings in a scratch store
+cartographer status --db /tmp/try.db      # queries of that map need the same --db
 ```
 
 `project add` reads the member's settings from its fetched default branch,
@@ -93,11 +94,14 @@ default `~/github`, whose remote is that GitHub repository), shows what it
 will trust and asks. Registering trusts the members' default branches:
 rebuilds run the schema step, rust-analyzer's build scripts and the
 commands members declare. A member with no checkout gets its `git clone`
-command; nothing is cloned for you.
+command; nothing is cloned for you. The project's maps are built into the
+store `project add` ran against (its `--db`) and no other; `refresh --head`
+refuses that store and the default one.
 
-From then on the map keeps itself current. When you use cartographer (any
-command, an MCP tool call, the web map loading its status) and the last fetch
-is over 15 minutes old, a background rebuild fetches each member's default
+From then on the map keeps itself current. When you use cartographer (a query
+or `status`, an MCP tool call, the web map loading its status; not `project`,
+`refresh`, `snapshots`, `review`, `hook` or `mapped`) against the project's
+store and the last fetch is over 15 minutes old, a background rebuild fetches each member's default
 branch into `refs/cartographer/<branch>` (your branches, files, `origin/*`
 and tags are never touched), and rebuilds when anything moved. The query in
 hand answers from the current map; the next one gets the new map. Each map
@@ -111,8 +115,8 @@ map 7f3c9a1e · main as fetched 6 min ago · your checkout: fix/dialer, 2 ahead,
 If anything fails (a member missing, settings that don't parse, an
 extractor error), nothing is imported: the previous map keeps answering and
 the header names the repository, the step and the log. A failed set of
-inputs is retried after six hours, at once when a new commit arrives, or by
-`cartographer refresh`. Turn automatic rebuilds off with `--no-rebuild`,
+inputs is retried after six hours, when a fetch finds a new commit (the next
+fetch, up to 15 minutes after the push), or by `cartographer refresh`. Turn automatic rebuilds off with `--no-rebuild`,
 `CARTOGRAPHER_NO_REBUILD=1`, or `auto_rebuild = false` in the user config.
 
 Building needs [mise](https://mise.jdx.dev): each extractor runs with the
