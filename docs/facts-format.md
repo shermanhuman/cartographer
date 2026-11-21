@@ -87,8 +87,10 @@ dropped from type arguments (`Prepared<'a>` is `Prepared`).
 (`[impl Service]` for `impl a::Service for A`). rust-analyzer gives
 `impl v1::Service for Both` and `impl v2::Service for Both` one symbol, so
 when one type implements two same-named traits, one of the two impls'
-same-named functions is lost. Calls still dispatch by the trait itself, not
-its short name.
+same-named functions is lost. Calls dispatch by the trait itself, not its
+short name, wherever the impl's header names a trait the index saw. An impl
+written by a macro (no trait in its header) falls back to the short name,
+and only while one trait in the repository has that name.
 
 Go and Rust ids share one directory namespace and carry no language: a
 directory holding both a Go package and a Cargo package isn't supported.

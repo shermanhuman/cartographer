@@ -619,6 +619,13 @@ func implTraitSpan(src []byte, head, open int) (start, end int, ok bool) {
 				j++
 			}
 			w := string(src[i:j])
+			if w == "r" && j+1 < open && src[j] == '#' && isIdentStart(src[j+1]) {
+				// A raw identifier (r#for) is a name, never a keyword.
+				for j++; j < open && isIdent(src[j]); j++ {
+				}
+				i = j
+				continue
+			}
 			switch {
 			case w == "impl" && start == 0 && depth == 0:
 				for j < open && (src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '\r') {

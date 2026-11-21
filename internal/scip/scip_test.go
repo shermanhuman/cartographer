@@ -485,6 +485,7 @@ func TestImplTraitSpan(t *testing.T) {
 		"/// impl x for y\n#[cfg(all())]\nunsafe impl a::S<T> for X ":  "a::S<T> ",
 		"impl<F: Fn() -> u8, G: for<'a> Fn(&'a u8)> a::S for W<F, G> ": "a::S ",
 		"impl a::S<Box<dyn for<'a> Fn(&'a u8)>> for X where T: b::S ":  "a::S<Box<dyn for<'a> Fn(&'a u8)>> ",
+		"impl<T: b::Service> r#for::Service for W4<T> ":                "r#for::Service ",
 		"impl /* for */ a::S for X ":                                   "/* for */ a::S ",
 		"impl<T> X<T> ":                                                "",
 	} {
