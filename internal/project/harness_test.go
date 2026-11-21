@@ -145,6 +145,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ -f "$root/FAIL" ]; then echo "boom in $repo" >&2; exit 3; fi
+if [ -f '` + filepath.Join(x.dir, "hang") + `' ]; then touch '` + filepath.Join(x.dir, "hanging") + `'; exec sleep 60; fi
 mod=$(cat "$root/module.txt" 2>/dev/null || echo Mod)
 printf '{"facts_version":2,"producer":{"name":"fake-elixir","version":"1"},"repo":"%s","revision":"%s","files":[{"path":"lib/m.ex","language":"elixir","category":"source"}],"modules":[{"id":"%s:%s","name":"%s","file":"lib/m.ex"}]}\n' "$repo" "$rev" "$repo" "$mod" "$mod"
 `

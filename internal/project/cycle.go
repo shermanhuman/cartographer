@@ -83,8 +83,13 @@ func (r *Runner) Cycle(ctx context.Context, name string, force bool) (Result, er
 	return res, err
 }
 
-// fail records a failure and returns it.
-func (r *Runner) fail(name string, st *State, digest string, err error) error {
+// fail records a failure and returns it. A cycle stopped by its caller
+// (the session ended, Ctrl-C) is not a failure: nothing is recorded, so its
+// inputs aren't held and the next cycle after the cadence tries them.
+func (r *Runner) fail(ctx context.Context, name string, st *State, digest string, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
 	f := &Failure{At: r.now().UTC(), Digest: digest, Step: "build", Message: err.Error(), Log: LogPath(r.StateDir, name)}
 	var se *StepError
 	if errors.As(err, &se) {
@@ -116,18 +121,18 @@ func (r *Runner) cycle(ctx context.Context, name string, force bool) (Result, er
 	}
 	reg, err := Load(r.StateDir, name)
 	if err != nil {
-		return Result{}, r.fail(name, st, "", err)
+		return Result{}, r.fail(ctx, name, st, "", err)
 	}
 	env, err := gitEnv(r.StateDir)
 	if err != nil {
-		return Result{}, r.fail(name, st, "", err)
+		return Result{}, r.fail(ctx, name, st, "", err)
 	}
 	inputs, err := r.fetchAll(ctx, reg, st, env)
 	if serr := SaveState(r.StateDir, name, st); serr != nil && err == nil {
 		err = serr
 	}
 	if err != nil {
-		return Result{}, r.fail(name, st, "", err)
+		return Result{}, r.fail(ctx, name, st, "", err)
 	}
 	digest := r.digest(inputs)
 	if have, ok, err := r.Store.Newest(ctx, name, "main"); err != nil {
@@ -142,7 +147,7 @@ func (r *Runner) cycle(ctx context.Context, name string, force bool) (Result, er
 	}
 	snap, err := r.buildImport(ctx, name, "main", inputs, digest, now)
 	if err != nil {
-		return Result{}, r.fail(name, st, digest, err)
+		return Result{}, r.fail(ctx, name, st, digest, err)
 	}
 	st.Imported, st.ImportedAt, st.Failed = digest, now, nil
 	return Result{Imported: true, Snapshot: snap}, SaveState(r.StateDir, name, st)

@@ -318,3 +318,49 @@ func TestMovedCheckoutIsFoundAgain(t *testing.T) {
 		t.Errorf("a vanished checkout should fail closed with its clone command: %v", err)
 	}
 }
+
+// A cycle stopped by its caller (the agent session ends, Ctrl-C) is not a
+// failure: its inputs aren't held for 6 hours, and the next automatic
+// cycle after the cadence builds the same inputs.
+func TestCancelledCycleIsNotHeld(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	hang := filepath.Join(x.dir, "hang") // outside the archives: same digest
+	os.WriteFile(hang, nil, 0o644)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := x.runner().Cycle(ctx, "shop", false)
+		done <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(x.dir, "hanging")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the extractor never started")
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a cancelled cycle reported success")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the cycle didn't stop on cancel")
+	}
+	if st := x.state0(); st.Failed != nil {
+		t.Errorf("a cancel was recorded as a failure: %+v", st.Failed)
+	}
+	os.Remove(hang)
+	x.advance(15 * time.Minute)
+	r := x.command(sales)
+	if r.cycles != 1 || x.snapshots() != 1 {
+		t.Fatalf("the cancelled inputs weren't built after the cadence: %+v, %d snapshots", r, x.snapshots())
+	}
+	if strings.Contains(r.header, "retry in") {
+		t.Errorf("header: %s", r.header)
+	}
+}
