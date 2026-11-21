@@ -52,7 +52,33 @@ func gitEnv(stateDir string) ([]string, error) {
 		}
 		env = append(env, kv)
 	}
-	return append(env, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS="+helper, "SSH_ASKPASS="+helper), nil
+	env = append(env, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS="+helper, "SSH_ASKPASS="+helper)
+	return append(env, ghFallback(env)...), nil
+}
+
+// ghFallback adds `gh auth git-credential` as a last credential helper for
+// https://github.com, after the machine's own: git asks each in turn until
+// one answers, so it is used only when the configured helper can't (the
+// macOS keychain is unavailable to a process outside the login session). It
+// is added only when a working gh is on PATH, through GIT_CONFIG_* so no
+// config file changes; an existing GIT_CONFIG_COUNT is extended.
+func ghFallback(env []string) []string {
+	gh, err := exec.LookPath("gh")
+	if err != nil || exec.Command(gh, "--version").Run() != nil {
+		return nil
+	}
+	n := 0
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "GIT_CONFIG_COUNT="); ok {
+			fmt.Sscanf(v, "%d", &n)
+		}
+	}
+	// os/exec keeps the last of duplicate variables, so this COUNT wins.
+	return []string{
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=credential.https://github.com.helper", n),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=!%s auth git-credential", n, gh),
+		fmt.Sprintf("GIT_CONFIG_COUNT=%d", n+1),
+	}
 }
 
 // gitRun runs git in dir in its own process group (a cancelled fetch ends
