@@ -342,8 +342,13 @@ func TestConvertRust(t *testing.T) {
 	// Two traits named Service (in a and b): a call through one dispatches
 	// to its own impls only, also one in the other trait's file (A-M8).
 	const shapes = "fixture:crates/shapes::"
-	wantEdges(t, d, shapes+"a.call_a/1", 25, shapes+"a.A[impl Service].run/0 dispatch heuristic")
-	wantEdges(t, d, shapes+"b.call_b/1", 16, shapes+"a.A2[impl Service].run/0 dispatch heuristic", shapes+"b.B[impl Service].run/0 dispatch heuristic")
+	// Wrap's impl of a's Service names b's in its generic bound first: it is
+	// still a's impl, and its self.0.run() is a call through b's (F3-M1).
+	const wrap = "fixture:crates/shapes.Wrap<T>[impl Service].run/0 dispatch heuristic"
+	bImpls := []string{shapes + "a.A2[impl Service].run/0 dispatch heuristic", shapes + "b.B[impl Service].run/0 dispatch heuristic"}
+	wantEdges(t, d, shapes+"a.call_a/1", 25, shapes+"a.A[impl Service].run/0 dispatch heuristic", wrap)
+	wantEdges(t, d, shapes+"b.call_b/1", 16, bImpls...)
+	wantEdges(t, d, "fixture:crates/shapes.Wrap<T>[impl Service].run/0", 28, bImpls...)
 	// A turbofish function value is a ref; the turbofish call is a call.
 	wantEdges(t, d, "fixture:crates/alpha.main/0", 12)
 	wantEdges(t, d, "fixture:crates/alpha.main/0", 13, geo+"area_of/1 call precise")
@@ -381,7 +386,7 @@ func TestConvertRust(t *testing.T) {
 			t.Errorf("copy_tile calls nothing in the repository: %+v", c)
 		}
 	}
-	if s := d.Stats[0]; s.CallSites != s.InRepo+s.Dispatch+s.External+s.Unresolved || s.Dispatch != 5 || s.Refs != 1 || s.Unresolved != 0 {
+	if s := d.Stats[0]; s.CallSites != s.InRepo+s.Dispatch+s.External+s.Unresolved || s.Dispatch != 6 || s.Refs != 1 || s.Unresolved != 0 {
 		t.Errorf("stats %+v", s)
 	}
 }
@@ -468,6 +473,28 @@ func TestStripLifetimes(t *testing.T) {
 	for in, want := range map[string]string{"Prepared<'a>": "Prepared", "Typing<'_, '_>": "Typing", "Map<'a, K, V>": "Map<K, V>", "From<f64>": "From<f64>", "Visitor<'de>": "Visitor"} {
 		if got := stripLifetimes(in); got != want {
 			t.Errorf("stripLifetimes(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The trait's place in an impl header: after impl<...>, before the for at
+// depth 0 (F3-M1).
+func TestImplTraitSpan(t *testing.T) {
+	for in, want := range map[string]string{
+		"impl<T: b::Service> a::Service for Wrap<T> ":                  "a::Service ",
+		"/// impl x for y\n#[cfg(all())]\nunsafe impl a::S<T> for X ":  "a::S<T> ",
+		"impl<F: Fn() -> u8, G: for<'a> Fn(&'a u8)> a::S for W<F, G> ": "a::S ",
+		"impl a::S<Box<dyn for<'a> Fn(&'a u8)>> for X where T: b::S ":  "a::S<Box<dyn for<'a> Fn(&'a u8)>> ",
+		"impl /* for */ a::S for X ":                                   "/* for */ a::S ",
+		"impl<T> X<T> ":                                                "",
+	} {
+		src := []byte(in + "{")
+		got := ""
+		if s, e, ok := implTraitSpan(src, 0, len(src)-1); ok {
+			got = string(src[s:e])
+		}
+		if got != want {
+			t.Errorf("implTraitSpan(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

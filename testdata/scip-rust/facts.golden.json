@@ -96,6 +96,16 @@
       "language": "rust"
     },
     {
+      "id": "fixture:crates/shapes.Wrap\u003cT\u003e[impl Service]",
+      "name": "crates/shapes.Wrap\u003cT\u003e[impl Service]",
+      "namespace": [
+        "crates/shapes"
+      ],
+      "file": "crates/shapes/src/lib.rs",
+      "line": 27,
+      "language": "rust"
+    },
+    {
       "id": "fixture:crates/shapes/build",
       "name": "crates/shapes/build",
       "namespace": [
@@ -315,6 +325,17 @@
       "file": "crates/shapes/src/lib.rs",
       "line": 7,
       "fingerprint": "b18ed5a2a1d31d51"
+    },
+    {
+      "id": "fixture:crates/shapes.Wrap\u003cT\u003e[impl Service].run/0",
+      "module": "fixture:crates/shapes.Wrap\u003cT\u003e[impl Service]",
+      "name": "run",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "method",
+      "file": "crates/shapes/src/lib.rs",
+      "line": 27,
+      "fingerprint": "6101f0a393e9cf6e"
     },
     {
       "id": "fixture:crates/shapes.built_by_script/0",
@@ -635,6 +656,14 @@
     },
     {
       "from": "fixture:crates/shapes::a.call_a/1",
+      "to": "fixture:crates/shapes.Wrap\u003cT\u003e[impl Service].run/0",
+      "kind": "dispatch",
+      "file": "crates/shapes/src/a.rs",
+      "line": 25,
+      "precision": "heuristic"
+    },
+    {
+      "from": "fixture:crates/shapes::a.call_a/1",
       "to": "fixture:crates/shapes::a.A[impl Service].run/0",
       "kind": "dispatch",
       "file": "crates/shapes/src/a.rs",
@@ -762,6 +791,22 @@
       "precision": "heuristic"
     },
     {
+      "from": "fixture:crates/shapes.Wrap\u003cT\u003e[impl Service].run/0",
+      "to": "fixture:crates/shapes::a.A2[impl Service].run/0",
+      "kind": "dispatch",
+      "file": "crates/shapes/src/lib.rs",
+      "line": 28,
+      "precision": "heuristic"
+    },
+    {
+      "from": "fixture:crates/shapes.Wrap\u003cT\u003e[impl Service].run/0",
+      "to": "fixture:crates/shapes::b.B[impl Service].run/0",
+      "kind": "dispatch",
+      "file": "crates/shapes/src/lib.rs",
+      "line": 28,
+      "precision": "heuristic"
+    },
+    {
       "from": "fixture:crates/shapes/tests/api.api/0",
       "to": "fixture:crates/shapes/tests/api.setup/0",
       "kind": "call",
@@ -781,9 +826,9 @@
   "stats": [
     {
       "language": "rust",
-      "call_sites": 28,
+      "call_sites": 29,
       "in_repo": 15,
-      "dispatch": 5,
+      "dispatch": 6,
       "external": 8,
       "unresolved": 0,
       "refs": 1,

@@ -533,8 +533,9 @@ func (c *conv) fnPkg(n string) bool {
 }
 
 // implTrait is the normalized symbol of the trait f's impl block implements:
-// the occurrence of a type named f.trait in the block's header (impl<T>
-// a::Service for X<T> where ...: the first one), or "".
+// the first occurrence of a type named f.trait in the trait's place in the
+// block's header, after impl<...> and before for (impl<T: b::Service>
+// a::Service for X<T>: a's), or "".
 func (c *conv) implTrait(f *fn) string {
 	d := f.d
 	if d.blocks == nil {
@@ -549,8 +550,12 @@ func (c *conv) implTrait(f *fn) string {
 	if open < 0 {
 		return ""
 	}
+	start, end, ok := implTraitSpan(d.src, head, open)
+	if !ok { // a header this scan doesn't follow: search all of it
+		start, end = head, open
+	}
 	d.hasGlobalOccurrence(0, 0) // builds occStarts
-	for i := sort.SearchInts(d.occStarts, head); i < len(d.occStarts) && d.occStarts[i] < open; i++ {
+	for i := sort.SearchInts(d.occStarts, start); i < len(d.occStarts) && d.occStarts[i] < end; i++ {
 		for _, oi := range d.occ[d.occStarts[i]] {
 			n := c.normalize(d.d.Occurrences[oi].Symbol)
 			if s := c.symbol(n); s != nil && len(s.Descriptors) > 0 {
@@ -561,6 +566,82 @@ func (c *conv) implTrait(f *fn) string {
 		}
 	}
 	return ""
+}
+
+// implTraitSpan is where the trait sits in the impl header src[head:open]:
+// from after the impl keyword and its generics to the for keyword at
+// bracket depth 0. Comments, strings and attributes are skipped.
+func implTraitSpan(src []byte, head, open int) (start, end int, ok bool) {
+	depth := 0
+	for i := head; i < open; {
+		b := src[i]
+		switch {
+		case b == '/' && i+1 < open && src[i+1] == '/':
+			for i < open && src[i] != '\n' {
+				i++
+			}
+		case b == '/' && i+1 < open && src[i+1] == '*':
+			k := strings.Index(string(src[i+2:open]), "*/")
+			if k < 0 {
+				return 0, 0, false
+			}
+			i += 2 + k + 2
+		case b == '"':
+			i = skipString(src, i)
+		case b == '#' && i+1 < open && (src[i+1] == '[' || src[i+1] == '!'):
+			j := i + 1
+			if src[j] == '!' {
+				j++
+			}
+			if j >= open || src[j] != '[' {
+				i++
+				continue
+			}
+			for n := 0; j < open; j++ {
+				if src[j] == '[' {
+					n++
+				} else if src[j] == ']' {
+					if n--; n == 0 {
+						break
+					}
+				}
+			}
+			i = j + 1
+		case b == '<' || b == '(' || b == '[':
+			depth++
+			i++
+		case b == ')' || b == ']' || (b == '>' && (i == 0 || src[i-1] != '-')):
+			depth--
+			i++
+		case isIdentStart(b):
+			j := i
+			for j < open && isIdent(src[j]) {
+				j++
+			}
+			w := string(src[i:j])
+			switch {
+			case w == "impl" && start == 0 && depth == 0:
+				for j < open && (src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '\r') {
+					j++
+				}
+				if j < open && src[j] == '<' {
+					if j = matchAngle(src, j); j < 0 || j > open {
+						return 0, 0, false
+					}
+					for j < open && (src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '\r') {
+						j++
+					}
+				}
+				start = j
+			case w == "for" && start > 0 && depth == 0:
+				return start, i, true
+			}
+			i = j
+		default:
+			i++
+		}
+	}
+	return 0, 0, false
 }
 
 // rblock is a {} block: the start of the item it opens (after the
