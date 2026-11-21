@@ -556,6 +556,10 @@ func TestCfgTest(t *testing.T) {
 		`#[cfg(all(test, feature = "x"))]`:      true,
 		"#[cfg(not(not(test)))]":                true,
 		"#[cfg(target_os = \"linux\")]":         false,
+		// An unclosed quote or a trailing backslash (comment lines reach
+		// the parser too) is no predicate, not a panic (F2-P2).
+		`#[cfg(any(test, feature = "a)]"))]`: false,
+		`#[cfg(all(test, feature = "x\)]`:    false,
 	} {
 		if got := cfgTest(attr); got != want {
 			t.Errorf("cfgTest(%s) = %v, want %v", attr, got, want)

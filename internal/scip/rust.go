@@ -161,6 +161,10 @@ func (p *cfgParser) expr() *cfgNode {
 				p.i++
 			}
 		}
+		if p.i >= len(p.s) { // unclosed, or ends in a backslash
+			p.bad = true
+			return nil
+		}
 		p.i++
 		return &cfgNode{name: name + "="}
 	}
