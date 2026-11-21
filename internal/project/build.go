@@ -337,7 +337,7 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 
 		exts := map[string]int{}
 		for _, f := range t.files {
-			exts[path.Ext(f)]++
+			exts[strings.ToLower(path.Ext(f))]++ // .JS is JavaScript too
 			if !t.Settings.Docs.None && workspace.IsDoc(f, t.Settings.Docs.Patterns) {
 				if err := workspace.CopyFile(filepath.Join(t.root, filepath.FromSlash(f)), filepath.Join(out, "docs", name, filepath.FromSlash(f))); err != nil {
 					return nil, err

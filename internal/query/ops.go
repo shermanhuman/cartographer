@@ -942,7 +942,9 @@ func (q *Q) Status(ctx context.Context) (*output.Doc, error) {
 		parts = append(parts, fmt.Sprintf("%d %s", n, c.label))
 	}
 	d.L("%s", strings.Join(parts, " · "))
-	if cov, err := q.Coverage(ctx); err == nil && len(cov) > 0 {
+	if cov, err := q.Coverage(ctx); err != nil {
+		d.L("coverage unavailable: %v", err)
+	} else if len(cov) > 0 {
 		d.L("coverage")
 		for _, c := range cov {
 			d.L("  %s", c.Line())

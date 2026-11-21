@@ -40,3 +40,41 @@ func TestCoverageLinkedFunctionsInOnePass(t *testing.T) {
 		t.Errorf("%d functions linked, want %d", got, want)
 	}
 }
+
+// An inventory extension in capitals counts as its language, as the
+// extracted file does.
+func TestCoverageInventoryExtensionsIgnoreCase(t *testing.T) {
+	q, ctx := newQV2(t), context.Background()
+	var repo string
+	q.S.DB.QueryRowContext(ctx, `SELECT repo FROM files WHERE snapshot_id = ? LIMIT 1`, q.Snapshot).Scan(&repo)
+	if _, err := q.S.DB.ExecContext(ctx, `INSERT INTO inventory(snapshot_id, repo, ext, files) VALUES (?, ?, '.JS', 1)`, q.Snapshot, repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.S.DB.ExecContext(ctx, `INSERT INTO files(snapshot_id, repo, path, language, category) VALUES (?, ?, 'assets/APP.JS', 'javascript', 'source')`, q.Snapshot, repo); err != nil {
+		t.Fatal(err)
+	}
+	cov, err := q.Coverage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cov {
+		if c.Repo == repo && c.Language == "javascript" && (c.FilesTracked != 1 || c.FilesExtracted != 1) {
+			t.Errorf("javascript in %s: %d/%d files, want 1/1", repo, c.FilesExtracted, c.FilesTracked)
+		}
+	}
+}
+
+// status says when coverage can't be computed instead of leaving it out.
+func TestStatusSaysCoverageUnavailable(t *testing.T) {
+	q, ctx := newQV2(t), context.Background()
+	if _, err := q.S.DB.ExecContext(ctx, `ALTER TABLE inventory RENAME TO inventory_gone`); err != nil {
+		t.Fatal(err)
+	}
+	d, err := q.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(d.Body, "\n"); !strings.Contains(got, "coverage unavailable: ") {
+		t.Errorf("status:\n%s", got)
+	}
+}

@@ -95,7 +95,7 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 			return nil, err
 		}
 		haveInventory = true
-		if lang, ok := extLang[ext]; ok {
+		if lang, ok := extLang[strings.ToLower(ext)]; ok {
 			row(repo, lang).FilesTracked += n
 		}
 	}
