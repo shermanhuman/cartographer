@@ -35,6 +35,9 @@ var (
 	rustRoot     = fixture{"../../testdata/scip-rust-root", Rust}
 )
 
+// haveTools skips the test unless the indexers are on PATH; with
+// CARTOGRAPHER_REQUIRE_INDEXERS set (CI's indexer step) it fails instead, so
+// a missing tool can't turn the step into a silent skip.
 func haveTools(t *testing.T, names ...string) {
 	t.Helper()
 	for _, n := range names {
@@ -43,6 +46,9 @@ func haveTools(t *testing.T, names ...string) {
 			arg = "version"
 		}
 		if err := exec.Command(n, arg).Run(); err != nil {
+			if os.Getenv("CARTOGRAPHER_REQUIRE_INDEXERS") != "" {
+				t.Fatalf("%s is not usable on PATH: %v", n, err)
+			}
 			t.Skipf("%s is not usable on PATH: %v", n, err)
 		}
 	}

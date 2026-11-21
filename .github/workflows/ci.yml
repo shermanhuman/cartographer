@@ -22,6 +22,13 @@ jobs:
         run: go vet ./...
       - name: Go tests
         run: go test ./...
+      # The indexer tests (Go's GOOS pin, Rust's fresh index) skip without
+      # scip-go and rust-analyzer; here they run, at the pins the
+      # goldens were made with, and fail if a tool is missing.
+      - name: Indexer tests
+        env:
+          CARTOGRAPHER_REQUIRE_INDEXERS: "1"
+        run: mise exec github:sourcegraph/scip-go@0.2.9 aqua:rust-lang/rust-analyzer@2026-11-16 rust@1.99.1 -- go test -count=1 -run 'TestIndex' -v ./internal/scip
       - name: Elixir plugin tests
         run: |
           elixir plugins/extract-elixir/test/extract_test.exs
