@@ -1,6 +1,18 @@
 
 %
-scip-go0.2.9file:///fixture Šo
+scip-go0.2.9file:///fixture ó
+root.goF:scip-go gomod example.com/fixture 0 `example.com/fixture`/BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/BSAscip-go gomod example.com/fixture 0 `example.com/fixture`/config#BRMAscip-go gomod example.com/fixture 0 `example.com/fixture`/config#B	ZHscip-go gomod example.com/fixture 0 `example.com/fixture`/config#Load().B	R	)WCscip-go gomod example.com/fixture 0 `example.com/fixture`/Routes().BZ local 0BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/BNBscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#Blocal 0B[Oscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#HandleFunc().BOCscip-go gomod example.com/fixture 0 `example.com/fixture`/health().B &UCscip-go gomod example.com/fixture 0 `example.com/fixture`/health().BR6local 1BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/BTHscip-go gomod github.com/golang/go/src go1.26 `net/http`/ResponseWriter#B!local 2B#$E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B&*MAscip-go gomod github.com/golang/go/src go1.26 `net/http`/Request#B+2i
+Ascip-go gomod example.com/fixture 0 `example.com/fixture`/config#(12config:"go*type config struct{}t
+Hscip-go gomod example.com/fixture 0 `example.com/fixture`/config#Load().(2Load: "go*func (config).Load() errorv
+Cscip-go gomod example.com/fixture 0 `example.com/fixture`/Routes().(2Routes:%"go*func Routes(mux *http.ServeMux)Š
+Cscip-go gomod example.com/fixture 0 `example.com/fixture`/health().(2health:9"go*3func health(w http.ResponseWriter, r *http.Request)ó
+:scip-go gomod example.com/fixture 0 `example.com/fixture`/’Package fixture is the module root package. Its method config.Load must
+not share an id with config/'s Load, and its route is the root
+package's.
+(#2fixture:"go*package fixture)
+local 0(=2mux:"go*var mux *ServeMux*
+local 1(=2w:"go*var w ResponseWriter$
+local 2(=2r:"go*var r *Request"go0Šo
 app/admin.goH>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/B@4scip-go gomod github.com/golang/go/src go1.26 bytes/BB6scip-go gomod github.com/golang/go/src go1.26 context/B	J>scip-go gomod github.com/golang/go/src go1.26 `encoding/json`/B>2scip-go gomod github.com/golang/go/src go1.26 fmt/BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B
 D8scip-go gomod github.com/golang/go/src go1.26 `net/url`/B	B6scip-go gomod github.com/golang/go/src go1.26 strings/B		^Jscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#BZ fRscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#baseURL.BRbNscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#key.B
 RcOscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#http.BRE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/BL@scip-go gomod github.com/golang/go/src go1.26 `net/http`/Client#Blocal 0BVJscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#B	eQscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#post().BZ local 1BB6scip-go gomod github.com/golang/go/src go1.26 context/B&J>scip-go gomod github.com/golang/go/src go1.26 context/Context#B'.local 2B04local 3B=?local 4BADlocal 5BJ>scip-go gomod github.com/golang/go/src go1.26 `encoding/json`/B	THscip-go gomod github.com/golang/go/src go1.26 `encoding/json`/Marshal().Blocal 3Blocal 6Blocal 7B	E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B]Qscip-go gomod github.com/golang/go/src go1.26 `net/http`/NewRequestWithContext().B'local 1B(+E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B-1PDscip-go gomod github.com/golang/go/src go1.26 `net/http`/MethodPost.B2<local 0B>?^Rscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#baseURL.B@Glocal 2BHL@4scip-go gomod github.com/golang/go/src go1.26 bytes/BNSL@scip-go gomod github.com/golang/go/src go1.26 bytes/NewReader().BT]local 5B^_local 7Blocal 7B	local 8Blocal 7B	local 0B[Oscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#http.BQEscip-go gomod github.com/golang/go/src go1.26 `net/http`/Client#Do().Blocal 6Blocal 7Blocal 7B	local 8B
@@ -11,128 +23,126 @@
 local 22B4E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B4OCscip-go gomod github.com/golang/go/src go1.26 `net/http`/MethodGet.B4 local 23B4"&local 24B9VJscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#B9	gSscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#Lookup().B9Z9A local 25B9 B6scip-go gomod github.com/golang/go/src go1.26 context/B9!(J>scip-go gomod github.com/golang/go/src go1.26 context/Context#B9)0local 26B924local 27B:local 24B:\Pscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#get().B:local 25B:local 26B:(*local 27B:-0local 27B;	local 28B=local 24B=[Oscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#do().B=local 25B=local 28B=14local 28B>	local 24B@	[Oscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#do().B@
 local 25B@E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B@OCscip-go gomod github.com/golang/go/src go1.26 `net/http`/MethodGet.B@ B6scip-go gomod github.com/golang/go/src go1.26 strings/B@")NBscip-go gomod github.com/golang/go/src go1.26 strings/TrimSpace().B@*3local 26B@46local 29BEVJscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#BE	fRscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#gmail().BEZEL local 30BEB6scip-go gomod github.com/golang/go/src go1.26 context/BE 'J>scip-go gomod github.com/golang/go/src go1.26 context/Context#BE(/local 31BE15local 32BFlocal 33BF	E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/BF]Qscip-go gomod github.com/golang/go/src go1.26 `net/http`/NewRequestWithContext().BF'local 30BF(+E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/BF-1OCscip-go gomod github.com/golang/go/src go1.26 `net/http`/MethodGet.BF2;local 29BF=>^Rscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#baseURL.BF?Flocal 31BFTXlocal 33BG>2scip-go gomod github.com/golang/go/src go1.26 fmt/BH	G;scip-go gomod github.com/golang/go/src go1.26 fmt/Errorf().BHlocal 33BH!$local 33BJlocal 29BJ
 [Oscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#http.BJQEscip-go gomod github.com/golang/go/src go1.26 `net/http`/Client#Do().BJlocal 32BJlocal 33BKlocal 34BOVJscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#BO	hTscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#Message().BOZOQ local 35BO!B6scip-go gomod github.com/golang/go/src go1.26 context/BO")J>scip-go gomod github.com/golang/go/src go1.26 context/Context#BO*1local 36BO35local 37BO>?D8scip-go gomod github.com/golang/go/src go1.26 `net/url`/BO@CK?scip-go gomod github.com/golang/go/src go1.26 `net/url`/Values#BODJlocal 34BP	^Rscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#gmail().BP
-local 35BPD8scip-go gomod github.com/golang/go/src go1.26 `net/url`/BP!$QEscip-go gomod github.com/golang/go/src go1.26 `net/url`/PathEscape().BP%/local 36BP02local 37BP89THscip-go gomod github.com/golang/go/src go1.26 `net/url`/Values#Encode().BP:@´
-Qscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#post().(2post:W"go*Qfunc (*adminClient).post(ctx context.Context, path string, in any, out any) error¬
-Oscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#do().(2do:S"go*Mfunc (*adminClient).do(ctx context.Context, method string, path string) errorš
-Sscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#Lookup().qLookup: an interpolated path (GET via get), a method fixed at the call
-site, and a computed path (not extracted).(2Lookup:F"go*@func (*adminClient).Lookup(ctx context.Context, id string) error
-Oscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#http.(2http:$"go*struct field http *http.Client°
-Uscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#Suppress().(2Suppress:K"go*Efunc (*adminClient).Suppress(ctx context.Context, email string) erroræ
+local 35BPD8scip-go gomod github.com/golang/go/src go1.26 `net/url`/BP!$QEscip-go gomod github.com/golang/go/src go1.26 `net/url`/PathEscape().BP%/local 36BP02local 37BP89THscip-go gomod github.com/golang/go/src go1.26 `net/url`/Values#Encode().BP:@‚
+Rscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#baseURL.(2baseURL:!"go*struct field baseURL string§
+Rscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#Check().(2Check:H"go*Bfunc (*adminClient).Check(ctx context.Context, email string) erroræ
 Pscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#get().Dget passes its path parameter through to do, so it is a wrapper too.(2get:E"go*?func (*adminClient).get(ctx context.Context, path string) error¤
 Rscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#gmail().|gmail puts a literal prefix before its path parameter (breakdown-sales'
-gmailJSON); err.Error() is external, not unresolved.(2gmail:G"go*Afunc (*adminClient).gmail(ctx context.Context, path string) error§
-Rscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#Check().(2Check:H"go*Bfunc (*adminClient).Check(ctx context.Context, email string) errorZ
->scip-go gomod example.com/fixture 0 `example.com/fixture/app`/(#2app:"go*package app¾
+gmailJSON); err.Error() is external, not unresolved.(2gmail:G"go*Afunc (*adminClient).gmail(ctx context.Context, path string) errorü
+Tscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#Message().BMessage: an escaped value is :id, and the query string is dropped.(2Message:U"go*Ofunc (*adminClient).Message(ctx context.Context, id string, q url.Values) error¾
 Jscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#adminClient copies breakdown-sales' cold-email client: post is a wrapper
 that fixes the method; do takes it from the call site.(12adminClient:`"go*Ztype adminClient struct {
     baseURL string
     key     string
     http    *http.Client
 }v
-Nscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#key.(2key:"go*struct field key stringü
-Tscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#Message().BMessage: an escaped value is :id, and the query string is dropped.(2Message:U"go*Ofunc (*adminClient).Message(ctx context.Context, id string, q url.Values) error‚
-Rscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#baseURL.(2baseURL:!"go*struct field baseURL string'
+Nscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#key.(2key:"go*struct field key string¬
+Oscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#do().(2do:S"go*Mfunc (*adminClient).do(ctx context.Context, method string, path string) errorZ
+>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/(#2app:"go*package app
+Oscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#http.(2http:$"go*struct field http *http.Client°
+Uscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#Suppress().(2Suppress:K"go*Efunc (*adminClient).Suppress(ctx context.Context, email string) errorš
+Sscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#Lookup().qLookup: an interpolated path (GET via get), a method fixed at the call
+site, and a computed path (not extracted).(2Lookup:F"go*@func (*adminClient).Lookup(ctx context.Context, id string) error´
+Qscip-go gomod example.com/fixture 0 `example.com/fixture/app`/adminClient#post().(2post:W"go*Qfunc (*adminClient).post(ctx context.Context, path string, in any, out any) error(
+local 9(=2a:"go*var a *adminClient+
+local 14(=2email:"go*var email string%
+local 26(=2id:"go*var id string&
+local 28(=2err:"go*var err error%
+local 36(=2id:"go*var id string#
+local 37(=2q:"go*var q Values(
+local 6(=2req:"go*var req *Request)
+local 24(=2a:"go*var a *adminClient&
+local 33(=2err:"go*var err error'
 local 1(=2ctx:"go*var ctx Context"
 local 5(=2b:"go*var b []byte)
-local 8(=2res:"go*var res *Response+
-local 11(=2email:"go*var email string(
-local 13(=2ctx:"go*var ctx Context)
-local 34(=2a:"go*var a *adminClient#
-local 37(=2q:"go*var q Values#
-local 4(=2out:"go*var out any(
-local 6(=2req:"go*var req *Request(
-local 10(=2ctx:"go*var ctx Context)
-local 15(=2a:"go*var a *adminClient-
-local 17(=2method:"go*var method string(
-local 25(=2ctx:"go*var ctx Context(
-local 35(=2ctx:"go*var ctx Context(
-local 0(=2a:"go*var a *adminClient!
-local 3(=2in:"go*
-var in any%
+local 8(=2res:"go*var res *Response)
+local 19(=2req:"go*var req *Request(
+local 35(=2ctx:"go*var ctx Context#
+local 4(=2out:"go*var out any%
 local 7(=2err:"go*var err error)
+local 12(=2a:"go*var a *adminClient&
+local 20(=2err:"go*var err error)
 local 21(=2a:"go*var a *adminClient)
-local 23(=2path:"go*var path string%
-local 36(=2id:"go*var id string)
-local 18(=2path:"go*var path string+
-local 14(=2email:"go*var email string(
-local 16(=2ctx:"go*var ctx Context(
-local 30(=2ctx:"go*var ctx Context)
-local 31(=2path:"go*var path string)
-local 32(=2req:"go*var req *Request(
-local 9(=2a:"go*var a *adminClient&
-local 20(=2err:"go*var err error&
-local 27(=2err:"go*var err error(
+local 23(=2path:"go*var path string(
+local 30(=2ctx:"go*var ctx Context(
+local 10(=2ctx:"go*var ctx Context(
+local 13(=2ctx:"go*var ctx Context+
+local 11(=2email:"go*var email string(
+local 16(=2ctx:"go*var ctx Context-
+local 17(=2method:"go*var method string(
+local 25(=2ctx:"go*var ctx Context)
+local 32(=2req:"go*var req *Request!
+local 3(=2in:"go*
+var in any)
+local 15(=2a:"go*var a *adminClient)
+local 18(=2path:"go*var path string(
 local 22(=2ctx:"go*var ctx Context)
-local 24(=2a:"go*var a *adminClient&
-local 28(=2err:"go*var err error)
 local 29(=2a:"go*var a *adminClient&
-local 33(=2err:"go*var err error(
-local 2(=2path:"go*var path string)
-local 12(=2a:"go*var a *adminClient)
-local 19(=2req:"go*var req *Request%
-local 26(=2id:"go*var id string"go0êG
+local 27(=2err:"go*var err error)
+local 31(=2path:"go*var path string)
+local 34(=2a:"go*var a *adminClient(
+local 0(=2a:"go*var a *adminClient(
+local 2(=2path:"go*var path string"go0êG
 app/server.goH>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/BB6scip-go gomod github.com/golang/go/src go1.26 context/B	E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B
 B6scip-go gomod github.com/golang/go/src go1.26 strings/B	YEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#BZ _Kscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#store.B	R	PDscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#B	]Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#mem.B
 R
 SGscip-go gomod example.com/fixture 0 `example.com/fixture/app`/memStore#B
 local 0BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B	[Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#f().BR[Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/register().BR!local 1Blocal 1Blocal 2BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B	_Kscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#run().BZ local 3BB6scip-go gomod github.com/golang/go/src go1.26 context/B J>scip-go gomod github.com/golang/go/src go1.26 context/Context#B!(local 2BUIscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#f().BUIscip-go gomod example.com/fixture 0 `example.com/fixture/app`/register().B	local 2B
-UIscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#f().Blocal 2BWKscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#store.BUIscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#Save.B	local 3Blocal 2BUIscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#mem.BZNscip-go gomod example.com/fixture 0 `example.com/fixture/app`/memStore#Save().Blocal 3BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Keys().B	B6scip-go gomod github.com/golang/go/src go1.26 strings/BL@scip-go gomod github.com/golang/go/src go1.26 strings/ToUpper().Blocal 4BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B	_Mscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#guard().BROlocal 5BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/BQEscip-go gomod github.com/golang/go/src go1.26 `net/http`/HandlerFunc#B)E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B+/QEscip-go gomod github.com/golang/go/src go1.26 `net/http`/HandlerFunc#B0;local 5BLMlocal 6BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B	bPscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#signedIn().BROlocal 7BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B QEscip-go gomod github.com/golang/go/src go1.26 `net/http`/HandlerFunc#B!,E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B.2QEscip-go gomod github.com/golang/go/src go1.26 `net/http`/HandlerFunc#B3>local 7BLMlocal 8BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B	cQscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#dialEvent().BRElocal 9BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B!THscip-go gomod github.com/golang/go/src go1.26 `net/http`/ResponseWriter#B"0local 10B23E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B59MAscip-go gomod github.com/golang/go/src go1.26 `net/http`/Request#B:Alocal 11BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B	_Mscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#items().BRElocal 12BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/BTHscip-go gomod github.com/golang/go/src go1.26 `net/http`/ResponseWriter#B,local 13B./E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B15MAscip-go gomod github.com/golang/go/src go1.26 `net/http`/Request#B6=local 14B#QEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B#	bNscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#Routes().B#Z#( local 15B#E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B#!NBscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#B#"*local 16B#,2local 15B$[Oscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#HandleFunc().B$local 14B$%&YMscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#guard().B$',local 14B$-.\Pscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#signedIn().B$/7local 14B$89]Qscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#dialEvent().B$:Clocal 15B%WKscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#Handle().B%E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B%QEscip-go gomod github.com/golang/go/src go1.26 `net/http`/HandlerFunc#B% +local 14B%,-YMscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#items().B%.3local 15B&[Oscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#HandleFunc().B&local 17B&$%E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B&&*THscip-go gomod github.com/golang/go/src go1.26 `net/http`/ResponseWriter#B&+9local 18B&;<E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B&>BMAscip-go gomod github.com/golang/go/src go1.26 `net/http`/Request#B&CJlocal 15B'[Oscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#HandleFunc().B'local 16B'local 14B'YMscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#items().B'$œ
-Mscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#items().(2items:B"go*<func (*Server).items(w http.ResponseWriter, r *http.Request)v
-Kscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#store.(2store:"go*struct field store Store¨
-Qscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#dialEvent().(2	dialEvent:F"go*@func (*Server).dialEvent(w http.ResponseWriter, r *http.Request)Ÿ
+UIscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#f().Blocal 2BWKscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#store.BUIscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#Save.B	local 3Blocal 2BUIscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#mem.BZNscip-go gomod example.com/fixture 0 `example.com/fixture/app`/memStore#Save().Blocal 3BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Keys().B	B6scip-go gomod github.com/golang/go/src go1.26 strings/BL@scip-go gomod github.com/golang/go/src go1.26 strings/ToUpper().Blocal 4BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B	_Mscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#guard().BROlocal 5BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/BQEscip-go gomod github.com/golang/go/src go1.26 `net/http`/HandlerFunc#B)E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B+/QEscip-go gomod github.com/golang/go/src go1.26 `net/http`/HandlerFunc#B0;local 5BLMlocal 6BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B	bPscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#signedIn().BROlocal 7BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B QEscip-go gomod github.com/golang/go/src go1.26 `net/http`/HandlerFunc#B!,E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B.2QEscip-go gomod github.com/golang/go/src go1.26 `net/http`/HandlerFunc#B3>local 7BLMlocal 8BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B	cQscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#dialEvent().BRElocal 9BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B!THscip-go gomod github.com/golang/go/src go1.26 `net/http`/ResponseWriter#B"0local 10B23E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B59MAscip-go gomod github.com/golang/go/src go1.26 `net/http`/Request#B:Alocal 11BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B	_Mscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#items().BRElocal 12BE9scip-go gomod github.com/golang/go/src go1.26 `net/http`/BTHscip-go gomod github.com/golang/go/src go1.26 `net/http`/ResponseWriter#B,local 13B./E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B15MAscip-go gomod github.com/golang/go/src go1.26 `net/http`/Request#B6=local 14B#QEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#B#	bNscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#Routes().B#Z#( local 15B#E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B#!NBscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#B#"*local 16B#,2local 15B$[Oscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#HandleFunc().B$local 14B$%&YMscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#guard().B$',local 14B$-.\Pscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#signedIn().B$/7local 14B$89]Qscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#dialEvent().B$:Clocal 15B%WKscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#Handle().B%E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B%QEscip-go gomod github.com/golang/go/src go1.26 `net/http`/HandlerFunc#B% +local 14B%,-YMscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#items().B%.3local 15B&[Oscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#HandleFunc().B&local 17B&$%E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B&&*THscip-go gomod github.com/golang/go/src go1.26 `net/http`/ResponseWriter#B&+9local 18B&;<E9scip-go gomod github.com/golang/go/src go1.26 `net/http`/B&>BMAscip-go gomod github.com/golang/go/src go1.26 `net/http`/Request#B&CJlocal 15B'[Oscip-go gomod github.com/golang/go/src go1.26 `net/http`/ServeMux#HandleFunc().B'local 16B'local 14B'YMscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#items().B'$¢
+Pscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#signedIn().(2signedIn:B"go*<func (*Server).signedIn(h http.HandlerFunc) http.HandlerFunc¨
+Qscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#dialEvent().(2	dialEvent:F"go*@func (*Server).dialEvent(w http.ResponseWriter, r *http.Request)j
+Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#f().(2f:"go*func (*Server).f()Ÿ
 Nscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#Routes().‚Routes registers a wrapped handler (innermost function value), a plain one,
-a closure and a computed pattern (both not extracted).(2Routes:>"go*8func (*Server).Routes(mux *http.ServeMux, prefix string)t
-Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#mem.(2mem: "go*struct field mem *memStorej
-Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#f().(2f:"go*func (*Server).f()˜
+a closure and a computed pattern (both not extracted).(2Routes:>"go*8func (*Server).Routes(mux *http.ServeMux, prefix string)˜
 Kscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#run().’run calls f once and passes the method value s.f once (one call, one ref),
-calls Save through the interface (dispatch) and on a concrete receiver.(2run:-"go*'func (*Server).run(ctx context.Context)¢
-Pscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#signedIn().(2signedIn:B"go*<func (*Server).signedIn(h http.HandlerFunc) http.HandlerFuncw
+calls Save through the interface (dispatch) and on a concrete receiver.(2run:-"go*'func (*Server).run(ctx context.Context)v
+Kscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#store.(2store:"go*struct field store Storew
 Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/register().(2register:"go*func register(fn func())™
 Mscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#guard().(2guard:?"go*9func (*Server).guard(h http.HandlerFunc) http.HandlerFunc“
 Escip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#(12Server:@"go*:type Server struct {
     store Store
     mem   *memStore
-}$
-local 11(=2s:"go*var s *Server#
-local 4(=2s:"go*var s *Server#
-local 6(=2s:"go*var s *Server#
-local 8(=2s:"go*var s *Server*
-local 15(=2mux:"go*var mux *ServeMux-
-local 16(=2prefix:"go*var prefix string'
-local 5(=2h:"go*var h HandlerFunc%
-local 10(=2r:"go*var r *Request*
-local 9(=2w:"go*var w ResponseWriter%
-local 13(=2r:"go*var r *Request#
-local 0(=2s:"go*var s *Server$
-local 1(=2fn:"go*var fn func()#
-local 2(=2s:"go*var s *Server'
-local 3(=2ctx:"go*var ctx Context'
-local 7(=2h:"go*var h HandlerFunc%
-local 18(=2r:"go*var r *Request+
+}œ
+Mscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#items().(2items:B"go*<func (*Server).items(w http.ResponseWriter, r *http.Request)t
+Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#mem.(2mem: "go*struct field mem *memStore+
 local 12(=2w:"go*var w ResponseWriter$
-local 14(=2s:"go*var s *Server+
-local 17(=2w:"go*var w ResponseWriter"go0Ý
+local 14(=2s:"go*var s *Server*
+local 15(=2mux:"go*var mux *ServeMux-
+local 16(=2prefix:"go*var prefix string+
+local 17(=2w:"go*var w ResponseWriter%
+local 18(=2r:"go*var r *Request'
+local 5(=2h:"go*var h HandlerFunc%
+local 10(=2r:"go*var r *Request%
+local 13(=2r:"go*var r *Request$
+local 1(=2fn:"go*var fn func()#
+local 0(=2s:"go*var s *Server#
+local 2(=2s:"go*var s *Server'
+local 3(=2ctx:"go*var ctx Context#
+local 6(=2s:"go*var s *Server'
+local 7(=2h:"go*var h HandlerFunc#
+local 8(=2s:"go*var s *Server*
+local 9(=2w:"go*var w ResponseWriter$
+local 11(=2s:"go*var s *Server#
+local 4(=2s:"go*var s *Server"go0è
 app/store.goH>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/BB6scip-go gomod github.com/golang/go/src go1.26 context/BXDscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#B
 Z ]Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#Save.BR,local 0B	B6scip-go gomod github.com/golang/go/src go1.26 context/B
 J>scip-go gomod github.com/golang/go/src go1.26 context/Context#Blocal 1BYGscip-go gomod example.com/fixture 0 `example.com/fixture/app`/memStore#B	R	local 2BSGscip-go gomod example.com/fixture 0 `example.com/fixture/app`/memStore#B	`Nscip-go gomod example.com/fixture 0 `example.com/fixture/app`/memStore#Save().BRMlocal 3BB6scip-go gomod github.com/golang/go/src go1.26 context/B#J>scip-go gomod github.com/golang/go/src go1.26 context/Context#B$+local 4B-0ZHscip-go gomod example.com/fixture 0 `example.com/fixture/app`/diskStore#BR#`Lscip-go gomod example.com/fixture 0 `example.com/fixture/app`/diskStore#dir.BR!local 5BTHscip-go gomod example.com/fixture 0 `example.com/fixture/app`/diskStore#BaOscip-go gomod example.com/fixture 0 `example.com/fixture/app`/diskStore#Save().BRMlocal 6BB6scip-go gomod github.com/golang/go/src go1.26 context/B#J>scip-go gomod github.com/golang/go/src go1.26 context/Context#B$+local 7B-0WEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Keys().B	R+local 8B
-local 9Blocal 8Blocal 8Blocal 9B')t
-Lscip-go gomod example.com/fixture 0 `example.com/fixture/app`/diskStore#dir.(2dir:"go*struct field dir stringµ
+local 9Blocal 8Blocal 8Blocal 9B')YGscip-go gomod example.com/fixture 0 `example.com/fixture/app`/helper().BRµ
 Nscip-go gomod example.com/fixture 0 `example.com/fixture/app`/memStore#Save().HSave on memStore and Save on diskStore have the same name: distinct ids."M
 Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#Save.(2Save:B"go*<func (*memStore).Save(ctx context.Context, key string) errorì
 Oscip-go gomod example.com/fixture 0 `example.com/fixture/app`/diskStore#Save()."M
-Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#Save.(2Save:B"go*<func (diskStore).Save(ctx context.Context, key string) error“
-Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#Save.(C2Save:>"go*8func (Store).Save(ctx context.Context, key string) errorÌ
+Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#Save.(2Save:B"go*<func (diskStore).Save(ctx context.Context, key string) errorœ
+Escip-go gomod example.com/fixture 0 `example.com/fixture/app`/Keys().&Keys is generic and variadic: arity 1.(2Keys:#"go*func Keys[T any](xs ...T) []TÌ
 Hscip-go gomod example.com/fixture 0 `example.com/fixture/app`/diskStore#"H
-Dscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#(12	diskStore:)"go*#type diskStore struct{ dir string }ë
+Dscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#(12	diskStore:)"go*#type diskStore struct{ dir string }½
+Gscip-go gomod example.com/fixture 0 `example.com/fixture/app`/memStore#"H
+Dscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#(12memStore:"go*type memStore struct{}t
+Lscip-go gomod example.com/fixture 0 `example.com/fixture/app`/diskStore#dir.(2dir:"go*struct field dir string­
+Gscip-go gomod example.com/fixture 0 `example.com/fixture/app`/helper().?helper shares its name with the external test package's helper.(2helper:"go*func helper() intë
 Dscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#JStore is implemented by memStore and diskStore: calls through it dispatch.(2Store:N"go*Htype Store interface {
     Save(ctx context.Context, key string) error
-}½
-Gscip-go gomod example.com/fixture 0 `example.com/fixture/app`/memStore#"H
-Dscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#(12memStore:"go*type memStore struct{}œ
-Escip-go gomod example.com/fixture 0 `example.com/fixture/app`/Keys().&Keys is generic and variadic: arity 1.(2Keys:#"go*func Keys[T any](xs ...T) []T'
-local 0(=2ctx:"go*var ctx Context&
-local 1(=2key:"go*var key string%
-local 2(=2m:"go*var m *memStore'
+}“
+Iscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Store#Save.(C2Save:>"go*8func (Store).Save(ctx context.Context, key string) error'
 local 3(=2ctx:"go*var ctx Context&
 local 4(=2key:"go*var key string%
 local 5(=2d:"go*var d diskStore'
@@ -140,15 +150,18 @@ Escip-go gomod example.com/fixture 0 `example.com/fixture/app`/Keys().&Keys is 
 local 7(=2key:"go*var key string*
 local 8(2T:"go*type parameter T any!
 local 9(=2xs:"go*
-var xs []T"go0þ	
+var xs []T'
+local 0(=2ctx:"go*var ctx Context&
+local 1(=2key:"go*var key string%
+local 2(=2m:"go*var m *memStore"go0þ	
 app/server_test.goH>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/BB6scip-go gomod github.com/golang/go/src go1.26 testing/B\Hscip-go gomod example.com/fixture 0 `example.com/fixture/app`/TestRun().BZ local 0BB6scip-go gomod github.com/golang/go/src go1.26 testing/BD8scip-go gomod github.com/golang/go/src go1.26 testing/T#Blocal 1BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#BWKscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#store.BTHscip-go gomod example.com/fixture 0 `example.com/fixture/app`/diskStore#BUIscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#mem.B"%SGscip-go gomod example.com/fixture 0 `example.com/fixture/app`/memStore#B(0local 1BWKscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#run().Blocal 0BSGscip-go gomod github.com/golang/go/src go1.26 testing/common#Context().B	w
 Hscip-go gomod example.com/fixture 0 `example.com/fixture/app`/TestRun().(2TestRun: "go*func TestRun(t *testing.T)
 local 0(=2t:"go*var t *T#
-local 1(=2s:"go*var s *Server"go0« 
-a../../../../.cache/go-build/ec/ec7c71d243a273a8a291207676394da7bd7b73b8286e6913c462bd0c93f2ef7e-dOCscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/B=1scip-go gomod github.com/golang/go/src go1.26 os/BB6scip-go gomod github.com/golang/go/src go1.26 testing/B	VJscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/B	J>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/BJ>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/B]Iscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/tests.B	Z B6scip-go gomod github.com/golang/go/src go1.26 testing/BOCscip-go gomod github.com/golang/go/src go1.26 testing/InternalTest#B"J>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/BTHscip-go gomod example.com/fixture 0 `example.com/fixture/app`/TestRun().BbNscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/benchmarks.BZ B6scip-go gomod github.com/golang/go/src go1.26 testing/BTHscip-go gomod github.com/golang/go/src go1.26 testing/InternalBenchmark#B,cOscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/fuzzTargets.BZ B6scip-go gomod github.com/golang/go/src go1.26 testing/BUIscip-go gomod github.com/golang/go/src go1.26 testing/InternalFuzzTarget#B.`Lscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/examples.B Z " B6scip-go gomod github.com/golang/go/src go1.26 testing/B RFscip-go gomod github.com/golang/go/src go1.26 testing/InternalExample#B (^Jscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/init().B$	Z$( VJscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/B&	aUscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/ModulePath.B&
-VJscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/B'	aUscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/ImportPath.B'
-^Jscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/main().B*	Z*/ local 0B+B6scip-go gomod github.com/golang/go/src go1.26 testing/B+NBscip-go gomod github.com/golang/go/src go1.26 testing/MainStart().B+VJscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/B+ _Sscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/TestDeps#B+!)UIscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/tests.B+-2ZNscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/benchmarks.B+4>[Oscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/fuzzTargets.B+@KXLscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/examples.B+MU=1scip-go gomod github.com/golang/go/src go1.26 os/B-D8scip-go gomod github.com/golang/go/src go1.26 os/Exit().B-local 0B-	
-J>scip-go gomod github.com/golang/go/src go1.26 testing/M#Run().B-ˆ
+local 1(=2s:"go*var s *Server"go0þ"
+a../../../../.cache/go-build/07/077cbba3ee7f6c9fda6fe159fc8b4bf34d88ad0a67e7a4dd374071501beda939-dOCscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/B=1scip-go gomod github.com/golang/go/src go1.26 os/BB6scip-go gomod github.com/golang/go/src go1.26 testing/B	VJscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/B	J>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/BJ>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/BOCscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/BOCscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/B	%]Iscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/tests.B	Z B6scip-go gomod github.com/golang/go/src go1.26 testing/BOCscip-go gomod github.com/golang/go/src go1.26 testing/InternalTest#B"J>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/BTHscip-go gomod example.com/fixture 0 `example.com/fixture/app`/TestRun().BOCscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/B^Rscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/TestExternal().B%bNscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/benchmarks.BZ B6scip-go gomod github.com/golang/go/src go1.26 testing/BTHscip-go gomod github.com/golang/go/src go1.26 testing/InternalBenchmark#B,cOscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/fuzzTargets.B Z " B6scip-go gomod github.com/golang/go/src go1.26 testing/B UIscip-go gomod github.com/golang/go/src go1.26 testing/InternalFuzzTarget#B .`Lscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/examples.B$Z$& B6scip-go gomod github.com/golang/go/src go1.26 testing/B$RFscip-go gomod github.com/golang/go/src go1.26 testing/InternalExample#B$(^Jscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/init().B(	Z(, VJscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/B*	aUscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/ModulePath.B*
+VJscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/B+	aUscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/ImportPath.B+
+^Jscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/main().B.	Z.3 local 0B/B6scip-go gomod github.com/golang/go/src go1.26 testing/B/NBscip-go gomod github.com/golang/go/src go1.26 testing/MainStart().B/VJscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/B/ _Sscip-go gomod github.com/golang/go/src go1.26 `testing/internal/testdeps`/TestDeps#B/!)UIscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/tests.B/-2ZNscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/benchmarks.B/4>[Oscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/fuzzTargets.B/@KXLscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/examples.B/MU=1scip-go gomod github.com/golang/go/src go1.26 os/B1D8scip-go gomod github.com/golang/go/src go1.26 os/Exit().B1local 0B1	
+J>scip-go gomod github.com/golang/go/src go1.26 testing/M#Run().B1ˆ
 Lscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/examples.(=2examples:,"go*&var examples []testing.InternalExampleg
 Jscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/init().(2init:"go*func init()g
 Jscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/main().(2main:"go*func main()a
@@ -157,7 +170,13 @@ Iscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/tests.(=2te
 Nscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/benchmarks.(=2
 benchmarks:0"go**var benchmarks []testing.InternalBenchmark”
 Oscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/fuzzTargets.(=2fuzzTargets:2"go*,var fuzzTargets []testing.InternalFuzzTarget
-local 0(=2m:"go*var m *M"go0”
+local 0(=2m:"go*var m *M"go0Ô
+app/external_test.goMCscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/BB6scip-go gomod github.com/golang/go/src go1.26 testing/B^Lscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/helper().BRdRscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/TestExternal().BR0local 0BB6scip-go gomod github.com/golang/go/src go1.26 testing/BD8scip-go gomod github.com/golang/go/src go1.26 testing/T#BXLscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/helper().B&,Ê
+Lscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/helper().Whelper is the external test package's own: it must not merge with
+package app's helper.(2helper:"go*func helper() int‹
+Rscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/TestExternal().(2TestExternal:%"go*func TestExternal(t *testing.T)i
+Cscip-go gomod example.com/fixture 0 `example.com/fixture/app_test`/(#2app_test:"go*package app_test
+local 0(=2t:"go*var t *T"go0”
 cmd/tool/main.goMCscip-go gomod example.com/fixture 0 `example.com/fixture/cmd/tool`/BB6scip-go gomod github.com/golang/go/src go1.26 context/B	J>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/BL@scip-go gomod example.com/fixture 0 `example.com/fixture/osdep`/B^Jscip-go gomod example.com/fixture 0 `example.com/fixture/cmd/tool`/main().B		Z	 local 0B
 J>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/B
 
@@ -166,7 +185,10 @@ Oscip-go gomod example.com/fixture 0 `example.com/fixture/app.test`/fuzzTargets.
 VJscip-go gomod example.com/fixture 0 `example.com/fixture/osdep`/OnLinux().Blocal 0BZNscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Server#Routes().B	J>scip-go gomod example.com/fixture 0 `example.com/fixture/app`/BQEscip-go gomod example.com/fixture 0 `example.com/fixture/app`/Keys().B	B6scip-go gomod github.com/golang/go/src go1.26 context/BOCscip-go gomod github.com/golang/go/src go1.26 context/Background().Bg
 Jscip-go gomod example.com/fixture 0 `example.com/fixture/cmd/tool`/main().(2main:"go*func main()a
 Cscip-go gomod example.com/fixture 0 `example.com/fixture/cmd/tool`/(#2main:"go*package main"
-local 0(=2s:"go*var s Server"go0Ý
+local 0(=2s:"go*var s Server"go0“
+config/config.goKAscip-go gomod example.com/fixture 0 `example.com/fixture/config`/BZHscip-go gomod example.com/fixture 0 `example.com/fixture/config`/Load().B	R k
+Hscip-go gomod example.com/fixture 0 `example.com/fixture/config`/Load().(2Load:"go*func Load() errorc
+Ascip-go gomod example.com/fixture 0 `example.com/fixture/config`/(#2config:"go*package config"go0Ý
 osdep/x_linux.goJ@scip-go gomod example.com/fixture 0 `example.com/fixture/osdep`/B\Jscip-go gomod example.com/fixture 0 `example.com/fixture/osdep`/OnLinux().BR(¶
 Jscip-go gomod example.com/fixture 0 `example.com/fixture/osdep`/OnLinux().@OnLinux is built with GOOS=linux, which the indexer always uses.(2OnLinux:"go*func OnLinux() string`
 @scip-go gomod example.com/fixture 0 `example.com/fixture/osdep`/(#2osdep:"go*package osdep"go0

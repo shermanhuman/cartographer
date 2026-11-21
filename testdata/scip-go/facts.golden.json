@@ -14,6 +14,11 @@
       "category": "source"
     },
     {
+      "path": "app/external_test.go",
+      "language": "go",
+      "category": "test"
+    },
+    {
       "path": "app/server.go",
       "language": "go",
       "category": "source"
@@ -34,12 +39,32 @@
       "category": "source"
     },
     {
+      "path": "config/config.go",
+      "language": "go",
+      "category": "source"
+    },
+    {
       "path": "osdep/x_linux.go",
+      "language": "go",
+      "category": "source"
+    },
+    {
+      "path": "root.go",
       "language": "go",
       "category": "source"
     }
   ],
   "modules": [
+    {
+      "id": "fixture:.",
+      "name": ".",
+      "namespace": [
+        "."
+      ],
+      "file": "root.go",
+      "line": 10,
+      "language": "go"
+    },
     {
       "id": "fixture:app",
       "name": "app",
@@ -48,6 +73,16 @@
       ],
       "file": "app/admin.go",
       "line": 20,
+      "language": "go"
+    },
+    {
+      "id": "fixture:app_test",
+      "name": "app_test",
+      "namespace": [
+        "app_test"
+      ],
+      "file": "app/external_test.go",
+      "line": 7,
       "language": "go"
     },
     {
@@ -62,6 +97,16 @@
       "language": "go"
     },
     {
+      "id": "fixture:config",
+      "name": "config",
+      "namespace": [
+        "config"
+      ],
+      "file": "config/config.go",
+      "line": 3,
+      "language": "go"
+    },
+    {
       "id": "fixture:osdep",
       "name": "osdep",
       "namespace": [
@@ -73,6 +118,39 @@
     }
   ],
   "functions": [
+    {
+      "id": "fixture:./Routes/1",
+      "module": "fixture:.",
+      "name": "Routes",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "function",
+      "file": "root.go",
+      "line": 12,
+      "fingerprint": "4038669bfe839b3b"
+    },
+    {
+      "id": "fixture:./config.Load/0",
+      "module": "fixture:.",
+      "name": "Load",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "method",
+      "file": "root.go",
+      "line": 10,
+      "fingerprint": "6ecc35c67c709df9"
+    },
+    {
+      "id": "fixture:./health/2",
+      "module": "fixture:.",
+      "name": "health",
+      "arity": 2,
+      "min_arity": 2,
+      "kind": "function",
+      "file": "root.go",
+      "line": 16,
+      "fingerprint": "2b0f21ca33b1ddbd"
+    },
     {
       "id": "fixture:app.Keys/1",
       "module": "fixture:app",
@@ -283,6 +361,17 @@
       "fingerprint": "60925a8fa290e2c7"
     },
     {
+      "id": "fixture:app.helper/0",
+      "module": "fixture:app",
+      "name": "helper",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "app/store.go",
+      "line": 23,
+      "fingerprint": "46b8bddf45b472a0"
+    },
+    {
       "id": "fixture:app.memStore.Save/2",
       "module": "fixture:app",
       "name": "Save",
@@ -305,6 +394,28 @@
       "fingerprint": "8a72a539df408be9"
     },
     {
+      "id": "fixture:app_test.TestExternal/1",
+      "module": "fixture:app_test",
+      "name": "TestExternal",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "function",
+      "file": "app/external_test.go",
+      "line": 9,
+      "fingerprint": "a2d1fdc1069fddba"
+    },
+    {
+      "id": "fixture:app_test.helper/0",
+      "module": "fixture:app_test",
+      "name": "helper",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "app/external_test.go",
+      "line": 7,
+      "fingerprint": "dcbf1638ea6aa1de"
+    },
+    {
       "id": "fixture:cmd/tool.main/0",
       "module": "fixture:cmd/tool",
       "name": "main",
@@ -314,6 +425,17 @@
       "file": "cmd/tool/main.go",
       "line": 10,
       "fingerprint": "bb2117ca9eedb278"
+    },
+    {
+      "id": "fixture:config.Load/0",
+      "module": "fixture:config",
+      "name": "Load",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "config/config.go",
+      "line": 3,
+      "fingerprint": "cc29b8af7ecb97ed"
     },
     {
       "id": "fixture:osdep.OnLinux/0",
@@ -382,6 +504,14 @@
       "kind": "call",
       "file": "app/admin.go",
       "line": 81,
+      "precision": "precise"
+    },
+    {
+      "from": "fixture:app_test.TestExternal/1",
+      "to": "fixture:app_test.helper/0",
+      "kind": "call",
+      "file": "app/external_test.go",
+      "line": 9,
       "precision": "precise"
     },
     {
@@ -489,6 +619,15 @@
   ],
   "routes": [
     {
+      "id": "fixture:route:./:GET /healthz",
+      "method": "GET",
+      "path": "/healthz",
+      "handler": "fixture:./health/2",
+      "file": "root.go",
+      "line": 13,
+      "precision": "precise"
+    },
+    {
       "id": "fixture:route:app:* /items/{id}",
       "path": "/items/{id}",
       "handler": "fixture:app.Server.items/2",
@@ -551,12 +690,12 @@
   "stats": [
     {
       "language": "go",
-      "call_sites": 42,
-      "in_repo": 17,
+      "call_sites": 44,
+      "in_repo": 18,
       "dispatch": 1,
-      "external": 24,
+      "external": 25,
       "unresolved": 0,
-      "refs": 4,
+      "refs": 5,
       "not_extracted": 3
     }
   ]

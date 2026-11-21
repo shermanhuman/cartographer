@@ -25,9 +25,13 @@ validator: `internal/facts`. Check a plugin's output with
   `<repo>:<Module>` for modules and `<repo>:<Module>.<name>/<arity>` for
   functions, `<schema>.<table>` for tables. Route ids share the function
   namespace (both are edge endpoints): `<repo>:route:<router>:<METHOD> <path>`,
-  where the router is the Phoenix router module or the Go package directory.
-  Go functions are `<repo>:<package dir>.<Type>.<name>/<arity>`
-  (`<repo>:<Type>.<name>/<arity>` in the module root); Rust functions are
+  where the router is the Phoenix router module or the Go package directory
+  (`./` for the module root package: `<repo>:route:./:<METHOD> <path>`).
+  Go functions are `<repo>:<package dir>.<Type>.<name>/<arity>`; the module
+  root package's are `<repo>:./<Type>.<name>/<arity>` (no directory starts
+  with `./`, so a root `config.Load` method never meets `config/`'s `Load`),
+  and an external test package (`package p_test` beside `package p`) has
+  `<dir>_test` as its directory part (`<repo>:p_test.helper/0`). Rust functions are
   `<repo>:<crate dir>::<module path>.<Type>[impl <Trait>].<name>/<arity>`. Annotation ids are likewise unique
   across all annotation files.
 - A repository document's `repo` must name a repository in the snapshot

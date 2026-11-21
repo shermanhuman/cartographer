@@ -215,6 +215,19 @@ func TestConvertGo(t *testing.T) {
 			t.Errorf("unexpected function %s", id)
 		}
 	}
+	// The root package's ids start with ./ (its config.Load is not
+	// config/'s Load), and package app_test's helper is not app's.
+	for _, id := range []string{"fixture:./config.Load/0", "fixture:./Routes/1", "fixture:config.Load/0", app + "helper/0", "fixture:app_test.helper/0", "fixture:app_test.TestExternal/1"} {
+		if !slices.Contains(ids, id) {
+			t.Errorf("missing %s", id)
+		}
+	}
+	wantEdges(t, d, "fixture:app_test.TestExternal/1", 9, "fixture:app_test.helper/0 call precise")
+	for _, n := range d.Notes {
+		if n.Kind == "duplicate_definition" {
+			t.Errorf("note: %+v", n)
+		}
+	}
 	for _, f := range d.Files {
 		if strings.HasPrefix(f.Path, "..") {
 			t.Errorf("file outside root: %s", f.Path)
@@ -230,6 +243,7 @@ func TestConvertGo(t *testing.T) {
 		routes = append(routes, r.ID+" -> "+r.Handler+" "+r.Precision)
 	}
 	wantRoutes := []string{
+		"fixture:route:./:GET /healthz -> fixture:./health/2 precise",
 		"fixture:route:app:* /items/{id} -> " + app + "Server.items/2 precise",
 		"fixture:route:app:POST /dial/events -> " + app + "Server.dialEvent/2 heuristic",
 	}
@@ -252,8 +266,8 @@ func TestConvertGo(t *testing.T) {
 	if !slices.Equal(refs, wantRefs) {
 		t.Errorf("http refs:\n got %q\nwant %q", refs, wantRefs)
 	}
-	if s := d.Stats[0]; s.NotExtracted != 3 || s.Refs != 4 || s.Unresolved != 0 || s.CallSites != s.InRepo+s.Dispatch+s.External+s.Unresolved {
-		t.Errorf("stats %+v: want 3 not extracted (closure, computed pattern, computed path), 4 refs (s.f, three handlers), sites = sum", s)
+	if s := d.Stats[0]; s.NotExtracted != 3 || s.Refs != 5 || s.Unresolved != 0 || s.CallSites != s.InRepo+s.Dispatch+s.External+s.Unresolved {
+		t.Errorf("stats %+v: want 3 not extracted (closure, computed pattern, computed path), 5 refs (s.f, four handlers), sites = sum", s)
 	}
 	if d.Producer.Name != "scip-go" || d.Producer.Version != "0.2.9" || d.FactsVersion != 2 || d.Revision != "r1" {
 		t.Errorf("header: %+v", d)
@@ -266,7 +280,7 @@ func TestConvertGoStats(t *testing.T) {
 	if len(d.Stats) != 1 || d.Stats[0] != want {
 		t.Errorf("stats %+v, want %+v", d.Stats, want)
 	}
-	wantEdges(t, d, "fixture:Use/0", 15, "fixture:helper/0 call precise")
+	wantEdges(t, d, "fixture:./Use/0", 15, "fixture:./helper/0 call precise") // the root package
 	if len(d.Calls) != 1 {
 		t.Errorf("calls %+v: want only the in-repo one", d.Calls)
 	}

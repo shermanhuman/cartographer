@@ -18,3 +18,6 @@ func (d diskStore) Save(ctx context.Context, key string) error { return nil }
 
 // Keys is generic and variadic: arity 1.
 func Keys[T any](xs ...T) []T { return xs }
+
+// helper shares its name with the external test package's helper.
+func helper() int { return 0 }

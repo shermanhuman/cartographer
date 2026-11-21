@@ -182,6 +182,7 @@ type conv struct {
 	dropped int
 	notes   []facts.Note
 	rust    *rustState
+	goPkgs  map[string]map[string]bool // Go: directory -> its non-test package names
 }
 
 // normalize drops the package version from a global symbol, so ids and

@@ -69,8 +69,46 @@ func goArity(ft *ast.FuncType) int {
 	return n
 }
 
+// goPackageDir is the directory part of a Go function's id and its
+// module's id: the package directory; "." for the module root package
+// (whose function ids read ./<Type>.<name>, which no directory can start
+// with); and <dir>_test for an external test package (package p_test beside
+// package p), so its helpers don't merge with the package's own.
+func (c *conv) goPackageDir(d *doc, g *goFile) string {
+	dir := path.Dir(d.path)
+	if name := g.file.Name.Name; strings.HasSuffix(d.path, "_test.go") && strings.HasSuffix(name, "_test") && !c.goDirPackages()[dir][name] {
+		return dir + "_test"
+	}
+	return dir
+}
+
+// goDirPackages is, per directory, the package names its non-test files
+// declare.
+func (c *conv) goDirPackages() map[string]map[string]bool {
+	if c.goPkgs != nil {
+		return c.goPkgs
+	}
+	c.goPkgs = map[string]map[string]bool{}
+	for _, d := range c.docs {
+		if strings.HasSuffix(d.path, "_test.go") || !strings.HasSuffix(d.path, ".go") {
+			continue
+		}
+		g, err := c.goFile(d)
+		if err != nil {
+			continue
+		}
+		dir := path.Dir(d.path)
+		if c.goPkgs[dir] == nil {
+			c.goPkgs[dir] = map[string]bool{}
+		}
+		c.goPkgs[dir][g.file.Name.Name] = true
+	}
+	return c.goPkgs
+}
+
 // goName sets a Go function's id: <package dir>.<Type>.<name>/<arity>,
-// without .<Type> for functions.
+// without .<Type> for functions. The root package's reads
+// ./<Type>.<name>/<arity> (goPackageDir).
 func (c *conv) goName(f *fn) error {
 	g, err := c.goFile(f.d)
 	if err != nil {
@@ -81,7 +119,7 @@ func (c *conv) goName(f *fn) error {
 		return errors.New("no declaration at the definition")
 	}
 	f.f.Arity = min(goArity(ft), facts.MaxArity)
-	dir := path.Dir(f.d.path)
+	dir := c.goPackageDir(f.d, g)
 	owner := ""
 	if s := c.symbol(f.sym); s != nil && len(s.Descriptors) >= 2 {
 		if p := s.Descriptors[len(s.Descriptors)-2]; p.Suffix == scipb.Descriptor_Type {
@@ -89,8 +127,8 @@ func (c *conv) goName(f *fn) error {
 		}
 	}
 	prefix := dir + "."
-	if dir == "." { // the module root package: no directory in the id
-		prefix = ""
+	if dir == "." { // the module root package
+		prefix = "./"
 	}
 	f.f.ID = fmt.Sprintf("%s%s%s/%d", prefix, owner, f.f.Name, f.f.Arity)
 	f.key = moduleKey{id: dir, name: dir, namespace: strings.Split(dir, "/")}
@@ -257,7 +295,11 @@ func (c *conv) goRoute(d *doc, g *goFile, call *ast.CallExpr) {
 	if m == "" {
 		m = "*"
 	}
-	r := facts.Route{ID: c.opt.Repo + ":route:" + path.Dir(d.path) + ":" + m + " " + p, Method: method, Path: p, Handler: h.f.ID, File: d.path, Line: g.fset.Position(call.Pos()).Line, Precision: facts.Precise}
+	router := path.Dir(d.path)
+	if router == "." {
+		router = "./" // the root package, as its function ids
+	}
+	r := facts.Route{ID: c.opt.Repo + ":route:" + router + ":" + m + " " + p, Method: method, Path: p, Handler: h.f.ID, File: d.path, Line: g.fset.Position(call.Pos()).Line, Precision: facts.Precise}
 	if wrapped {
 		r.Precision = facts.Heuristic
 	}

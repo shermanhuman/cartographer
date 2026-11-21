@@ -28,7 +28,7 @@
   ],
   "functions": [
     {
-      "id": "fixture:T.M/0",
+      "id": "fixture:./T.M/0",
       "module": "fixture:.",
       "name": "M",
       "arity": 0,
@@ -39,7 +39,7 @@
       "fingerprint": "9b8f7f531d836d30"
     },
     {
-      "id": "fixture:Use/0",
+      "id": "fixture:./Use/0",
       "module": "fixture:.",
       "name": "Use",
       "arity": 0,
@@ -50,7 +50,7 @@
       "fingerprint": "d7687f387ec64dd8"
     },
     {
-      "id": "fixture:helper/0",
+      "id": "fixture:./helper/0",
       "module": "fixture:.",
       "name": "helper",
       "arity": 0,
@@ -63,8 +63,8 @@
   ],
   "calls": [
     {
-      "from": "fixture:Use/0",
-      "to": "fixture:helper/0",
+      "from": "fixture:./Use/0",
+      "to": "fixture:./helper/0",
       "kind": "call",
       "file": "stats.go",
       "line": 15,
