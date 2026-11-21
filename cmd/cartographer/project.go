@@ -478,8 +478,11 @@ without another prompt. Nothing is written into the checkouts but refs/cartograp
 `, reg.Anchor)
 		if !c.yes {
 			fmt.Fprintf(w, "Register project %s? [y/N] ", reg.Name)
-			line, _ := bufio.NewReader(stdin).ReadString('\n')
+			line, rerr := bufio.NewReader(stdin).ReadString('\n')
 			if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+				if rerr != nil && line == "" {
+					return errors.New("not registered: no answer on stdin (pass --yes to register without asking)")
+				}
 				return errors.New("not registered")
 			}
 		}

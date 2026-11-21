@@ -54,6 +54,10 @@ func TestProjectCommands(t *testing.T) {
 	if regs, _ := project.List(project.StateDir()); len(regs) != 0 {
 		t.Fatal("registered without a yes")
 	}
+	stdin = strings.NewReader("") // not a terminal: no answer at all
+	if err := run(context.Background(), []string{"project", "add", co, "--db", db}, &buf); err == nil || !strings.Contains(err.Error(), "pass --yes") {
+		t.Errorf("no answer on stdin: %v", err)
+	}
 	out := cli(t, db, "project", "add", co, "--yes")
 	if !strings.Contains(out, "acme/solo") || !strings.Contains(out, co) || !strings.Contains(out, "registered solo") {
 		t.Fatalf("add:\n%s", out)

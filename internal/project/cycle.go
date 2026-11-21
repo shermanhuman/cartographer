@@ -178,9 +178,12 @@ func (r *Runner) buildImport(ctx context.Context, name, source string, inputs []
 	var scratch string
 	var err error
 	if source == "head" {
-		// No lock: a one-off build beside any main cycle's scratch.
-		if err = os.MkdirAll(filepath.Join(r.StateDir, "head"), 0o755); err == nil {
-			scratch, err = os.MkdirTemp(filepath.Join(r.StateDir, "head"), "build-")
+		// No lock: a one-off build beside any main cycle's scratch. A
+		// crashed one's leftovers, older than any build can run, go first.
+		headDir := filepath.Join(r.StateDir, "head")
+		sweepHead(headDir, timeout+time.Hour, r.now())
+		if err = os.MkdirAll(headDir, 0o755); err == nil {
+			scratch, err = os.MkdirTemp(headDir, "build-")
 		}
 	} else {
 		scratch, err = Lock(r.StateDir, name).Scratch(name)
@@ -219,6 +222,20 @@ func (r *Runner) buildImport(ctx context.Context, name, source string, inputs []
 	}
 	r.logf("imported %s", m.ID)
 	return m.ID, nil
+}
+
+// sweepHead removes head/build-* scratch directories not touched for age
+// (a --head build that crashed or was killed never removed its own).
+func sweepHead(dir string, age time.Duration, now time.Time) {
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "build-") {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && now.Sub(fi.ModTime()) > age {
+			os.RemoveAll(filepath.Join(dir, e.Name()))
+		}
+	}
 }
 
 // digest is the inputs digest: each member's frozen commit (which fixes its

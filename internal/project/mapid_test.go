@@ -387,3 +387,33 @@ func TestProjectBuildsOnlyIntoItsStore(t *testing.T) {
 		t.Errorf("own store chose %s, %v; want no map yet", id, err)
 	}
 }
+
+// A --head build sweeps a crashed one's old scratch, and leaves a recent
+// one (another --head build may be running) alone.
+func TestHeadBuildSweepsOldScratch(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	old, recent := filepath.Join(x.state, "head", "build-old"), filepath.Join(x.state, "head", "build-recent")
+	for _, d := range []string{old, recent} {
+		os.MkdirAll(filepath.Join(d, "work"), 0o755)
+	}
+	long := x.clock().Add(-48 * time.Hour)
+	os.Chtimes(old, long, long)
+	os.Chtimes(recent, x.clock(), x.clock())
+	hs, err := store.Open(filepath.Join(t.TempDir(), "head.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hs.Close()
+	hr := x.runner()
+	hr.Store = hs
+	if _, err := hr.Head(context.Background(), sales); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); err == nil {
+		t.Error("old head scratch left")
+	}
+	if _, err := os.Stat(recent); err != nil {
+		t.Error("recent head scratch removed")
+	}
+}
