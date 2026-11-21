@@ -705,6 +705,15 @@ func TestPathAndGraphErrorCodes(t *testing.T) {
 	if _, err := pathView(ctx, q, "NoSuchThing.at_all/9", "Shop.Billing.charge/2"); errCode(err) != http.StatusNotFound {
 		t.Errorf("path to nothing: %d %v", errCode(err), err)
 	}
+	// A reference to something with no functions (a doc) is the caller's
+	// input: 404, as before F1-P20 (F2-P1).
+	doc := "doc:shop-app:docs/orders.md"
+	if _, err := pathView(ctx, q, doc, "Shop.Billing.charge/2"); err == nil || errCode(err) != http.StatusNotFound {
+		t.Errorf("path from a doc: %d %v", errCode(err), err)
+	}
+	if _, err := graph(ctx, q, doc, 1); err == nil || errCode(err) != http.StatusNotFound {
+		t.Errorf("graph of a doc: %d %v", errCode(err), err)
+	}
 	if _, err := s.DB.Exec(`DROP TABLE calls`); err != nil {
 		t.Fatal(err)
 	}

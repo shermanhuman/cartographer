@@ -128,7 +128,7 @@ func (q *Q) functionsOf(ctx context.Context, e *Entity) ([]string, string, error
 	case "file":
 		query = `SELECT id FROM nodes WHERE snapshot_id = ? AND 'file:' || repo || ':' || file = ? ORDER BY id`
 	default:
-		return nil, "", fmt.Errorf("%s %s has no functions to trace", e.Kind, e.ID)
+		return nil, "", &ErrNoFunctions{Kind: e.Kind, ID: e.ID}
 	}
 	rows, err := q.S.DB.QueryContext(ctx, query, q.Snapshot, e.ID)
 	if err != nil {

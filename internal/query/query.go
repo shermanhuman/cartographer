@@ -107,6 +107,14 @@ func (e *ErrNotFound) Error() string {
 	return msg
 }
 
+// ErrNoFunctions is a reference to an entity with no functions or routes
+// to trace from (a doc, an annotation): the caller's input, not a fault.
+type ErrNoFunctions struct{ Kind, ID string }
+
+func (e *ErrNoFunctions) Error() string {
+	return fmt.Sprintf("%s %s has no functions to trace", e.Kind, e.ID)
+}
+
 // routeLabel is a route's label in SQL: "METHOD /path", or the path alone
 // when the route takes any method (as in the nodes view).
 const routeLabel = `CASE method WHEN '' THEN path ELSE method || ' ' || path END`

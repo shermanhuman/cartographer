@@ -267,7 +267,8 @@ func errCode(err error) int {
 	var amb *query.ErrAmbiguous
 	var nf *query.ErrNotFound
 	var enf errNotFound
-	if errors.As(err, &amb) || errors.As(err, &nf) || errors.As(err, &enf) {
+	var nofn *query.ErrNoFunctions
+	if errors.As(err, &amb) || errors.As(err, &nf) || errors.As(err, &enf) || errors.As(err, &nofn) {
 		return http.StatusNotFound
 	}
 	return http.StatusInternalServerError
