@@ -56,5 +56,10 @@ defmodule AdminWeb.Router do
     get "/missing", MissingController, :show
     get @dynamic_path, PageController, :home
     match :*, "/any", PageController, :home
+
+    # alias: false drops the enclosing AdminWeb alias.
+    scope "/plain", alias: false do
+      get "/health", HealthController, :show
+    end
   end
 end

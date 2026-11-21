@@ -652,7 +652,11 @@ defmodule Cartographer.ElixirSource do
         other -> {other, nil, []}
       end
 
-    alias_ast = alias_ast || (Keyword.keyword?(opts) && Keyword.get(opts, :alias)) || nil
+    # `alias: false` must survive: `false || nil` would be nil.
+    alias_ast =
+      if alias_ast != nil,
+        do: alias_ast,
+        else: if(Keyword.keyword?(opts), do: Keyword.get(opts, :alias))
 
     inner = %{
       path:

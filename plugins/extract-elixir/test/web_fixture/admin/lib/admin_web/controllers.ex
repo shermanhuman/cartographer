@@ -26,3 +26,7 @@ end
 defmodule AdminWeb.API.V2.TenantUsersController do
   def index(conn, _params), do: conn
 end
+
+defmodule HealthController do
+  def show(conn, _params), do: conn
+end

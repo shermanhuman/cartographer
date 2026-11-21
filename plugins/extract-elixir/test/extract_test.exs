@@ -304,7 +304,8 @@ defmodule Cartographer.ElixirExtractTest do
                 "admin:AdminWeb.API.V1.SalesColdController.check/2"},
                {"admin:route:AdminWeb.Router:POST /api/v1/sales/cold/suppress",
                 "admin:AdminWeb.API.V1.SalesColdController.suppress/2"},
-               {"admin:route:AdminWeb.Router:POST /users/log-in", "admin:AdminWeb.UserSessionController.create/2"}
+               {"admin:route:AdminWeb.Router:POST /users/log-in", "admin:AdminWeb.UserSessionController.create/2"},
+               {"admin:route:AdminWeb.Router:GET /plain/health", "admin:HealthController.show/2"}
              ])
 
       assert %{
