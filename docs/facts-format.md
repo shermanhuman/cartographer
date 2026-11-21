@@ -32,7 +32,9 @@ validator: `internal/facts`. Check a plugin's output with
   with `./`, so a root `config.Load` method never meets `config/`'s `Load`),
   and an external test package (`package p_test` beside `package p`) has
   `<dir>_test` as its directory part (`<repo>:p_test.helper/0`). Rust functions are
-  `<repo>:<crate dir>::<module path>.<Type>[impl <Trait>].<name>/<arity>`. Annotation ids are likewise unique
+  `<repo>:<crate dir>::<module path>.<Type>[impl <Trait>].<name>/<arity>`,
+  with `./` as the crate dir of a crate at the repository root
+  (`<repo>:./::a.call_a/1`, and `<repo>:./.top/0` at its top level). Annotation ids are likewise unique
   across all annotation files.
 - A repository document's `repo` must name a repository in the snapshot
   manifest.

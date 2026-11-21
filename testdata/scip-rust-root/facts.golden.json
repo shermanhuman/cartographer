@@ -1,0 +1,86 @@
+{
+  "facts_version": 2,
+  "producer": {
+    "name": "rust-analyzer",
+    "version": "0.3.3121-standalone",
+    "call_precision": "precise"
+  },
+  "repo": "fixture",
+  "revision": "r1",
+  "files": [
+    {
+      "path": "src/lib.rs",
+      "language": "rust",
+      "category": "source"
+    }
+  ],
+  "modules": [
+    {
+      "id": "fixture:./",
+      "name": "./",
+      "namespace": [
+        "./"
+      ],
+      "file": "src/lib.rs",
+      "line": 3,
+      "language": "rust"
+    },
+    {
+      "id": "fixture:./::a",
+      "name": "./::a",
+      "namespace": [
+        "./",
+        "a"
+      ],
+      "file": "src/lib.rs",
+      "line": 6,
+      "language": "rust"
+    }
+  ],
+  "functions": [
+    {
+      "id": "fixture:./.top/0",
+      "module": "fixture:./",
+      "name": "top",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "src/lib.rs",
+      "line": 3,
+      "fingerprint": "e579c69bbdc3a280"
+    },
+    {
+      "id": "fixture:./::a.call_a/1",
+      "module": "fixture:./::a",
+      "name": "call_a",
+      "arity": 1,
+      "min_arity": 1,
+      "kind": "function",
+      "file": "src/lib.rs",
+      "line": 6,
+      "fingerprint": "da3fa8c48814e036"
+    }
+  ],
+  "calls": [
+    {
+      "from": "fixture:./::a.call_a/1",
+      "to": "fixture:./.top/0",
+      "kind": "call",
+      "file": "src/lib.rs",
+      "line": 7,
+      "precision": "precise"
+    }
+  ],
+  "stats": [
+    {
+      "language": "rust",
+      "call_sites": 1,
+      "in_repo": 1,
+      "dispatch": 0,
+      "external": 0,
+      "unresolved": 0,
+      "refs": 0,
+      "not_extracted": 0
+    }
+  ]
+}

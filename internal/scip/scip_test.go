@@ -32,6 +32,7 @@ var (
 	goFixture    = fixture{"../../testdata/scip-go", Go}
 	statsFixture = fixture{"../../testdata/scip-go-stats", Go}
 	rustFixture  = fixture{"../../testdata/scip-rust", Rust}
+	rustRoot     = fixture{"../../testdata/scip-rust-root", Rust}
 )
 
 func haveTools(t *testing.T, names ...string) {
@@ -283,6 +284,18 @@ func TestConvertGoStats(t *testing.T) {
 	wantEdges(t, d, "fixture:./Use/0", 15, "fixture:./helper/0 call precise") // the root package
 	if len(d.Calls) != 1 {
 		t.Errorf("calls %+v: want only the in-repo one", d.Calls)
+	}
+}
+
+// A crate at the repository root has ./ as its directory part.
+func TestConvertRustRootCrate(t *testing.T) {
+	d := convertFixture(t, rustRoot)
+	function(t, d, "fixture:./.top/0")
+	wantEdges(t, d, "fixture:./::a.call_a/1", 7, "fixture:./.top/0 call precise")
+	for _, m := range d.Modules {
+		if strings.HasPrefix(m.ID, "fixture:.") && !strings.HasPrefix(m.ID, "fixture:./") {
+			t.Errorf("module %s", m.ID)
+		}
 	}
 }
 

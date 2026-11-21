@@ -129,8 +129,9 @@ func attrsBefore(d *doc, off int) string {
 }
 
 // crateDir names a crate: its package directory for the library and
-// src/main.rs, else the target's root file without .rs (src/bin/tool,
-// tests/api).
+// src/main.rs ("./" for a package at the repository root, which no
+// directory can start with), else the target's root file without .rs
+// (src/bin/tool, tests/api).
 func (rs *rustState) crateDir(key, fallbackFile string, lib bool) string {
 	file, ok := rs.roots[key]
 	if !ok {
@@ -138,6 +139,9 @@ func (rs *rustState) crateDir(key, fallbackFile string, lib bool) string {
 	}
 	pkg := rs.pkgDir(path.Dir(file))
 	if lib || file == path.Join(pkg, "src/main.rs") || !ok {
+		if pkg == "." {
+			return "./"
+		}
 		return pkg
 	}
 	f := strings.TrimSuffix(file, ".rs")
