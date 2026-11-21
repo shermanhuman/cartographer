@@ -217,7 +217,13 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 		if err != nil {
 			return nil, &StepError{t.Repo, t.Commit, "schema", err}
 		}
-		key, err := schemaKey(t.root, t.Commit, sc, pd, m.Tools, t.Name())
+		// A --head tree is the working copy, not the commit: without a
+		// cache_key its key covers every staged file.
+		var staged []string
+		if t.Head {
+			staged = t.files
+		}
+		key, err := schemaKey(t.root, t.Commit, staged, sc, pd, m.Tools, t.Name())
 		if err != nil {
 			return nil, &StepError{t.Repo, t.Commit, "schema", err}
 		}
@@ -426,8 +432,10 @@ func writeDoc(p string, d *facts.Doc) error {
 // env (so a managed cluster's port doesn't count), the postgres setting,
 // the plugin code, the tools (PostgreSQL's version among them when it is
 // managed), and the files under cache_key in the archive (each must match
-// something), or the commit when there is none.
-func schemaKey(root, commit string, sc *SchemaSettings, pluginsDigest string, tools map[string]string, repo string) (string, error) {
+// something). When there is no cache_key it is the commit, or for a --head
+// build (staged, the working copy's files) every staged file, since
+// uncommitted changes don't move the commit.
+func schemaKey(root, commit string, staged []string, sc *SchemaSettings, pluginsDigest string, tools map[string]string, repo string) (string, error) {
 	h := sha256.New()
 	env, _ := json.Marshal(sc.Env) // map keys sort
 	fmt.Fprintf(h, "project-schema v1\nprepare=%q\ncapture=%q\nenv=%s\npostgres=%q\nplugins=%s\n", sc.Prepare, sc.Capture, env, sc.Postgres, pluginsDigest)
@@ -441,7 +449,19 @@ func schemaKey(root, commit string, sc *SchemaSettings, pluginsDigest string, to
 	for _, k := range keys {
 		fmt.Fprintf(h, "tool %s=%s\n", strings.TrimPrefix(k, repo+"/"), tools[k])
 	}
-	if len(sc.CacheKey) == 0 {
+	switch {
+	case len(sc.CacheKey) > 0:
+	case staged != nil:
+		fmt.Fprintf(h, "working copy\n")
+		for _, f := range staged {
+			b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(f)))
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(h, "file %s %d\n", f, len(b))
+			h.Write(b)
+		}
+	default:
 		fmt.Fprintf(h, "revision=%s\n", commit)
 	}
 	for _, p := range sc.CacheKey {
