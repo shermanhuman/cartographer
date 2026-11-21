@@ -32,6 +32,9 @@ type Input struct {
 	Head     bool // map the working copy at Path, uncommitted files included
 	Settings *Settings
 	Pins     map[string]string
+	// toolsErr is a failed install of one of its tools (installTools): the
+	// tools step reports it instead of installing again.
+	toolsErr error
 }
 
 // StepError is a build that stopped at one repo's step.
@@ -168,6 +171,9 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 			tools, err = SchemaTools(t.Settings.Schema, t.Pins)
 		} else {
 			tools, err = ExtractorTools(step, t.Pins)
+		}
+		if err == nil {
+			err = t.toolsErr
 		}
 		if err != nil {
 			return nil, &StepError{t.Repo, t.Commit, "tools", err}

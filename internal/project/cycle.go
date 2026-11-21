@@ -156,16 +156,35 @@ func (r *Runner) cycle(ctx context.Context, name string, force bool) (Result, er
 	if err != nil {
 		return Result{}, r.fail(ctx, name, st, "", err)
 	}
-	digest := r.digest(inputs)
-	if have, ok, err := r.Store.Newest(ctx, name, "main"); err != nil {
-		return Result{}, err
-	} else if ok && have.InputsDigest == digest {
-		st.Imported = digest
-		st.Failed = nil
-		return Result{Skipped: "unchanged"}, SaveState(r.StateDir, name, st)
+	// settled answers a cycle with nothing to build: its inputs are mapped
+	// already, or failed within FailedRetry.
+	settled := func(digest string) (Result, bool, error) {
+		if have, ok, err := r.Store.Newest(ctx, name, "main"); err != nil {
+			return Result{}, true, err
+		} else if ok && have.InputsDigest == digest {
+			st.Imported = digest
+			st.Failed = nil
+			return Result{Skipped: "unchanged"}, true, SaveState(r.StateDir, name, st)
+		}
+		if !force && st.held(digest, now) {
+			return Result{Skipped: "these inputs failed " + now.Sub(st.Failed.At).Round(time.Minute).String() + " ago"}, true, nil
+		}
+		return Result{}, false, nil
 	}
-	if !force && st.held(digest, now) {
-		return Result{Skipped: "these inputs failed " + now.Sub(st.Failed.At).Round(time.Minute).String() + " ago"}, nil
+	digest := r.digest(inputs)
+	if res, done, err := settled(digest); done {
+		return res, err
+	}
+	// Only now, past the hold, are missing tools installed: a failed
+	// install is the failure of these inputs, retried after FailedRetry
+	// like any other. Installing can resolve a prefix pin, so the digest
+	// is taken again.
+	r.installTools(ctx, inputs)
+	if d := r.digest(inputs); d != digest {
+		digest = d
+		if res, done, err := settled(digest); done {
+			return res, err
+		}
 	}
 	snap, err := r.buildImport(ctx, name, "main", inputs, digest, now)
 	if err != nil {
@@ -435,10 +454,10 @@ func (r *Runner) fetchAll(ctx context.Context, reg *Registration, st *State, env
 }
 
 // resolvePins replaces each repo pin a member's extractors use with the
-// concrete version mise runs for it (installing it if need be), so the
-// inputs digest and the manifest name what actually ran. A tool that can't
-// be resolved keeps its pin as written; the build then fails at its tools
-// step and says why.
+// concrete version mise runs for it, so the inputs digest and the manifest
+// name what actually ran. It installs nothing (installTools does): a tool
+// mise doesn't have keeps its pin as written, as does one that can't be
+// resolved (the build then fails at its tools step and says why).
 func (r *Runner) resolvePins(ctx context.Context, in *Input) {
 	if r.Mise == nil {
 		return
@@ -452,13 +471,31 @@ func (r *Runner) resolvePins(ctx context.Context, in *Input) {
 	if len(pinned) == 0 {
 		return
 	}
-	res, err := r.Mise.Resolve(ctx, pinned)
+	res, err := r.Mise.ResolveInstalled(ctx, pinned)
 	if err != nil {
 		r.logf("%s: tools: %v", in.Name(), err)
 		return
 	}
 	for _, t := range res {
 		in.Pins[t.Name] = t.Version
+	}
+}
+
+// installTools installs every tool the inputs' builds run that mise
+// doesn't have yet, then resolves their pins. A failed install is logged
+// and kept with its input: the build's tools step fails on it and says
+// why, without running the installer again.
+func (r *Runner) installTools(ctx context.Context, inputs []Input) {
+	if r.Mise == nil {
+		return
+	}
+	for i := range inputs {
+		in := &inputs[i]
+		if err := r.Mise.Install(ctx, toolsOf(*in)); err != nil {
+			r.logf("%s: tools: %v", in.Name(), err)
+			in.toolsErr = err
+		}
+		r.resolvePins(ctx, in)
 	}
 }
 
@@ -588,10 +625,9 @@ func (r *Runner) Head(ctx context.Context, from string) (Result, error) {
 		if err != nil {
 			return Result{}, &StepError{spec.Repo, "", "tools", err}
 		}
-		in := Input{Member: m, Commit: fresh.Head(ctx, m.Path), Head: true, Settings: ms, Pins: pins}
-		r.resolvePins(ctx, &in)
-		inputs = append(inputs, in)
+		inputs = append(inputs, Input{Member: m, Commit: fresh.Head(ctx, m.Path), Head: true, Settings: ms, Pins: pins})
 	}
+	r.installTools(ctx, inputs)
 	sort.SliceStable(inputs, func(i, j int) bool {
 		return strings.EqualFold(inputs[i].Repo, anchor) && !strings.EqualFold(inputs[j].Repo, anchor)
 	})

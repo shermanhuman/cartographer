@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -200,10 +201,17 @@ func (m *Mise) miseWith(ctx context.Context, pathFirst []string, args ...string)
 	if len(pathFirst) > 0 {
 		cmd.Env = append(cmd.Env, "PATH="+strings.Join(pathFirst, string(os.PathListSeparator))+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
+	// Its own process group: a cancelled install ends the compilers and
+	// downloads it started too, and WaitDelay closes the pipes they hold.
+	cmd.WaitDelay = 5 * time.Second
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("mise %s: %v: %s", strings.Join(args, " "), err, workspace.Tail(strings.TrimSpace(errb.String())))
+	if err := workspace.RunGroup(cmd); err != nil {
+		msg := workspace.Tail(strings.TrimSpace(errb.String()))
+		if ctx.Err() != nil {
+			msg = strings.TrimSpace(msg + " (" + ctx.Err().Error() + ")")
+		}
+		return "", fmt.Errorf("mise %s: %v: %s", strings.Join(args, " "), err, msg)
 	}
 	return out.String(), nil
 }
@@ -327,19 +335,35 @@ func (m *Mise) Env(ctx context.Context, tools []Tool) ([]string, error) {
 	return env, nil
 }
 
-// Resolve installs each tool mise doesn't have and returns them at the
-// concrete versions mise runs (go@1.25 -> go@1.25.3), in the same order:
-// the version a prefix pin means depends on what is installed, so the
-// inputs digest and the manifest record the resolved one.
-func (m *Mise) Resolve(ctx context.Context, tools []Tool) ([]Tool, error) {
+// Install installs each tool mise doesn't have (in installOrder, each
+// install seeing the ones before it on PATH).
+func (m *Mise) Install(ctx context.Context, tools []Tool) error {
 	var bins []string
-	got := map[string]string{}
 	for _, t := range installOrder(tools) {
 		p, err := m.ensure(ctx, t, bins...)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		bins = append(bins, p...)
+	}
+	return nil
+}
+
+// ResolveInstalled returns the tools at the concrete versions mise runs
+// (go@1.25 -> go@1.25.3), in the same order, installing nothing: the
+// version a prefix pin means depends on what is installed, so the inputs
+// digest and the manifest record the resolved one. A tool mise doesn't
+// have keeps its version as given.
+func (m *Mise) ResolveInstalled(ctx context.Context, tools []Tool) ([]Tool, error) {
+	got := map[string]string{}
+	for _, t := range tools {
+		if _, err := m.mise(ctx, "where", t.Spec()); err != nil {
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			got[t.Spec()] = t.Version
+			continue
+		}
 		out, err := m.mise(ctx, "latest", "--installed", t.Spec())
 		if err != nil {
 			return nil, err
