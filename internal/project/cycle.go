@@ -536,7 +536,7 @@ func (r *Runner) Head(ctx context.Context, from string) (Result, error) {
 		return Result{}, err
 	}
 	anchor, aroot, as := slug, root, s
-	l := &Locator{Checkouts: r.Checkouts, Near: root, Roots: r.Roots}
+	l := &Locator{Checkouts: r.Checkouts, Near: root, Roots: r.Roots, PreferNear: true}
 	if s.Anchor != "" {
 		anchor = s.Anchor
 		if aroot = l.Find(ctx, anchor); aroot == "" {
@@ -559,6 +559,7 @@ func (r *Runner) Head(ctx context.Context, from string) (Result, error) {
 				return Result{}, &StepError{spec.Repo, "", "checkout", fmt.Errorf("no checkout: %s", CloneCommand(spec.Repo, r.Roots))}
 			}
 		}
+		r.logf("%s: working copy %s", spec.Repo, m.Path)
 		ms := as
 		if !strings.EqualFold(spec.Repo, anchor) {
 			if ms, err = readWorkingSettings(m.Path, spec.Repo); err != nil {

@@ -21,6 +21,10 @@ type Locator struct {
 	Checkouts map[string]string
 	Near      string
 	Roots     []string
+	// PreferNear makes any sibling of Near win, a linked worktree too, over
+	// the roots: `refresh --head` from a PR worktree reads the PR
+	// worktrees beside it, not the main checkouts.
+	PreferNear bool
 
 	scanned map[string][]string // normalized URL -> candidate checkouts under Roots
 }
@@ -49,7 +53,7 @@ func (l *Locator) Find(ctx context.Context, slug string) string {
 		}
 	}
 	// A sibling main working tree needs no scan of the roots.
-	if p := best(siblings); p != "" && !isWorktree(p) {
+	if p := best(siblings); p != "" && (!isWorktree(p) || l.PreferNear) {
 		return p
 	}
 	if l.scanned == nil {

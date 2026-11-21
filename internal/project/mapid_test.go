@@ -417,3 +417,36 @@ func TestHeadBuildSweepsOldScratch(t *testing.T) {
 		t.Error("recent head scratch removed")
 	}
 }
+
+// refresh --head from a PR worktree reads the PR worktrees beside it (linked
+// worktrees too), not the main checkouts under the roots.
+func TestHeadPrefersSiblingWorktrees(t *testing.T) {
+	x := newH(t)
+	admin, sales, infra := x.world()
+	wts := filepath.Join(x.dir, "prs")
+	os.MkdirAll(wts, 0o755)
+	for name, co := range map[string]string{"admin": admin, "sales": sales, "infra": infra} {
+		git(t, co, "worktree", "add", "-q", "-b", "pr", filepath.Join(wts, name+"-pr"))
+	}
+	pr := filepath.Join(wts, "admin-pr")
+	writeFiles(t, pr, map[string]string{"lib/pr.ex": "defmodule PR do end\n"})
+	git(t, pr, "add", ".")
+	git(t, pr, "commit", "-q", "-m", "pr")
+	hs, err := store.Open(filepath.Join(t.TempDir(), "head.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hs.Close()
+	hr := x.runner()
+	hr.Store = hs
+	res, err := hr.Head(context.Background(), filepath.Join(wts, "sales-pr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos, _ := hs.Repos(context.Background(), res.Snapshot)
+	for _, r := range repos {
+		if r.Name == "admin" && r.Revision != git(t, pr, "rev-parse", "HEAD") {
+			t.Errorf("admin mapped at %s, want the PR worktree's %s", r.Revision, git(t, pr, "rev-parse", "HEAD"))
+		}
+	}
+}
