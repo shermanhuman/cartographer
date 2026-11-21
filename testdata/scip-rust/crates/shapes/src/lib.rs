@@ -15,3 +15,6 @@ pub fn built_by_script() -> bool {
 }
 
 maker::make_fn!();
+
+pub mod a;
+pub mod b;

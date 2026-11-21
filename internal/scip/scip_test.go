@@ -322,6 +322,11 @@ func TestConvertRust(t *testing.T) {
 	both := []string{geo + "Circle[impl Shape].area/0 dispatch heuristic", geo + "Square[impl Shape].area/0 dispatch heuristic"}
 	wantEdges(t, d, geo+"total/1", 49, both...)
 	wantEdges(t, d, geo+"area_of/1", 54, both...)
+	// Two traits named Service (in a and b): a call through one dispatches
+	// to its own impls only, also one in the other trait's file (A-M8).
+	const shapes = "fixture:crates/shapes::"
+	wantEdges(t, d, shapes+"a.call_a/1", 25, shapes+"a.A[impl Service].run/0 dispatch heuristic")
+	wantEdges(t, d, shapes+"b.call_b/1", 16, shapes+"a.A2[impl Service].run/0 dispatch heuristic", shapes+"b.B[impl Service].run/0 dispatch heuristic")
 	// A turbofish function value is a ref; the turbofish call is a call.
 	wantEdges(t, d, "fixture:crates/alpha.main/0", 12)
 	wantEdges(t, d, "fixture:crates/alpha.main/0", 13, geo+"area_of/1 call precise")
@@ -359,7 +364,7 @@ func TestConvertRust(t *testing.T) {
 			t.Errorf("copy_tile calls nothing in the repository: %+v", c)
 		}
 	}
-	if s := d.Stats[0]; s.CallSites != s.InRepo+s.Dispatch+s.External+s.Unresolved || s.Dispatch != 3 || s.Refs != 1 || s.Unresolved != 0 {
+	if s := d.Stats[0]; s.CallSites != s.InRepo+s.Dispatch+s.External+s.Unresolved || s.Dispatch != 5 || s.Refs != 1 || s.Unresolved != 0 {
 		t.Errorf("stats %+v", s)
 	}
 }

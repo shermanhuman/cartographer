@@ -20,6 +20,10 @@ type rustState struct {
 	roots    map[string]string // package + target descriptors -> crate root file
 	testMods []string          // module symbols (normalized, ending in "/") under #[cfg(test)]
 	pkgDirs  map[string]string // directory -> nearest package directory
+	// traitNames counts in-repo traits by short name; pkgs are the
+	// packages (crates) functions are defined in.
+	traitNames map[string]int
+	pkgs       map[string]bool
 }
 
 // rustTarget is how many leading descriptors name the crate target:
@@ -332,7 +336,8 @@ func traitName(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// traitOf names the in-repo trait a trait member (Shape#area()) belongs to.
+// traitOf is the normalized symbol of the in-repo trait a trait member
+// (Shape#area()) belongs to.
 func (rs *rustState) traitOf(n string) (string, bool) {
 	s := rs.c.symbol(n)
 	if s == nil || len(s.Descriptors) < 2 {
@@ -346,7 +351,7 @@ func (rs *rustState) traitOf(n string) (string, bool) {
 	if rs.c.kindOf(parent) != scipb.SymbolInformation_Trait {
 		return "", false
 	}
-	return p.Name, true
+	return parent, true
 }
 
 // rustName sets a Rust function's id:
@@ -484,16 +489,168 @@ var reSelf = regexp.MustCompile(`^(?:&\s*(?:'\w+\s+)?)?(?:mut\s+)?self\b`)
 
 func isSelfParam(p string) bool { return reSelf.MatchString(p) }
 
+// rustPrepare collects trait impl methods by their trait's identity (the
+// trait's SCIP symbol, from the path in the impl's header) and name, so a
+// call through a::Service::run dispatches to impls of a::Service only, not
+// of another trait named Service. An impl whose header names its trait
+// nowhere the index saw (one a macro wrote) goes under the trait's short
+// name, used only while one in-repo trait has that name.
 func (c *conv) rustPrepare() {
 	for _, f := range c.fns {
-		if f.trait != "" {
-			k := f.trait + "\x00" + f.f.Name
-			c.impls[k] = append(c.impls[k], f.sym)
+		if f.trait == "" {
+			continue
 		}
+		k := c.implTrait(f)
+		if k == "" {
+			k = "?" + f.trait
+		}
+		k += "\x00" + f.f.Name
+		c.impls[k] = append(c.impls[k], f.sym)
 	}
 	for k := range c.impls {
 		sort.Strings(c.impls[k])
 	}
+	c.rust.traitNames = map[string]int{}
+	for n, info := range c.syms {
+		if info.Kind == scipb.SymbolInformation_Trait && c.fnPkg(n) {
+			if s := c.symbol(n); s != nil && len(s.Descriptors) > 0 {
+				c.rust.traitNames[s.Descriptors[len(s.Descriptors)-1].Name]++
+			}
+		}
+	}
+}
+
+// fnPkg reports whether symbol n is in a package the repository defines
+// functions in (an in-repo crate).
+func (c *conv) fnPkg(n string) bool {
+	if c.rust.pkgs == nil {
+		c.rust.pkgs = map[string]bool{}
+		for _, f := range c.fns {
+			c.rust.pkgs[c.pkgOf(f.sym)] = true
+		}
+	}
+	return c.rust.pkgs[c.pkgOf(n)]
+}
+
+// implTrait is the normalized symbol of the trait f's impl block implements:
+// the occurrence of a type named f.trait in the block's header (impl<T>
+// a::Service for X<T> where ...: the first one), or "".
+func (c *conv) implTrait(f *fn) string {
+	d := f.d
+	if d.blocks == nil {
+		d.blocks = rustBlocks(d.src)
+	}
+	var head, open = -1, -1
+	for _, b := range d.blocks { // innermost: the last opened that holds f
+		if b.open < f.name.start && f.name.start < b.close {
+			head, open = b.head, b.open
+		}
+	}
+	if open < 0 {
+		return ""
+	}
+	d.hasGlobalOccurrence(0, 0) // builds occStarts
+	for i := sort.SearchInts(d.occStarts, head); i < len(d.occStarts) && d.occStarts[i] < open; i++ {
+		for _, oi := range d.occ[d.occStarts[i]] {
+			n := c.normalize(d.d.Occurrences[oi].Symbol)
+			if s := c.symbol(n); s != nil && len(s.Descriptors) > 0 {
+				if last := s.Descriptors[len(s.Descriptors)-1]; last.Suffix == scipb.Descriptor_Type && last.Name == f.trait {
+					return n
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// rblock is a {} block: the start of the item it opens (after the
+// previous ; or } at its depth), its { and its }.
+type rblock struct{ head, open, close int }
+
+// rustBlocks lists src's {} blocks, skipping comments, strings, raw
+// strings and char literals.
+func rustBlocks(src []byte) []rblock {
+	var out []rblock
+	var stack []int
+	heads := []int{0}
+	for i := 0; i < len(src); {
+		b := src[i]
+		switch {
+		case b == '/' && i+1 < len(src) && src[i+1] == '/':
+			for i < len(src) && src[i] != '\n' {
+				i++
+			}
+		case b == '/' && i+1 < len(src) && src[i+1] == '*':
+			depth := 0
+			for i < len(src) {
+				if src[i] == '/' && i+1 < len(src) && src[i+1] == '*' {
+					depth++
+					i += 2
+				} else if src[i] == '*' && i+1 < len(src) && src[i+1] == '/' {
+					depth--
+					i += 2
+					if depth == 0 {
+						break
+					}
+				} else {
+					i++
+				}
+			}
+		case b == '"':
+			i = skipString(src, i)
+		case b == '\'':
+			switch {
+			case i+2 < len(src) && src[i+1] == '\\':
+				j := i + 2
+				for j < len(src) && src[j] != '\'' && src[j] != '\n' {
+					j++
+				}
+				i = j + 1
+			case i+2 < len(src) && src[i+2] == '\'':
+				i += 3
+			default: // a lifetime
+				i++
+			}
+		case isIdentStart(b):
+			j := i
+			for j < len(src) && isIdent(src[j]) {
+				j++
+			}
+			if w := string(src[i:j]); (w == "r" || w == "br") && j < len(src) && (src[j] == '"' || src[j] == '#') {
+				k := j
+				for k < len(src) && src[k] == '#' {
+					k++
+				}
+				if k < len(src) && src[k] == '"' {
+					end := strings.Index(string(src[k+1:]), "\""+strings.Repeat("#", k-j))
+					if end < 0 {
+						return out
+					}
+					j = k + 1 + end + 1 + (k - j)
+				}
+			}
+			i = j
+		case b == '{':
+			stack = append(stack, len(out))
+			out = append(out, rblock{head: heads[len(heads)-1], open: i, close: len(src)})
+			heads = append(heads, i+1)
+			i++
+		case b == '}':
+			if len(stack) > 0 {
+				out[stack[len(stack)-1]].close = i
+				stack = stack[:len(stack)-1]
+				heads = heads[:len(heads)-1]
+			}
+			heads[len(heads)-1] = i + 1
+			i++
+		case b == ';':
+			heads[len(heads)-1] = i + 1
+			i++
+		default:
+			i++
+		}
+	}
+	return out
 }
 
 var rustKeywords = map[string]bool{

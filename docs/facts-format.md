@@ -93,8 +93,11 @@ treat a missing `kind` as `table`.
 
 `calls[].kind` `dispatch` marks a call to an interface or trait method that
 the extractor links to each implementation in the repository, `heuristic`:
-which implementation runs isn't proven. A call on a concrete receiver keeps
-the compiler's resolution, `precise`. A reference to a callable that isn't
+which implementation runs isn't proven. A Rust call through a trait links to
+the implementations of that trait only, matched by the trait's own symbol
+(the path in each `impl` header), not its name: `a::Service` and
+`b::Service` stay apart. A call on a concrete receiver keeps the
+compiler's resolution, `precise`. A reference to a callable that isn't
 invoked (a method value, a registration) is never a call; it is counted in
 `stats.refs`.
 

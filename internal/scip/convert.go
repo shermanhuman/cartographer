@@ -139,6 +139,7 @@ type doc struct {
 	fns       []*fn         // functions defined here, by enclosing range start
 	occ       map[int][]int // byte offset of an occurrence start -> occurrence indexes
 	occStarts []int         // sorted keys of occ, built on demand
+	blocks    []rblock      // Rust: the {} blocks, built on demand
 	test      bool          // a test file
 	extra     any           // language-specific (Go: *ast.File)
 }
@@ -151,7 +152,7 @@ type fn struct {
 	body  span // the enclosing range
 	f     facts.Function
 	key   moduleKey
-	trait string // Rust: the trait an impl method implements, without generic arguments
+	trait string // Rust: the short name of the trait an impl method implements, without generic arguments
 }
 
 // span is a byte range in a document's source.
@@ -659,6 +660,11 @@ func (c *conv) dispatchTargets(f *fn) ([]*fn, bool) {
 		}
 		for _, s := range c.impls[trait+"\x00"+f.f.Name] {
 			addSym(s)
+		}
+		if short := c.descName(trait); c.rust.traitNames[short] == 1 {
+			for _, s := range c.impls["?"+short+"\x00"+f.f.Name] {
+				addSym(s) // impls a macro wrote, while no other trait has the name
+			}
 		}
 		if len(out) == 1 && out[0] == f {
 			return nil, false
