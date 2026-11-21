@@ -72,12 +72,12 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   `options`/`head` call with a literal path, inside any nesting of `scope`
   blocks (`scope "/p"`, `scope "/p", Alias`, `scope "/p", Alias, opts`,
   `scope path: ..., alias: ...`, and inside `if`/`live_session` blocks), is
-  one route: `id` `<repo>:route:<METHOD> <path>`, `path` the joined scope
+  one route: `id` `<repo>:route:<Router module>:<METHOD> <path>`, `path` the joined scope
   and route paths (`:id` segments as written). `handler` is
   `<Controller>.<action>/2` when this document defines it (the controller
   is expanded through the lexical aliases and prefixed by the scope
   aliases, as Phoenix does), and then `precision` is `precise`. The same
-  method and path a second time is left out with a `duplicate_route` note
+  router, method and path a second time is left out with a `duplicate_route` note
   (the first in file order is kept). Not extracted, only counted in
   `stats`: a non-literal path, and any other router macro whose first
   argument is a `/` path (`live`, `forward`, `resources`, `match`,
