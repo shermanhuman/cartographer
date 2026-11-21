@@ -209,6 +209,9 @@ func refreshCmd(ctx context.Context, w io.Writer, c *common, pos []string, dbSet
 		if !dbSet {
 			return errors.New("refresh --head builds your working copies: give it its own --db, so the map built from main stays as it is")
 		}
+		if err := headStoreAllowed(c.db); err != nil {
+			return err
+		}
 		r, err := newRunner(c, s, os.Stderr)
 		if err != nil {
 			return err
@@ -227,9 +230,20 @@ func refreshCmd(ctx context.Context, w io.Writer, c *common, pos []string, dbSet
 	if len(pos) > 0 {
 		names = pos
 	} else {
-		regs, err := project.List(sd)
+		all, err := project.List(sd)
 		if err != nil {
 			return err
+		}
+		// Only the projects that build into this store.
+		db, _ := filepath.Abs(c.db)
+		var regs []*project.Registration
+		for _, reg := range all {
+			if reg.InStore(db) {
+				regs = append(regs, reg)
+			}
+		}
+		if len(regs) == 0 && len(all) > 0 {
+			return fmt.Errorf("no project builds into %s (each builds into the store it was added with; see `cartographer project list`)", db)
 		}
 		cwd, _ := os.Getwd()
 		co := fresh.Find(ctx, cwd)
@@ -267,6 +281,26 @@ func refreshCmd(ctx context.Context, w io.Writer, c *common, pos []string, dbSet
 		}
 	}
 	return errors.Join(failed...)
+}
+
+// headStoreAllowed refuses a `refresh --head` into the default store or into
+// any registered project's store, so a working-copy map never lands beside
+// (or prunes) the maps built from main.
+func headStoreAllowed(db string) error {
+	abs, err := filepath.Abs(db)
+	if err != nil {
+		return err
+	}
+	if project.SamePath(abs, filepath.Join(session.DataDir(), "carto.db")) {
+		return fmt.Errorf("refresh --head: %s is the default store; give it a scratch --db, so the map built from main stays as it is", abs)
+	}
+	regs, _ := project.List(project.StateDir())
+	for _, reg := range regs {
+		if reg.InStore(abs) {
+			return fmt.Errorf("refresh --head: %s is project %s's store; give it a scratch --db, so the map built from main stays as it is", abs, reg.Name)
+		}
+	}
+	return nil
 }
 
 func printResult(ctx context.Context, w io.Writer, s *store.Store, name string, res project.Result) error {
@@ -307,6 +341,7 @@ func projectCmd(ctx context.Context, w io.Writer, c *common, pos []string) error
 				}
 				fmt.Fprintf(w, "  %s  %s\n", m.Repo, p)
 			}
+			fmt.Fprintf(w, "  store %s\n", reg.Store)
 			if st, err := project.LoadState(sd, reg.Name); err == nil {
 				switch {
 				case st.Attempt.IsZero():

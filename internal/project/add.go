@@ -95,7 +95,7 @@ func (r *Runner) Plan(ctx context.Context, arg string) (*AddPlan, error) {
 	if !inList {
 		return nil, fmt.Errorf("%s isn't in %s's member list (members in its %s)", slug, anchor, SettingsFile)
 	}
-	plan := &AddPlan{Reg: &Registration{Name: as.Project, Anchor: anchor, Entry: entry}}
+	plan := &AddPlan{Reg: &Registration{Name: as.Project, Anchor: anchor, Entry: entry, Store: r.DB}}
 	for _, spec := range list {
 		m := Member{Repo: spec.Repo, Branch: spec.Branch}
 		switch {

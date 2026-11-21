@@ -105,8 +105,23 @@ func (r *Runner) fail(ctx context.Context, name string, st *State, digest string
 // hookLocked runs at the start of every cycle, under the lock (tests).
 var hookLocked = func() {}
 
+// ErrWrongStore is a main cycle asked to build into a store other than the
+// one its project was registered with.
+type ErrWrongStore struct{ Project, Store, DB string }
+
+func (e *ErrWrongStore) Error() string {
+	if e.Store == "" {
+		return fmt.Sprintf("project %s records no store: run `cartographer project add` for it again", e.Project)
+	}
+	return fmt.Sprintf("project %s builds its maps into %s (recorded by project add), not %s: pass --db %s, or run project add again with this --db to move it", e.Project, e.Store, e.DB, e.Store)
+}
+
 func (r *Runner) cycle(ctx context.Context, name string, force bool) (Result, error) {
 	hookLocked()
+	// Main maps go only into the store the project was registered with.
+	if reg, err := Load(r.StateDir, name); err == nil && !reg.InStore(r.DB) {
+		return Result{}, &ErrWrongStore{Project: name, Store: reg.Store, DB: r.DB}
+	}
 	now := r.now().UTC()
 	st, err := LoadState(r.StateDir, name)
 	if err != nil {

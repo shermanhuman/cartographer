@@ -3,6 +3,7 @@ package project_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -314,9 +315,63 @@ func TestPublishedSnapshotOfProjectNeverChosen(t *testing.T) {
 	}
 	main, _, _ := x.s.Newest(context.Background(), "shop", "main")
 	for _, cwd := range []string{sales, t.TempDir()} {
-		sess := &session.Session{Store: x.s, Cwd: cwd, StateDir: x.state, Now: x.clock}
+		sess := &session.Session{Store: x.s, DB: x.db, Cwd: cwd, StateDir: x.state, Now: x.clock}
 		if id, err := sess.Choose(context.Background()); err != nil || id != main.ID {
 			t.Errorf("from %s chose %s, %v; want %s", cwd, id, err, main.ID)
 		}
+	}
+}
+
+// A project builds its main maps only into the store it was registered
+// with: a session on another store (a `refresh --head` scratch store)
+// schedules nothing and keeps its "your checkouts" map, a cycle there is
+// refused, and in the project's own store a head snapshot never stands in
+// for the project's map.
+func TestProjectBuildsOnlyIntoItsStore(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	if reg := x.register(sales); reg.Store != x.db {
+		t.Fatalf("registered store %q, want %q", reg.Store, x.db)
+	}
+	scratch := filepath.Join(t.TempDir(), "try.db")
+	hs, err := store.Open(scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hs.Close()
+	hr := x.runner()
+	hr.Store, hr.DB = hs, scratch
+	hres, err := hr.Head(context.Background(), sales)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x.advance(time.Hour)
+	cycles := 0
+	sess := &session.Session{Store: hs, DB: scratch, Cwd: sales, StateDir: x.state, Now: x.clock,
+		ProjectRebuild: func(string) { cycles++ }}
+	q, _, err := sess.Query(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cycles != 0 {
+		t.Errorf("a query on the scratch store scheduled %d main cycles", cycles)
+	}
+	if q.Snapshot != hres.Snapshot || !strings.Contains(header(t, q), "your checkouts") {
+		t.Errorf("scratch store chose %s (want the head map %s): %s", q.Snapshot, hres.Snapshot, header(t, q))
+	}
+	var wrong *project.ErrWrongStore
+	if _, err := hr.Cycle(context.Background(), "shop", true); !errors.As(err, &wrong) {
+		t.Errorf("a main cycle into the scratch store: %v", err)
+	}
+	if _, ok, _ := hs.Newest(context.Background(), "shop", "main"); ok {
+		t.Error("a main map was built into the scratch store")
+	}
+
+	// The project's own store, holding only a head snapshot of its name.
+	x.legacySnapshot("head", git(t, sales, "rev-parse", "HEAD"))
+	own := &session.Session{Store: x.s, DB: x.db, Cwd: sales, StateDir: x.state, Now: x.clock}
+	var first *session.ErrFirstBuild
+	if id, err := own.Choose(context.Background()); !errors.As(err, &first) {
+		t.Errorf("own store chose %s, %v; want no map yet", id, err)
 	}
 }

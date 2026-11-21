@@ -263,13 +263,21 @@ func (s *Session) now() time.Time {
 	return time.Now()
 }
 
-// registrations lists the registered projects (none without StateDir).
+// registrations lists the projects registered with this session's store
+// (none without StateDir). A project registered with another store is
+// neither scheduled nor applied here: its builds go only to its own store.
 func (s *Session) registrations() []*project.Registration {
 	regs, err := project.List(s.StateDir)
 	if err != nil {
 		s.logf("cartographer: %v", err)
 	}
-	return regs
+	var out []*project.Registration
+	for _, r := range regs {
+		if r.InStore(s.DB) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func registered(regs []*project.Registration, ws string) *project.Registration {
@@ -582,15 +590,10 @@ func (s *Session) chooseRepo(ctx context.Context, co fresh.Checkout) (string, st
 	}
 	latest := map[string]string{} // workspace -> newest snapshot (all is newest first)
 	var names []string
-	hasMain := map[string]bool{}
 	for _, si := range all {
-		hasMain[si.Workspace] = hasMain[si.Workspace] || si.Source == "main"
-	}
-	for _, si := range all {
-		// A registered project's map comes only from its fetched mains; a
-		// store holding none (one `refresh --head` built) has its "your
-		// checkouts" maps.
-		if registered(regs, si.Workspace) != nil && si.Source != "main" && (si.Source != "head" || hasMain[si.Workspace]) {
+		// A registered project's map comes only from its fetched mains
+		// (never a `head` or published snapshot of the same name).
+		if registered(regs, si.Workspace) != nil && si.Source != "main" {
 			continue
 		}
 		if _, ok := latest[si.Workspace]; !ok {
@@ -698,14 +701,4 @@ func (s *Session) HasCode(ctx context.Context) bool {
 
 // samePath reports whether a and b name the same directory, through symlinks
 // (macOS temp dirs live under /var -> /private/var).
-func samePath(a, b string) bool {
-	if a == "" || b == "" {
-		return false
-	}
-	ra, err1 := filepath.EvalSymlinks(a)
-	rb, err2 := filepath.EvalSymlinks(b)
-	if err1 != nil || err2 != nil {
-		return filepath.Clean(a) == filepath.Clean(b)
-	}
-	return ra == rb
-}
+func samePath(a, b string) bool { return project.SamePath(a, b) }

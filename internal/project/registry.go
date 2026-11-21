@@ -37,6 +37,29 @@ type Registration struct {
 	// later are looked for beside it first.
 	Entry   string   `json:"entry"`
 	Members []Member `json:"members"`
+	// Store is the database file `project add` ran against (absolute): the
+	// project's main maps are built into it and no other, and `refresh
+	// --head` refuses it.
+	Store string `json:"store"`
+}
+
+// InStore reports whether db is the store the project builds into.
+func (r *Registration) InStore(db string) bool {
+	return r.Store != "" && SamePath(r.Store, db)
+}
+
+// SamePath reports whether a and b name the same file or directory,
+// through symlinks (macOS temp dirs live under /var -> /private/var).
+func SamePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ra, err1 := filepath.EvalSymlinks(a)
+	rb, err2 := filepath.EvalSymlinks(b)
+	if err1 != nil || err2 != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return ra == rb
 }
 
 // Member is one registered member.

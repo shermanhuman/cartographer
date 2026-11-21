@@ -72,6 +72,9 @@ func TestProjectCommands(t *testing.T) {
 	if err := run(context.Background(), []string{"refresh", "--head", "--from", co}, &buf); err == nil || !strings.Contains(err.Error(), "its own --db") {
 		t.Errorf("refresh --head without --db: %v", err)
 	}
+	if err := run(context.Background(), []string{"refresh", "--head", "--from", co, "--db", db}, &buf); err == nil || !strings.Contains(err.Error(), "project solo's store") {
+		t.Errorf("refresh --head into the project's store: %v", err)
+	}
 	headDB := filepath.Join(t.TempDir(), "head.db")
 	if out := cli(t, headDB, "refresh", "--head", "--from", co); !strings.Contains(out, "your checkouts: imported map") {
 		t.Errorf("refresh --head:\n%s", out)
