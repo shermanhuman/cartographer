@@ -61,5 +61,7 @@ defmodule AdminWeb.Router do
     scope "/plain", alias: false do
       get "/health", HealthController, :show
     end
+
+    resources "/users", UserController, only: [:index, :show]
   end
 end

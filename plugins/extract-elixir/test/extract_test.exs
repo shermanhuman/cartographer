@@ -231,6 +231,23 @@ defmodule Cartographer.ElixirExtractTest do
       {first, 0} = System.cmd("elixir", args)
       {second, 0} = System.cmd("elixir", args)
       assert first == second
+
+      # The web fixtures too (routes, refs, stats).
+      for repo <- ["admin", "rosearch"] do
+        web_args = [
+          Path.join(@plugin, "extract.exs"),
+          "--repo",
+          repo,
+          "--root",
+          Path.join(@web, repo),
+          "--source-roots",
+          "lib"
+        ]
+
+        {a, 0} = System.cmd("elixir", web_args)
+        {b, 0} = System.cmd("elixir", web_args)
+        assert a == b, "#{repo}: two runs differ"
+      end
       decoded = JSON.decode!(first)
       assert decoded["revision"] == "abc123"
       assert String.starts_with?(first, ~s({"facts_version":2,"producer":))
@@ -322,16 +339,18 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{kind: "duplicate_route", file: "lib/admin_web/router.ex"}] =
                Enum.filter(doc.notes, &(&1.kind == "duplicate_route"))
 
-      # live_dashboard, forward, live, match and a non-literal path are
-      # counted; pipe_through and pipelines are not routes.
-      assert %{not_extracted: 5, dispatch: 0, refs: 0} = stats(doc)
+      # live_dashboard, forward, live, match, resources (only: or not) and
+      # a non-literal path are counted; pipe_through and pipelines are not
+      # routes.
+      assert %{not_extracted: 6, dispatch: 0, refs: 0} = stats(doc)
 
       assert skips(web("admin")) == [
                {43, "live_dashboard"},
                {44, "forward"},
                {50, "live"},
                {57, "get with a non-literal path"},
-               {58, "match"}
+               {58, "match"},
+               {65, "resources"}
              ]
 
       refute Map.has_key?(doc, :http_refs)
