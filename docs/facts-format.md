@@ -50,19 +50,25 @@ starts with `<repo>:`.
 | Elixir function | `<repo>:<Module>.<name>/<arity>` | `shop:Shop.Orders.create/2` |
 | Elixir route | `<repo>:route:<router module>:<METHOD> <path>` | `shop:route:ShopWeb.Router:POST /orders` |
 | Go module (a package) | `<repo>:<package dir>` | `api:internal/app` |
-| Go function | `<repo>:<package dir>.<Type>.<name>/<arity>` (no `.<Type>` for a function) | `api:internal/app.Server.run/1`, `api:internal/app.Keys/1` |
+| Go function | `<repo>:<package dir>.<Type>.<name>/<arity>` (no `.<Type>` for a function); methods are in their package's module | `api:internal/app.Server.run/1`, `api:internal/app.Keys/1` |
 | Go route | `<repo>:route:<package dir>:<METHOD> <path>` (`*` for any method) | `api:route:internal/app:GET /items/{id}` |
-| Rust module | `<repo>:<crate dir>::<module path>` | `svc:crates/shapes::geo` |
-| Rust function | `<repo>:<crate dir>::<module path>.<Type>[impl <Trait>].<name>/<arity>` | `svc:crates/shapes::geo.Circle[impl Shape].area/0` |
+| Rust module (a module) | `<repo>:<crate dir>::<module path>` | `svc:crates/shapes::geo` |
+| Rust module (a type, trait or impl) | `<repo>:<crate dir>::<module path>.<Type>[impl <Trait>]` | `svc:crates/shapes::geo.Circle`, `svc:crates/shapes.Shape`, `svc:crates/shapes::a.A[impl Service]` |
+| Rust function | `<repo>:<crate dir>::<module path>.<Type>[impl <Trait>].<name>/<arity>`, in the module of its type, trait or impl | `svc:crates/shapes::geo.Circle[impl Shape].area/0` |
 
 The **package dir** of a Go package is its directory relative to the
 repository root, with these forms:
 
-- `./` for the module root package. Its module id is `<repo>:./`, and
-  `./` already ends the directory part, so its functions read
-  `<repo>:./<Type>.<name>/<arity>` (`<repo>:./config.Load/0`, apart from
-  `config/`'s `<repo>:config.Load/0`) and its routes
-  `<repo>:route:./:GET /healthz`. No directory starts with `./`.
+- `./` for the package at the repository root. A module nested in a
+  subdirectory has its root package at that directory (`app_test`), like
+  any other package. The root package's module id is `<repo>:./`, and its
+  routes are `<repo>:route:./:GET /healthz`. No directory starts with `./`.
+- Its function ids are the one decided exception to "module id, a dot,
+  then the rest": `./` already ends the directory part, so they are
+  `<repo>:./<name>/<arity>` and `<repo>:./<Type>.<name>/<arity>`
+  (`<repo>:./main/0`, `<repo>:./config.Load/0`, apart from `config/`'s
+  `<repo>:config.Load/0`), not `<repo>:./.main/0`. They are kept as they
+  are.
 - `<dir>[test]` for an external test package (`package p_test` beside
   `package p` in `<dir>`), and `./[test]` at the module root:
   `<repo>:app[test].helper/0`, `<repo>:./[test].TestRoot/1`. No package
@@ -76,6 +82,13 @@ and `src/main.rs`, `./` for a package at the repository root
 without `.rs` (`crates/shapes/tests/api`, `src/bin/tool`). `<Type>`,
 `[impl <Trait>]` and the module path are left out when empty; lifetimes are
 dropped from type arguments (`Prepared<'a>` is `Prepared`).
+
+`[impl <Trait>]` uses the trait's short name, without its path
+(`[impl Service]` for `impl a::Service for A`). rust-analyzer gives
+`impl v1::Service for Both` and `impl v2::Service for Both` one symbol, so
+when one type implements two same-named traits, one of the two impls'
+same-named functions is lost. Calls still dispatch by the trait itself, not
+its short name.
 
 ## Calls
 
