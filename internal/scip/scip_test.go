@@ -541,3 +541,24 @@ func TestRustRunnerEnvAndLockedFetch(t *testing.T) {
 		}
 	}
 }
+
+// cfg(test) is read as a predicate: only one that can't hold with test off
+// marks code as test.
+func TestCfgTest(t *testing.T) {
+	for attr, want := range map[string]bool{
+		"#[cfg(test)]":                          true,
+		"#[cfg(all(test, unix))]":               true,
+		"#[cfg(all(unix, any(test, doctest)))]": false,
+		"#[cfg(not(test))]":                     false,
+		"#[cfg(not(any(test, miri)))]":          false,
+		`#[cfg(feature = "test-utils")]`:        false,
+		`#[cfg(any(test, feature = "test"))]`:   false,
+		`#[cfg(all(test, feature = "x"))]`:      true,
+		"#[cfg(not(not(test)))]":                true,
+		"#[cfg(target_os = \"linux\")]":         false,
+	} {
+		if got := cfgTest(attr); got != want {
+			t.Errorf("cfgTest(%s) = %v, want %v", attr, got, want)
+		}
+	}
+}

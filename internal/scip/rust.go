@@ -49,19 +49,148 @@ func (c *conv) targetKey(n string) (string, int) {
 
 var (
 	reCfgTest = regexp.MustCompile(`#\[\s*cfg\s*\(([^\]]*)\)\s*\]`)
-	reNotTest = regexp.MustCompile(`not\s*\(\s*test\s*\)`)
 	reTestFn  = regexp.MustCompile(`#\[\s*(?:[A-Za-z_]\w*::)*test\s*[\](]`)
-	reWord    = regexp.MustCompile(`\btest\b`)
 	reMod     = regexp.MustCompile(`\bmod\s*$`)
 )
 
+// cfgTest reports whether attrs hold a #[cfg(...)] whose predicate can
+// only hold under cfg(test): false with test off, whatever the other
+// options (features, targets) are. cfg(test) and cfg(all(test, unix)) are;
+// cfg(not(any(test, miri))) and cfg(feature = "test-utils") are not.
 func cfgTest(attrs string) bool {
 	for _, m := range reCfgTest.FindAllStringSubmatch(attrs, -1) {
-		if reWord.MatchString(reNotTest.ReplaceAllString(m[1], "")) {
+		p := &cfgParser{s: m[1]}
+		n := p.expr()
+		if n == nil || p.bad {
+			continue
+		}
+		if n.eval(false) == cfgFalse && n.eval(true) != cfgFalse {
 			return true
 		}
 	}
 	return false
+}
+
+type tri int
+
+const (
+	cfgUnknown tri = iota
+	cfgFalse
+	cfgTrue
+)
+
+// cfgNode is a cfg predicate: an option (name, or name = "value"), or
+// not/all/any over others.
+type cfgNode struct {
+	op   string // "", "not", "all", "any"
+	name string // an option: "test", "unix", "feature" (with a value)
+	kids []*cfgNode
+}
+
+// eval is the predicate's value with test on or off and every other
+// option unknown.
+func (n *cfgNode) eval(test bool) tri {
+	switch n.op {
+	case "not":
+		switch n.kids[0].eval(test) {
+		case cfgTrue:
+			return cfgFalse
+		case cfgFalse:
+			return cfgTrue
+		}
+		return cfgUnknown
+	case "all", "any":
+		stop, all := cfgFalse, cfgTrue // all: one false decides
+		if n.op == "any" {
+			stop, all = cfgTrue, cfgFalse
+		}
+		res := all
+		for _, k := range n.kids {
+			switch k.eval(test) {
+			case stop:
+				return stop
+			case cfgUnknown:
+				res = cfgUnknown
+			}
+		}
+		return res
+	}
+	if n.name == "test" {
+		if test {
+			return cfgTrue
+		}
+		return cfgFalse
+	}
+	return cfgUnknown
+}
+
+// cfgParser reads a cfg predicate; quoted values are skipped whole.
+type cfgParser struct {
+	s   string
+	i   int
+	bad bool
+}
+
+func (p *cfgParser) space() {
+	for p.i < len(p.s) && strings.ContainsRune(" \t\r\n", rune(p.s[p.i])) {
+		p.i++
+	}
+}
+
+func (p *cfgParser) expr() *cfgNode {
+	p.space()
+	start := p.i
+	for p.i < len(p.s) && (p.s[p.i] == '_' || p.s[p.i] == ':' || 'a' <= p.s[p.i] && p.s[p.i] <= 'z' || 'A' <= p.s[p.i] && p.s[p.i] <= 'Z' || '0' <= p.s[p.i] && p.s[p.i] <= '9') {
+		p.i++
+	}
+	name := p.s[start:p.i]
+	if name == "" {
+		p.bad = true
+		return nil
+	}
+	p.space()
+	if p.i < len(p.s) && p.s[p.i] == '=' { // name = "value"
+		p.i++
+		p.space()
+		if p.i >= len(p.s) || p.s[p.i] != '"' {
+			p.bad = true
+			return nil
+		}
+		for p.i++; p.i < len(p.s) && p.s[p.i] != '"'; p.i++ {
+			if p.s[p.i] == '\\' {
+				p.i++
+			}
+		}
+		p.i++
+		return &cfgNode{name: name + "="}
+	}
+	if p.i < len(p.s) && p.s[p.i] == '(' && (name == "not" || name == "all" || name == "any") {
+		p.i++
+		n := &cfgNode{op: name}
+		for {
+			p.space()
+			if p.i < len(p.s) && p.s[p.i] == ')' {
+				p.i++
+				break
+			}
+			k := p.expr()
+			if k == nil {
+				p.bad = true
+				return nil
+			}
+			n.kids = append(n.kids, k)
+			p.space()
+			if p.i < len(p.s) && p.s[p.i] == ',' {
+				p.i++
+			}
+		}
+		if name == "not" && len(n.kids) != 1 {
+			p.bad = true
+			return nil
+		}
+		return n
+	}
+	return &cfgNode{name: name}
 }
 
 func newRustState(c *conv) *rustState {
