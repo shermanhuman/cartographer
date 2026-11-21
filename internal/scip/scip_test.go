@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,16 +62,12 @@ func tools(lang string) []string {
 	return []string{"rust-analyzer", "cargo"}
 }
 
-func indexerEnv(t *testing.T) []string {
-	return setEnv(os.Environ(), "CARGO_TARGET_DIR="+t.TempDir())
-}
-
 // regenerate indexes a fixture and writes its index.scip, with the
 // machine-specific metadata (project root, arguments) removed.
 func regenerate(t *testing.T, fx fixture) {
 	t.Helper()
 	haveTools(t, tools(fx.lang)...)
-	idx, err := RunIndexer(context.Background(), RunOptions{Options: Options{Lang: fx.lang, Repo: "fixture", Root: fx.dir}, RustBuildScripts: true, Env: indexerEnv(t), Log: testWriter{t}}, t.TempDir())
+	idx, err := RunIndexer(context.Background(), RunOptions{Options: Options{Lang: fx.lang, Repo: "fixture", Root: fx.dir}, RustBuildScripts: true, CargoTargetDir: t.TempDir(), Log: testWriter{t}}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,14 +369,23 @@ func TestIndexGoFixesGOOS(t *testing.T) {
 	haveTools(t, tools(Go)...)
 	// In the extractor's environment, not the test binary's: the test binary
 	// itself would build for darwin otherwise.
-	env := append(os.Environ(), "GOOS=darwin", "CGO_ENABLED=1")
-	d, err := Extract(context.Background(), RunOptions{Options: Options{Lang: Go, Repo: "fixture", Root: goFixture.dir}, Env: env, Log: testWriter{t}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ids := fnIDs(d)
-	if !slices.Contains(ids, "fixture:osdep.OnLinux/0") || slices.Contains(ids, "fixture:osdep.OnDarwin/0") {
-		t.Errorf("GOOS=darwin leaked into the indexer: %v", ids)
+	// The user's GOFLAGS, from the environment and from a go env file,
+	// don't reach it either.
+	goenv := filepath.Join(t.TempDir(), "go.env")
+	os.WriteFile(goenv, []byte("GOFLAGS=-tags=cartographer_extra\n"), 0o644)
+	for _, extra := range [][]string{{"GOFLAGS=-tags=cartographer_extra"}, {"GOENV=" + goenv}} {
+		env := append(append(os.Environ(), "GOOS=darwin", "CGO_ENABLED=1"), extra...)
+		d, err := Extract(context.Background(), RunOptions{Options: Options{Lang: Go, Repo: "fixture", Root: goFixture.dir}, Env: env, Log: testWriter{t}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := fnIDs(d)
+		if !slices.Contains(ids, "fixture:osdep.OnLinux/0") || slices.Contains(ids, "fixture:osdep.OnDarwin/0") {
+			t.Errorf("GOOS=darwin leaked into the indexer: %v", ids)
+		}
+		if slices.Contains(ids, "fixture:osdep.OnExtra/0") {
+			t.Errorf("%s leaked into the indexer", extra[0])
+		}
 	}
 }
 
@@ -387,7 +393,7 @@ func TestIndexGoFixesGOOS(t *testing.T) {
 // scripts off loses what they and the proc macro make.
 func TestIndexRust(t *testing.T) {
 	haveTools(t, tools(Rust)...)
-	opt := RunOptions{Options: Options{Lang: Rust, Repo: "fixture", Root: rustFixture.dir, Revision: "r1"}, RustBuildScripts: true, Env: indexerEnv(t), Log: testWriter{t}}
+	opt := RunOptions{Options: Options{Lang: Rust, Repo: "fixture", Root: rustFixture.dir, Revision: "r1"}, RustBuildScripts: true, CargoTargetDir: t.TempDir(), Log: testWriter{t}}
 	on, err := Extract(context.Background(), opt)
 	if err != nil {
 		t.Fatal(err)
@@ -469,9 +475,12 @@ func TestGoModulesAndEnv(t *testing.T) {
 	if err != nil || !slices.Equal(mods, []string{".", "svc"}) {
 		t.Errorf("modules %v, %v", mods, err)
 	}
-	env := setEnv([]string{"GOOS=darwin", "PATH=/bin", "CGO_ENABLED=1"}, GoEnv...)
-	if !slices.Equal(env, []string{"PATH=/bin", "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0"}) {
+	env := setEnv([]string{"GOOS=darwin", "PATH=/bin", "CGO_ENABLED=1", "GOFLAGS=-tags=x", "GOEXPERIMENT=rangefunc"}, GoEnv...)
+	if !slices.Equal(env, []string{"PATH=/bin", "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0", "GOENV=off", "GOFLAGS=", "GOEXPERIMENT="}) {
 		t.Errorf("env %v", env)
+	}
+	if got := withoutEnv([]string{"PATH=/bin", "RUSTFLAGS=-Cx", "CARGO_ENCODED_RUSTFLAGS=x", "CARGO_BUILD_TARGET=y", "CARGO_TARGET_DIR=/t", "CARGO_PROFILE_DEV_OPT_LEVEL=3", "CARGO_HOME=/h"}, rustAmbient); !slices.Equal(got, []string{"PATH=/bin", "CARGO_HOME=/h"}) {
+		t.Errorf("rust env %v", got)
 	}
 	var cfg map[string]any
 	json.Unmarshal(RustConfig(false), &cfg)
@@ -499,5 +508,36 @@ func TestDropsDocumentsOutsideRoot(t *testing.T) {
 	}
 	if d.Notes[0].Kind != "dropped_documents" || !strings.HasPrefix(d.Notes[0].Message, "2 ") {
 		t.Errorf("notes %+v", d.Notes)
+	}
+}
+
+// The Rust runner fetches --locked when there is a Cargo.lock, builds in the
+// target directory it is given (not the caller's CARGO_TARGET_DIR), and
+// passes none of the caller's RUSTFLAGS to cargo or rust-analyzer.
+func TestRustRunnerEnvAndLockedFetch(t *testing.T) {
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "log")
+	ix, _ := filepath.Abs(filepath.Join(rustFixture.dir, "index.scip"))
+	os.WriteFile(filepath.Join(bin, "cargo"), []byte("#!/bin/sh\necho \"cargo $* target=$CARGO_TARGET_DIR flags=$RUSTFLAGS\" >> '"+log+"'\n"), 0o755)
+	os.WriteFile(filepath.Join(bin, "rust-analyzer"), []byte("#!/bin/sh\necho \"rust-analyzer target=$CARGO_TARGET_DIR flags=$RUSTFLAGS\" >> '"+log+"'\nwhile [ $# -gt 0 ]; do [ \"$1\" = --output ] && /bin/cp '"+ix+"' \"$2\"; shift; done\n"), 0o755)
+	root, target := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(root, "Cargo.toml"), []byte("[package]\nname = \"x\"\n"), 0o644)
+	env := []string{"PATH=" + bin, "RUSTFLAGS=-Ctarget-cpu=native", "CARGO_TARGET_DIR=/ambient"}
+	for _, lock := range []bool{false, true} {
+		if lock {
+			os.WriteFile(filepath.Join(root, "Cargo.lock"), []byte("version = 4\n"), 0o644)
+		}
+		os.Remove(log)
+		if _, err := RunIndexer(context.Background(), RunOptions{Options: Options{Lang: Rust, Repo: "x", Root: root}, CargoTargetDir: target, Env: env, Log: io.Discard}, t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
+		b, _ := os.ReadFile(log)
+		fetch := "cargo fetch"
+		if lock {
+			fetch += " --locked"
+		}
+		want := fetch + " target=" + target + " flags=\nrust-analyzer target=" + target + " flags=\n"
+		if string(b) != want {
+			t.Errorf("Cargo.lock %v: ran\n%s\nwant\n%s", lock, b, want)
+		}
 	}
 }

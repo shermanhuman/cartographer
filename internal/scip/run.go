@@ -20,8 +20,37 @@ import (
 const RustTarget = "x86_64-unknown-linux-gnu"
 
 // GoEnv is the fixed build environment scip-go runs with, so every machine
-// sees the same files: build tags and cgo decide which files exist.
-var GoEnv = []string{"GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0"}
+// sees the same files: build tags and cgo decide which files exist. The
+// user's go env file is off (a `go env -w GOFLAGS=-tags=…` would change
+// what is indexed), and so are any GOFLAGS or GOEXPERIMENT in the
+// environment; its module download settings are carried over (goNetEnv).
+var GoEnv = []string{"GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0", "GOENV=off", "GOFLAGS=", "GOEXPERIMENT="}
+
+// goNetVars are the go settings that only say where modules come from, so
+// they may come from the user's go env file without changing the index.
+var goNetVars = []string{"GOPROXY", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOSUMDB", "GOINSECURE", "GOAUTH"}
+
+// rustAmbient reports a variable that would change what cargo and
+// rust-analyzer build or where (RUSTFLAGS, CARGO_BUILD_*, CARGO_TARGET_*,
+// CARGO_PROFILE_*, ...); the indexer runs without them.
+func rustAmbient(k string) bool {
+	switch k {
+	case "RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_INCREMENTAL":
+		return true
+	}
+	return strings.HasPrefix(k, "CARGO_BUILD_") || strings.HasPrefix(k, "CARGO_TARGET_") || strings.HasPrefix(k, "CARGO_PROFILE_")
+}
+
+// withoutEnv drops the variables drop reports.
+func withoutEnv(env []string, drop func(string) bool) []string {
+	var out []string
+	for _, e := range env {
+		if k, _, _ := strings.Cut(e, "="); !drop(k) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
 
 // RunOptions configure an indexer run.
 type RunOptions struct {
@@ -29,6 +58,10 @@ type RunOptions struct {
 	// RustBuildScripts runs build scripts and proc macros (rust-analyzer
 	// needs them to see generated code). Off, both are skipped.
 	RustBuildScripts bool
+	// CargoTargetDir is cargo's target directory (a per-repo directory under
+	// the cache keeps build script and proc-macro output between builds);
+	// "" is a throwaway one beside the index.
+	CargoTargetDir string
 	// Env is the base environment for the indexer (default os.Environ());
 	// indexers are found on its PATH.
 	Env []string
@@ -72,7 +105,7 @@ func RunIndexer(ctx context.Context, opt RunOptions, dir string) ([]Index, error
 		if len(mods) == 0 {
 			return nil, fmt.Errorf("scip: no go.mod under %s", root)
 		}
-		env := setEnv(opt.Env, GoEnv...)
+		env := setEnv(opt.Env, append(goNetEnv(ctx, opt.Env, root), GoEnv...)...)
 		var out []Index
 		for i, m := range mods {
 			file := filepath.Join(dir, fmt.Sprintf("go-%d.scip", i))
@@ -93,7 +126,18 @@ func RunIndexer(ctx context.Context, opt RunOptions, dir string) ([]Index, error
 		if _, err := os.Stat(filepath.Join(root, "Cargo.toml")); err != nil {
 			return nil, fmt.Errorf("scip: no Cargo.toml at %s", root)
 		}
-		if err := run(ctx, opt.Env, root, opt.Log, "cargo", "fetch"); err != nil {
+		target := opt.CargoTargetDir
+		if target == "" {
+			target = filepath.Join(dir, "target")
+		}
+		env := setEnv(withoutEnv(opt.Env, rustAmbient), "CARGO_TARGET_DIR="+target)
+		// --locked: a stale Cargo.lock fails instead of resolving versions
+		// as of today.
+		fetch := []string{"fetch"}
+		if _, err := os.Stat(filepath.Join(root, "Cargo.lock")); err == nil {
+			fetch = append(fetch, "--locked")
+		}
+		if err := run(ctx, env, root, opt.Log, "cargo", fetch...); err != nil {
 			return nil, err
 		}
 		cfg := filepath.Join(dir, "rust-analyzer.json")
@@ -101,7 +145,7 @@ func RunIndexer(ctx context.Context, opt RunOptions, dir string) ([]Index, error
 			return nil, err
 		}
 		file := filepath.Join(dir, "rust.scip")
-		if err := run(ctx, opt.Env, root, opt.Log, "rust-analyzer", "scip", ".", "--output", file, "--config-path", cfg); err != nil {
+		if err := run(ctx, env, root, opt.Log, "rust-analyzer", "scip", ".", "--output", file, "--config-path", cfg); err != nil {
 			return nil, err
 		}
 		idx, err := ReadIndex(file)
@@ -127,6 +171,33 @@ func RustConfig(buildScripts bool) []byte {
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	return b
+}
+
+// goNetEnv is the module download settings (goNetVars) as the go command
+// in env sees them, the user's go env file included, so turning the file
+// off keeps private modules reachable. Nothing when go can't say.
+func goNetEnv(ctx context.Context, env []string, dir string) []string {
+	bin, err := lookPath(env, "go")
+	if err != nil {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, bin, append([]string{"env", "-json"}, goNetVars...)...)
+	cmd.Dir, cmd.Env = dir, env
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var vals map[string]string
+	if json.Unmarshal(out, &vals) != nil {
+		return nil
+	}
+	var kv []string
+	for _, k := range goNetVars {
+		if v := vals[k]; v != "" {
+			kv = append(kv, k+"="+v)
+		}
+	}
+	return kv
 }
 
 // GoModules lists the directories under root holding a go.mod, relative to
