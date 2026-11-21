@@ -180,6 +180,12 @@ type Mise struct {
 }
 
 func (m *Mise) mise(ctx context.Context, args ...string) (string, error) {
+	return m.miseWith(ctx, nil, args...)
+}
+
+// miseWith runs mise with pathFirst ahead of PATH: an install whose own
+// check runs another tool (Elixir's runs erl) finds that tool there.
+func (m *Mise) miseWith(ctx context.Context, pathFirst []string, args ...string) (string, error) {
 	bin := m.Bin
 	if bin == "" {
 		var err error
@@ -191,6 +197,9 @@ func (m *Mise) mise(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = m.Dir
 	cmd.Env = append(miseFree(os.Environ()), "MISE_NO_CONFIG=1", "MISE_YES=1")
+	if len(pathFirst) > 0 {
+		cmd.Env = append(cmd.Env, "PATH="+strings.Join(pathFirst, string(os.PathListSeparator))+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
@@ -217,7 +226,9 @@ func miseFree(env []string) []string {
 }
 
 // ensure installs t when mise doesn't have it and returns its bin paths.
-func (m *Mise) ensure(ctx context.Context, t Tool) ([]string, error) {
+// before holds the bin paths of tools already ensured in the same set, put
+// ahead of PATH for the install.
+func (m *Mise) ensure(ctx context.Context, t Tool, before ...string) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if p, ok := m.paths[t.Spec()]; ok {
@@ -227,7 +238,7 @@ func (m *Mise) ensure(ctx context.Context, t Tool) ([]string, error) {
 		if m.Log != nil {
 			fmt.Fprintf(m.Log, "mise: installing %s\n", t.Spec())
 		}
-		if _, err := m.mise(ctx, "install", t.Spec()); err != nil {
+		if _, err := m.miseWith(ctx, before, "install", t.Spec()); err != nil {
 			return nil, fmt.Errorf("%s: mise can't provide it: %w", t.Spec(), err)
 		}
 		m.Installs = append(m.Installs, t.Spec())
@@ -263,8 +274,8 @@ func (m *Mise) ensure(ctx context.Context, t Tool) ([]string, error) {
 func (m *Mise) Env(ctx context.Context, tools []Tool) ([]string, error) {
 	var bins []string
 	owned := map[string][]string{}
-	for _, t := range tools {
-		p, err := m.ensure(ctx, t)
+	for _, t := range installOrder(tools) {
+		p, err := m.ensure(ctx, t, bins...)
 		if err != nil {
 			return nil, err
 		}
@@ -405,4 +416,19 @@ func lookIn(env []string, bin string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%s not found on the tools' PATH", bin)
+}
+
+// installOrder puts the tools another tool's install needs first (Erlang
+// before Elixir), keeping the rest in their order.
+func installOrder(tools []Tool) []Tool {
+	first := map[string]bool{"erlang": true}
+	var a, b []Tool
+	for _, t := range tools {
+		if first[t.Name] {
+			a = append(a, t)
+		} else {
+			b = append(b, t)
+		}
+	}
+	return append(a, b...)
 }
