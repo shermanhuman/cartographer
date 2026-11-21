@@ -86,7 +86,22 @@ type Session struct {
 	memo *memo
 
 	startedMu sync.Mutex
-	started   map[string]bool // projects whose cycle this session started
+	started   map[string]time.Time // projects whose cycle this session started, and when
+	warnedOn  map[string]bool      // warnOnce keys (guarded by startedMu)
+}
+
+// warnOnce logs a warning the first time key comes up in this session.
+func (s *Session) warnOnce(key, format string, a ...any) {
+	s.startedMu.Lock()
+	defer s.startedMu.Unlock()
+	if s.warnedOn[key] {
+		return
+	}
+	if s.warnedOn == nil {
+		s.warnedOn = map[string]bool{}
+	}
+	s.warnedOn[key] = true
+	s.logf(format, a...)
 }
 
 // memo caches what one directory resolves to.
@@ -304,19 +319,23 @@ func (s *Session) scheduleProjects(m *memo) {
 	now := s.now()
 	for _, reg := range m.projects {
 		st, err := project.LoadState(s.StateDir, reg.Name)
-		if err != nil || !st.Due(now) {
+		if err != nil {
+			s.warnOnce("state "+reg.Name, "cartographer: project %s isn't rebuilt: %v", reg.Name, err)
+			continue
+		}
+		if !st.Due(now) {
 			continue
 		}
 		if _, running := project.Lock(s.StateDir, reg.Name).Running(reg.Name); running {
 			continue
 		}
-		s.ProjectRebuild(reg.Name)
 		s.startedMu.Lock()
 		if s.started == nil {
-			s.started = map[string]bool{}
+			s.started = map[string]time.Time{}
 		}
-		s.started[reg.Name] = true
+		s.started[reg.Name] = s.now().UTC().Truncate(time.Second)
 		s.startedMu.Unlock()
+		s.ProjectRebuild(reg.Name)
 	}
 }
 
@@ -359,7 +378,7 @@ func (s *Session) projectReport(ctx context.Context, m *memo, id string, reg *pr
 	if err != nil {
 		st = &project.State{}
 	}
-	v := &project.View{Reg: reg, State: st, Snapshot: id, Report: rep, Yours: yours, Now: s.now()}
+	v := &project.View{Reg: reg, State: st, StateErr: err, Snapshot: id, Report: rep, Yours: yours, Now: s.now()}
 	if cfg, _ := userconfig.Load(); cfg != nil {
 		v.Roots = cfg.Roots()
 	}
@@ -398,14 +417,17 @@ func (s *Session) firstBuild(reg *project.Registration) error {
 	switch since, running := project.Lock(s.StateDir, reg.Name).Running(reg.Name); {
 	case running:
 		status = fmt.Sprintf("its first build is running since %s (log: %s)", since.Local().Format("15:04"), log)
-	case started:
-		status = fmt.Sprintf("its first build has started in the background (log: %s); a later command answers from it, or run `cartographer refresh` to wait for it", log)
-	case err == nil && st.Failed != nil:
+	case err != nil:
+		status = (&project.View{Reg: reg, State: &project.State{}, StateErr: err, Now: s.now()}).Problems()[0]
+	case st.Failed != nil && (started.IsZero() || !st.Failed.At.Before(started)):
+		// A failure since this command started the build (or none started).
 		v := &project.View{Reg: reg, State: st, Now: s.now()}
 		status = strings.Join(v.Problems(), "; ")
+	case !started.IsZero():
+		status = fmt.Sprintf("its first build has started in the background (log: %s); a later command answers from it, or run `cartographer refresh` to wait for it", log)
 	case s.ProjectRebuild == nil:
 		status = "automatic builds are off here (auto_rebuild = false, --no-rebuild or $CARTOGRAPHER_NO_REBUILD): run `cartographer refresh` to build it"
-	case err == nil && !st.Attempt.IsZero():
+	case !st.Attempt.IsZero():
 		status = fmt.Sprintf("its next build starts with a command after %s, or run `cartographer refresh`", st.Attempt.Add(project.Cadence).Local().Format("15:04"))
 	default:
 		status = "its first build starts with the next command, or run `cartographer refresh`"

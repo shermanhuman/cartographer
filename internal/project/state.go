@@ -3,6 +3,7 @@ package project
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -71,7 +72,7 @@ func LoadState(stateDir, name string) (*State, error) {
 	}
 	var st State
 	if err := json.Unmarshal(b, &st); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", statePath(stateDir, name), err)
 	}
 	if st.Fetch == nil {
 		st.Fetch = map[string]FetchResult{}

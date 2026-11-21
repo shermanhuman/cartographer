@@ -25,7 +25,9 @@ type View struct {
 	Report  *fresh.Report
 	Yours   string
 	Running time.Time // a cycle holds the lock since (zero none)
-	Now     time.Time
+	// StateErr is why the state file couldn't be read (State is then empty).
+	StateErr error
+	Now      time.Time
 	// Roots are the checkout roots, for clone commands.
 	Roots []string
 }
@@ -163,6 +165,9 @@ func work(st *fresh.State) string {
 // checkouts.
 func (v *View) Problems() []string {
 	var out []string
+	if v.StateErr != nil {
+		out = append(out, fmt.Sprintf("its state is unreadable, so nothing rebuilds it: %v (fix or delete the file)", v.StateErr))
+	}
 	if !v.Running.IsZero() {
 		out = append(out, "rebuilding since "+v.Running.Local().Format("15:04"))
 	}

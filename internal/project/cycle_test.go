@@ -424,3 +424,30 @@ func TestFirstBuildMessageSaysWhatBuildsIt(t *testing.T) {
 		t.Errorf("rebuild started (%d): %v", started, err)
 	}
 }
+
+// A corrupt state file is logged once and shown in the header, instead of
+// silently stopping the project's automatic builds.
+func TestCorruptStateIsReported(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	if _, err := x.runner().Cycle(context.Background(), "shop", true); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(project.Dir(x.state, "shop"), "state.json"), []byte("{not json"), 0o644)
+	x.advance(time.Hour)
+	var log strings.Builder
+	sess := &session.Session{Store: x.s, DB: x.db, Cwd: sales, StateDir: x.state, Now: x.clock, Log: &log, ProjectRebuild: func(string) {}}
+	for range 2 {
+		q, _, err := sess.Query(session.WithoutCache(context.Background()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h := header(t, q); !strings.Contains(h, "its state is unreadable") || !strings.Contains(h, "state.json") {
+			t.Errorf("header: %s", h)
+		}
+	}
+	if n := strings.Count(log.String(), "isn't rebuilt"); n != 1 {
+		t.Errorf("logged %d times:\n%s", n, log.String())
+	}
+}
