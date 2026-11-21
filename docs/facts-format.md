@@ -23,20 +23,10 @@ validator: `internal/facts`. Check a plugin's output with
   the whole workspace (every document in a snapshot), not just within one
   document; a duplicate fails the snapshot with both file names. Convention:
   `<repo>:<Module>` for modules and `<repo>:<Module>.<name>/<arity>` for
-  functions, `<schema>.<table>` for tables. Route ids share the function
-  namespace (both are edge endpoints): `<repo>:route:<router>:<METHOD> <path>`,
-  where the router is the Phoenix router module or the Go package directory
-  (`./` for the module root package: `<repo>:route:./:<METHOD> <path>`).
-  Go functions are `<repo>:<package dir>.<Type>.<name>/<arity>`; the module
-  root package's are `<repo>:./<Type>.<name>/<arity>` (no directory starts
-  with `./`, so a root `config.Load` method never meets `config/`'s `Load`),
-  and an external test package (`package p_test` beside `package p`) has
-  `<dir>[test]` as its directory part (`<repo>:p[test].helper/0`; no package
-  directory has `[` in it, so a real `p_test/` stays apart). Rust functions are
-  `<repo>:<crate dir>::<module path>.<Type>[impl <Trait>].<name>/<arity>`,
-  with `./` as the crate dir of a crate at the repository root
-  (`<repo>:./::a.call_a/1`, and `<repo>:./.top/0` at its top level). Annotation ids are likewise unique
-  across all annotation files.
+  functions, `<schema>.<table>` for tables; route ids share the function
+  namespace (both are edge endpoints). Go and Rust ids follow the grammar
+  in [Ids](#ids). Annotation ids are likewise unique across all annotation
+  files.
 - A repository document's `repo` must name a repository in the snapshot
   manifest.
 - Paths are repository-relative with `/` separators. When `files` is present,
@@ -48,6 +38,44 @@ validator: `internal/facts`. Check a plugin's output with
   Extractors for languages without that limit clamp to 255.
 - `functions[].fingerprint` is an opaque hash of the function's source.
   Annotations that cite a function go stale when its fingerprint changes.
+
+## Ids
+
+Ids are a compatibility surface: annotations and links cite them. Each
+starts with `<repo>:`.
+
+| Kind | Grammar | Example |
+|---|---|---|
+| Elixir module | `<repo>:<Module>` | `shop:Shop.Orders` |
+| Elixir function | `<repo>:<Module>.<name>/<arity>` | `shop:Shop.Orders.create/2` |
+| Elixir route | `<repo>:route:<router module>:<METHOD> <path>` | `shop:route:ShopWeb.Router:POST /orders` |
+| Go module (a package) | `<repo>:<package dir>` | `api:internal/app` |
+| Go function | `<repo>:<package dir>.<Type>.<name>/<arity>` (no `.<Type>` for a function) | `api:internal/app.Server.run/1`, `api:internal/app.Keys/1` |
+| Go route | `<repo>:route:<package dir>:<METHOD> <path>` (`*` for any method) | `api:route:internal/app:GET /items/{id}` |
+| Rust module | `<repo>:<crate dir>::<module path>` | `svc:crates/shapes::geo` |
+| Rust function | `<repo>:<crate dir>::<module path>.<Type>[impl <Trait>].<name>/<arity>` | `svc:crates/shapes::geo.Circle[impl Shape].area/0` |
+
+The **package dir** of a Go package is its directory relative to the
+repository root, with these forms:
+
+- `./` for the module root package. Its module id is `<repo>:./`, and
+  `./` already ends the directory part, so its functions read
+  `<repo>:./<Type>.<name>/<arity>` (`<repo>:./config.Load/0`, apart from
+  `config/`'s `<repo>:config.Load/0`) and its routes
+  `<repo>:route:./:GET /healthz`. No directory starts with `./`.
+- `<dir>[test]` for an external test package (`package p_test` beside
+  `package p` in `<dir>`), and `./[test]` at the module root:
+  `<repo>:app[test].helper/0`, `<repo>:./[test].TestRoot/1`. No package
+  directory has `[` in it (the go tool rejects it in an import path), so
+  these never meet a real `app_test/` package's `<repo>:app_test.helper/0`.
+  An external test package is in its package's context.
+
+The **crate dir** of a Rust crate is its package directory for the library
+and `src/main.rs`, `./` for a package at the repository root
+(`<repo>:./.top/0`, `<repo>:./::a.call_a/1`), else the target's root file
+without `.rs` (`crates/shapes/tests/api`, `src/bin/tool`). `<Type>`,
+`[impl <Trait>]` and the module path are left out when empty; lifetimes are
+dropped from type arguments (`Prepared<'a>` is `Prepared`).
 
 ## Calls
 

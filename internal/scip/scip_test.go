@@ -221,14 +221,29 @@ func TestConvertGo(t *testing.T) {
 	}
 	// The root package's ids start with ./ (its config.Load is not
 	// config/'s Load). An external test package is its directory with
-	// [test]: app's (package app_test) helper is not app's.
+	// [test], at the root too (F2-P3): app's (package app_test) helper is
+	// not app's.
 	for _, id := range []string{"fixture:./config.Load/0", "fixture:./Routes/1", "fixture:config.Load/0", app + "helper/0",
-		"fixture:app[test].helper/0", "fixture:app[test].TestExternal/1"} {
+		"fixture:app[test].helper/0", "fixture:app[test].TestExternal/1", "fixture:./[test].helper/0", "fixture:./[test].TestRoot/1"} {
 		if !slices.Contains(ids, id) {
 			t.Errorf("missing %s", id)
 		}
 	}
 	wantEdges(t, d, "fixture:app[test].TestExternal/1", 9, "fixture:app[test].helper/0 call precise")
+	wantEdges(t, d, "fixture:./[test].TestRoot/1", 9, "fixture:./[test].helper/0 call precise")
+	// Module ids: the root is ./ (as Rust's root crate), never ".".
+	var mods []string
+	for _, m := range d.Modules {
+		mods = append(mods, m.ID)
+	}
+	for _, id := range []string{"fixture:./", "fixture:./[test]", "fixture:app", "fixture:app[test]"} {
+		if !slices.Contains(mods, id) {
+			t.Errorf("missing module %s (have %q)", id, mods)
+		}
+	}
+	if slices.Contains(mods, "fixture:.") {
+		t.Errorf("a module id fixture:. (want fixture:./)")
+	}
 	for _, n := range d.Notes {
 		if n.Kind == "duplicate_definition" {
 			t.Errorf("note: %+v", n)
@@ -513,7 +528,9 @@ func TestDropsDocumentsOutsideRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Notes[0].Kind != "dropped_documents" || !strings.HasPrefix(d.Notes[0].Message, "2 ") {
+	// Two generated test mains (app's and the root package's) and the one
+	// added here.
+	if d.Notes[0].Kind != "dropped_documents" || !strings.HasPrefix(d.Notes[0].Message, "3 ") {
 		t.Errorf("notes %+v", d.Notes)
 	}
 }

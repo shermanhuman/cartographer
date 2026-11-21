@@ -16,8 +16,8 @@
   ],
   "modules": [
     {
-      "id": "fixture:.",
-      "name": ".",
+      "id": "fixture:./",
+      "name": "./",
       "namespace": [
         "."
       ],
@@ -29,7 +29,7 @@
   "functions": [
     {
       "id": "fixture:./T.M/0",
-      "module": "fixture:.",
+      "module": "fixture:./",
       "name": "M",
       "arity": 0,
       "min_arity": 0,
@@ -40,7 +40,7 @@
     },
     {
       "id": "fixture:./Use/0",
-      "module": "fixture:.",
+      "module": "fixture:./",
       "name": "Use",
       "arity": 0,
       "min_arity": 0,
@@ -51,7 +51,7 @@
     },
     {
       "id": "fixture:./helper/0",
-      "module": "fixture:.",
+      "module": "fixture:./",
       "name": "helper",
       "arity": 0,
       "min_arity": 0,
