@@ -90,6 +90,9 @@ when one type implements two same-named traits, one of the two impls'
 same-named functions is lost. Calls still dispatch by the trait itself, not
 its short name.
 
+Go and Rust ids share one directory namespace and carry no language: a
+directory holding both a Go package and a Cargo package isn't supported.
+
 ## Calls
 
 A call site names its caller (`from`) and either its callee id (`to`) or a
