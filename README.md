@@ -159,6 +159,7 @@ and where checkouts live when they aren't siblings of the repository you
 are in:
 
 ```toml
+checkout_roots = ["~/github", "~/src"]          # where project add looks for members (default ~/github)
 local_workspaces = ["~/src/my-project-map"]   # written by workspace add <dir>; a hand-listed entry still needs it (it records the trust digest)
 workspaces = ["my-org/my-project-map"]        # workspace add <owner/name>, pull
 # auto_rebuild = false
