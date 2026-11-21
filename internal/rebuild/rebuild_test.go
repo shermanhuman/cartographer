@@ -426,3 +426,39 @@ func TestTimeoutBacksOffLonger(t *testing.T) {
 		t.Errorf("status %q", d.Status("mini"))
 	}
 }
+
+// A rebuild stamps its outcome while it still holds the lock (A-M7): a
+// second rebuild that tries to start while the first is stamping finds the
+// lock held, so the first one's (earlier) failure can't overwrite the
+// second one's (later) success, nor can the second start inside the
+// first's backoff.
+func TestOutcomeIsStampedUnderTheLock(t *testing.T) {
+	d := Dir{Path: t.TempDir()}
+	var second error
+	ran, calls := false, 0
+	old := beforeStamp
+	defer func() { beforeStamp = old }()
+	beforeStamp = func() {
+		if calls++; calls > 1 {
+			return
+		}
+		// The first rebuild is stamping its failure: another one starts.
+		second = d.Run("ws", func() (Result, error) {
+			ran = true
+			return Result{DB: "/x.db", Revisions: map[string]string{"r": "c2"}}, nil
+		})
+	}
+	if err := d.Run("ws", func() (Result, error) { return Result{}, errors.New("boom") }); err == nil {
+		t.Fatal("the failing rebuild succeeded")
+	}
+	b, _ := os.ReadFile(d.StampPath("ws"))
+	if ran && !strings.HasPrefix(string(b), "ok") {
+		t.Errorf("the later rebuild succeeded, but the earlier failure was stamped over it:\n%s", b)
+	}
+	if !errors.Is(second, ErrRunning) {
+		t.Errorf("a rebuild starting while the first stamped its outcome: %v, want ErrRunning", second)
+	}
+	if d.Due("ws") {
+		t.Error("after the failure no backoff applies")
+	}
+}

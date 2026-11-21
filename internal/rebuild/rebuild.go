@@ -350,24 +350,28 @@ func (d Dir) Built(ws, db string) (map[string]string, time.Time) {
 // lock is held.
 func (d Dir) Run(ws string, build func() (Result, error)) error {
 	var res Result
-	err := d.Hold(ws, func() error {
+	// The outcome is stamped before the lock is released: a rebuild that
+	// starts after this one must see its backoff, and a later rebuild's
+	// outcome must never be overwritten by this one's.
+	return d.hold(ws, func() error {
 		var err error
 		res, err = build()
 		return err
+	}, func(err error) {
+		if !errors.Is(err, context.Canceled) {
+			d.stamp(ws, res, err)
+		}
 	})
-	if errors.Is(err, ErrRunning) || errors.Is(err, ErrLost) {
-		return err
-	}
-	if !errors.Is(err, context.Canceled) {
-		d.stamp(ws, res, err)
-	}
-	return err
 }
 
 // Hold runs fn under ws's lock, refreshing it every Heartbeat, and records
 // nothing: the caller keeps its own state. ErrRunning when the lock is held;
 // ErrLost (wrapping fn's error) when it was taken over while fn ran.
-func (d Dir) Hold(ws string, fn func() error) error {
+func (d Dir) Hold(ws string, fn func() error) error { return d.hold(ws, fn, nil) }
+
+// hold is Hold; finish, when set, runs with fn's error while the lock is
+// still ours (not after a takeover), before it is released.
+func (d Dir) hold(ws string, fn func() error, finish func(error)) error {
 	h, err := d.lock(ws)
 	if err != nil {
 		return err
@@ -396,6 +400,9 @@ func (d Dir) Hold(ws string, fn func() error) error {
 		}
 		return ErrLost
 	}
+	if finish != nil {
+		finish(err)
+	}
 	return err
 }
 
@@ -406,7 +413,11 @@ func (d Dir) Fail(ws string, err error) {
 	d.stamp(ws, Result{}, err)
 }
 
+// beforeStamp runs as each outcome is stamped (tests).
+var beforeStamp = func() {}
+
 func (d Dir) stamp(ws string, res Result, err error) {
+	beforeStamp()
 	var b strings.Builder
 	status := "ok"
 	if err != nil {
