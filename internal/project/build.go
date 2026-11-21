@@ -73,8 +73,10 @@ type BuildOptions struct {
 	PluginsDigest string
 	CacheDir      string
 	// Self is the cartographer executable `extract scip` runs as.
-	Self     string
-	Mise     *Mise
+	Self string
+	Mise *Mise
+	// SchemaDB replaces the throwaway PostgreSQL of a managed schema step
+	// (nil: ManagedPostgres).
 	SchemaDB workspace.SchemaDB
 	Digest   string
 	// Version is the cartographer version (recorded with the tools).
@@ -160,7 +162,13 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 	// toolEnv names the tools an extractor (or the schema step) runs with,
 	// records them in the manifest and returns its environment.
 	toolEnv := func(t tree, step string) ([]string, error) {
-		tools, err := ExtractorTools(step, t.Pins)
+		var tools []Tool
+		var err error
+		if step == "schema" {
+			tools, err = SchemaTools(t.Settings.Schema, t.Pins)
+		} else {
+			tools, err = ExtractorTools(step, t.Pins)
+		}
 		if err != nil {
 			return nil, &StepError{t.Repo, t.Commit, "tools", err}
 		}
@@ -213,6 +221,14 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 		if err != nil {
 			return nil, &StepError{t.Repo, t.Commit, "schema", err}
 		}
+		// A managed step gets its own throwaway cluster; otherwise the
+		// commands use whatever database their env names.
+		var db workspace.SchemaDB
+		if sc.Managed() {
+			if db = o.SchemaDB; db == nil {
+				db = &ManagedPostgres{Mise: o.Mise, Log: o.Log}
+			}
+		}
 		var wrapErr error
 		cached, err := workspace.RunSchema(ctx, workspace.SchemaStep{
 			Root:     t.root,
@@ -232,8 +248,9 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 				}
 				return a
 			},
-			DB:  o.SchemaDB,
-			Log: o.Log,
+			DB:      db,
+			Scratch: o.Work,
+			Log:     o.Log,
 		})
 		if err == nil {
 			err = wrapErr
@@ -397,12 +414,14 @@ func writeDoc(p string, d *facts.Doc) error {
 }
 
 // schemaKey is the schema cache key: the step's unexpanded commands and
-// env, the plugin code, the tools, and the files under cache_key in the
-// archive (each must match something), or the commit when there is none.
+// env (so a managed cluster's port doesn't count), the postgres setting,
+// the plugin code, the tools (PostgreSQL's version among them when it is
+// managed), and the files under cache_key in the archive (each must match
+// something), or the commit when there is none.
 func schemaKey(root, commit string, sc *SchemaSettings, pluginsDigest string, tools map[string]string, repo string) (string, error) {
 	h := sha256.New()
 	env, _ := json.Marshal(sc.Env) // map keys sort
-	fmt.Fprintf(h, "project-schema v1\nprepare=%q\ncapture=%q\nenv=%s\nplugins=%s\n", sc.Prepare, sc.Capture, env, pluginsDigest)
+	fmt.Fprintf(h, "project-schema v1\nprepare=%q\ncapture=%q\nenv=%s\npostgres=%q\nplugins=%s\n", sc.Prepare, sc.Capture, env, sc.Postgres, pluginsDigest)
 	var keys []string
 	for k := range tools {
 		if strings.HasPrefix(k, repo+"/") {

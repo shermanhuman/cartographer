@@ -61,7 +61,9 @@ type Plugin struct {
 // unchanged. The key covers Version, Command, Prepare, PrepareRepo, Env, the
 // plugin code digest and, at the PrepareRepo revision, the files under the
 // CacheKey paths (each must match something) or, with no CacheKey, the
-// revision itself.
+// revision itself. Postgres = "managed" runs both against a throwaway
+// PostgreSQL cluster (BuildOptions.SchemaDB) whose {pg_host} and {pg_port}
+// expand in Env and Command; the key then covers its version too.
 type Schema struct {
 	PrepareRepo string            `toml:"prepare_repo"`
 	Prepare     string            `toml:"prepare"`
@@ -69,6 +71,7 @@ type Schema struct {
 	Version     string            `toml:"version"`
 	CacheKey    []string          `toml:"cache_key"`
 	Env         map[string]string `toml:"env"`
+	Postgres    string            `toml:"postgres"`
 }
 
 var repoName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -135,6 +138,9 @@ func Load(path string) (*Config, error) {
 		}
 		if c.Schema.Prepare != "" && c.Schema.PrepareRepo == "" {
 			return nil, fmt.Errorf("workspace: schema.prepare requires schema.prepare_repo (the repo it runs in)")
+		}
+		if c.Schema.Postgres != "" && c.Schema.Postgres != "managed" {
+			return nil, fmt.Errorf("workspace: schema.postgres %q: the only value is \"managed\"", c.Schema.Postgres)
 		}
 	}
 	return &c, nil

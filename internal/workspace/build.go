@@ -45,6 +45,11 @@ type BuildOptions struct {
 	Now time.Time
 	// Log receives progress lines; nil discards them.
 	Log io.Writer
+	// SchemaDB is the throwaway database a `postgres = "managed"` schema
+	// step runs against, and SchemaEnv is added to that step's environment
+	// (e.g. PATH with the database's client programs first).
+	SchemaDB  SchemaDB
+	SchemaEnv []string
 	// Fetch clones missing checkouts from their URL and fetches existing
 	// ones (and any Refs revisions) before building; a configured ref then
 	// resolves against origin (origin/HEAD, origin/<branch>), since a fetch
@@ -241,7 +246,13 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 				return nil, fmt.Errorf("build: plugins digest: %w", err)
 			}
 		}
-		key, err := schemaKey(ctx, c, prep.revision, prep.repo, prep.src, pdigest)
+		var db SchemaDB
+		if c.Schema.Postgres == "managed" {
+			if db = o.SchemaDB; db == nil {
+				return nil, errors.New("build: schema: postgres = \"managed\" needs a database runner")
+			}
+		}
+		key, err := schemaKey(ctx, c, prep.revision, prep.repo, prep.src, pdigest, db)
 		if err != nil {
 			return nil, err
 		}
@@ -252,8 +263,11 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 			Command:  c.Schema.Command,
 			Vars:     map[string]string{"plugins": o.PluginsDir, "workspace": c.dir, "root": prep.root, "repo": prep.repo.Name, "revision": prep.revision},
 			Env:      c.Schema.Env,
+			ExtraEnv: o.SchemaEnv,
 			Key:      key,
 			CacheDir: o.CacheDir,
+			DB:       db,
+			Scratch:  work,
 			Log:      o.Log,
 		})
 		if err != nil {
@@ -444,10 +458,19 @@ func archive(ctx context.Context, src, rev, dst string) ([]string, error) {
 }
 
 // schemaKey is the schema cache key; src is r's checkout (the one archived).
-func schemaKey(ctx context.Context, c *Config, rev string, r Repo, src, pluginsDigest string) (string, error) {
+// A managed database adds its setting and identity (keys without one are
+// unchanged from 0.1).
+func schemaKey(ctx context.Context, c *Config, rev string, r Repo, src, pluginsDigest string, db SchemaDB) (string, error) {
 	h := sha256.New()
 	fmt.Fprintf(h, "schema-version=%s\ncommand=%q\nprepare=%q\nprepare-repo=%q\nenv=%q\nplugins=%s\n",
 		c.Schema.Version, c.Schema.Command, c.Schema.Prepare, c.Schema.PrepareRepo, mapEnv(c.Schema.Env), pluginsDigest)
+	if c.Schema.Postgres != "" {
+		id := ""
+		if k, ok := db.(KeyedSchemaDB); ok {
+			id = k.Key()
+		}
+		fmt.Fprintf(h, "postgres=%s %s\n", c.Schema.Postgres, id)
+	}
 	if r.Name != "" && len(c.Schema.CacheKey) == 0 {
 		// Nothing narrower configured: any change to the repo misses.
 		fmt.Fprintf(h, "revision=%s\n", rev)

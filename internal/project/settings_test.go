@@ -44,6 +44,7 @@ build_scripts = false
 		{`project = "shop"` + "\nanchor = \"acme/admin\"\nmembers = [{repo = \"acme/x\"}]\n", "members belong in the anchor"},
 		{`project = "shop"` + "\nmembers = [{repo = \"acme/x\"}, {repo = \"other/x\"}]\n", "listed twice"},
 		{`project = "shop"` + "\n[schema]\nprepare = \"x\"\n", "schema.capture is required"},
+		{`project = "shop"` + "\n[schema]\ncapture = [\"x\"]\npostgres = \"docker\"\n", `schema.postgres "docker": the only value is "managed"`},
 		{`project = "shop"` + "\nsource_roots = [\"../up\"]\n", "source_roots"},
 	} {
 		if _, err := project.ParseSettings([]byte(bad.toml), "acme/sales"); err == nil || !strings.Contains(err.Error(), bad.want) {

@@ -29,6 +29,10 @@ var (
 	// the repo's code, so its version is cartographer's, not the repo's
 	// (repos using it often pin no Node at all).
 	Node = Tool{Name: "node", Version: "26.12.1"}
+	// Postgres is the throwaway cluster of a `postgres = "managed"` schema
+	// step (mise's postgres, the conda:postgresql backend); one version
+	// gives one schema whatever the machine.
+	Postgres = Tool{Name: "postgres", Version: "18.7"}
 )
 
 // RustTarget is the target added to the Rust toolchain (scip.RustTarget).
@@ -144,6 +148,16 @@ func ExtractorTools(extractor string, pins map[string]string) ([]Tool, error) {
 		return []Tool{Node}, nil
 	}
 	return nil, nil // in-process
+}
+
+// SchemaTools are the tools the schema step runs with: the repo's Erlang
+// and Elixir, and Postgres when it is managed (psql for the capture).
+func SchemaTools(sc *SchemaSettings, pins map[string]string) ([]Tool, error) {
+	t, err := ExtractorTools("schema", pins)
+	if err == nil && sc.Managed() {
+		t = append(t, Postgres)
+	}
+	return t, err
 }
 
 // Mise provides named tools through mise, and nothing else: no repo,
@@ -300,6 +314,22 @@ func (m *Mise) Env(ctx context.Context, tools []Tool) ([]string, error) {
 		}
 	}
 	return env, nil
+}
+
+// BinPaths installs t when mise doesn't have it and returns its bin paths,
+// once each of bins resolves inside them.
+func (m *Mise) BinPaths(ctx context.Context, t Tool, bins ...string) ([]string, error) {
+	paths, err := m.ensure(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	path := strings.Join(paths, string(os.PathListSeparator))
+	for _, b := range bins {
+		if err := resolvesInside(path, b, paths); err != nil {
+			return nil, fmt.Errorf("%s: %w", t.Spec(), err)
+		}
+	}
+	return paths, nil
 }
 
 // ambientPath is the process PATH without mise's shims and installs: a

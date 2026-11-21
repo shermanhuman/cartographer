@@ -87,6 +87,18 @@ type SchemaDB interface {
 	Start(ctx context.Context, scratch string) (vars map[string]string, stop func(), err error)
 }
 
+// KeyedSchemaDB is a SchemaDB whose identity (e.g. its server version)
+// belongs in the schema cache key.
+type KeyedSchemaDB interface {
+	SchemaDB
+	Key() string
+}
+
+// TrackGroup registers a long-running process group that the caller
+// started (and stops) itself, such as a database server, so KillGroups ends
+// it too; untrack forgets it once it has exited.
+func TrackGroup(pgid int) (untrack func()) { return trackGroup(pgid) }
+
 // SchemaStep is one schema extraction: Prepare (a shell command) runs in
 // Root, then Command runs in Dir and prints the schema facts document, which
 // is cached under CacheDir/schema/<Key>.json. Both are skipped when that file
@@ -107,8 +119,11 @@ type SchemaStep struct {
 	Wrap func(argv []string) []string
 	// DB, when set, is started for an uncached run; nil uses whatever
 	// database Env names (the behaviour of cartographer 0.1).
-	DB  SchemaDB
-	Log io.Writer
+	DB SchemaDB
+	// Scratch is where DB's directory is made (default: the system temp
+	// directory); it is removed after the run.
+	Scratch string
+	Log     io.Writer
 }
 
 // RunSchema runs the step unless its cached facts are valid, and returns
@@ -129,7 +144,7 @@ func RunSchema(ctx context.Context, st SchemaStep) (string, error) {
 	}
 	dbVars := map[string]string{}
 	if st.DB != nil {
-		scratch, err := os.MkdirTemp("", "cartographer-schema-db-")
+		scratch, err := os.MkdirTemp(st.Scratch, "cartographer-schema-db-")
 		if err != nil {
 			return "", err
 		}
