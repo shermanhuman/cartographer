@@ -29,7 +29,8 @@ const askpass = "#!/bin/sh\nexit 0\n"
 
 // gitEnv is the environment of fetches: no terminal prompt, and GIT_ASKPASS
 // and SSH_ASKPASS replaced by a no-op helper in the state directory, so an
-// inherited GUI prompt never opens. Credential helpers still run.
+// inherited GUI prompt never opens. The machine's credential helpers still
+// run; gh is only a separate retry (ghRetryEnv).
 func gitEnv(stateDir string) ([]string, error) {
 	helper := filepath.Join(stateDir, "askpass")
 	if b, err := os.ReadFile(helper); err != nil || string(b) != askpass {
@@ -52,17 +53,17 @@ func gitEnv(stateDir string) ([]string, error) {
 		}
 		env = append(env, kv)
 	}
-	env = append(env, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS="+helper, "SSH_ASKPASS="+helper)
-	return append(env, ghFallback(env)...), nil
+	return append(env, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS="+helper, "SSH_ASKPASS="+helper), nil
 }
 
-// ghFallback adds `gh auth git-credential` as a last credential helper for
-// https://github.com, after the machine's own: git asks each in turn until
-// one answers, so it is used only when the configured helper can't (the
-// macOS keychain is unavailable to a process outside the login session). It
-// is added only when a working gh is on PATH, through GIT_CONFIG_* so no
-// config file changes; an existing GIT_CONFIG_COUNT is extended.
-func ghFallback(env []string) []string {
+// ghRetryEnv is env for a second try after the machine's own credential
+// helpers failed to authenticate (the macOS keychain is unavailable to a
+// process outside the login session): the helper list is reset and `gh auth
+// git-credential` is the only helper, so no other helper is asked to store
+// the token gh hands out (git's approve step offers the credential to every
+// helper). It goes through GIT_CONFIG_*, so no config file changes, and an
+// existing GIT_CONFIG_COUNT is extended. nil without a working gh on PATH.
+func ghRetryEnv(env []string) []string {
 	gh, err := exec.LookPath("gh")
 	if err != nil || exec.Command(gh, "--version").Run() != nil {
 		return nil
@@ -74,11 +75,44 @@ func ghFallback(env []string) []string {
 		}
 	}
 	// os/exec keeps the last of duplicate variables, so this COUNT wins.
-	return []string{
-		fmt.Sprintf("GIT_CONFIG_KEY_%d=credential.https://github.com.helper", n),
-		fmt.Sprintf("GIT_CONFIG_VALUE_%d=!%s auth git-credential", n, gh),
-		fmt.Sprintf("GIT_CONFIG_COUNT=%d", n+1),
+	return append(append([]string(nil), env...),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=credential.helper", n),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=", n),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=credential.helper", n+1),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=!%s auth git-credential", n+1, gh),
+		fmt.Sprintf("GIT_CONFIG_COUNT=%d", n+2),
+	)
+}
+
+// authFailure reports a git error that says the remote wanted credentials
+// it didn't get.
+func authFailure(err error) bool {
+	if err == nil {
+		return false
 	}
+	msg := err.Error()
+	for _, s := range []string{"Authentication failed", "could not read Username", "could not read Password", "terminal prompts disabled", "returned error: 401", "returned error: 403", "Repository not found"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// gitAuth is gitRun, retried once with gh as the only credential helper
+// when the first try failed to authenticate.
+func gitAuth(ctx context.Context, env []string, dir string, args ...string) (string, error) {
+	out, err := gitRun(ctx, env, dir, args...)
+	if authFailure(err) && ctx.Err() == nil {
+		if ghEnv := ghRetryEnv(env); ghEnv != nil {
+			if out2, err2 := gitRun(ctx, ghEnv, dir, args...); err2 == nil {
+				return out2, nil
+			} else {
+				err = fmt.Errorf("%w; with gh as the credential helper: %v", err, err2)
+			}
+		}
+	}
+	return out, err
 }
 
 // gitRun runs git in dir in its own process group (a cancelled fetch ends
@@ -102,7 +136,7 @@ func gitRun(ctx context.Context, env []string, dir string, args ...string) (stri
 
 // DefaultBranch asks the remote for its default branch.
 func DefaultBranch(ctx context.Context, env []string, dir, url string) (string, error) {
-	out, err := gitRun(ctx, env, dir, "ls-remote", "--symref", "--", url, "HEAD")
+	out, err := gitAuth(ctx, env, dir, "ls-remote", "--symref", "--", url, "HEAD")
 	if err != nil {
 		return "", err
 	}
@@ -122,7 +156,7 @@ func Fetch(ctx context.Context, env []string, dir, slug, branch string) (string,
 	if strings.HasPrefix(branch, "-") || branch == "" {
 		return "", fmt.Errorf("invalid branch %q", branch)
 	}
-	if _, err := gitRun(ctx, env, dir, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-auto-maintenance", "--no-recurse-submodules",
+	if _, err := gitAuth(ctx, env, dir, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-auto-maintenance", "--no-recurse-submodules",
 		"--", GitHubURL(slug), "+refs/heads/"+branch+":"+RefPrefix+branch); err != nil {
 		return "", fmt.Errorf("%s %s: %w", GitHubURL(slug), branch, err)
 	}

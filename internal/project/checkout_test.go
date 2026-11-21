@@ -176,6 +176,49 @@ func TestFetch401AsksHelperNeverInheritedAskpass(t *testing.T) {
 	}
 }
 
+// gh is tried only after the machine's own helpers fail to authenticate,
+// and then alone: when its credential works, git's approve step offers it
+// to no other helper, so the machine's store never gets gh's token.
+func TestGHRetryAfterAuthFailureStoresTokenNowhereElse(t *testing.T) {
+	x := newH(t)
+	const auth = "Basic eDp0b2s=" // x:tok
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == auth {
+			w.Write([]byte("not a git server\n")) // 200: git approves the credential
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Basic realm="git"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	co := filepath.Join(x.root, "locked")
+	os.MkdirAll(co, 0o755)
+	git(t, co, "init", "-q")
+	git(t, co, "remote", "add", "origin", "git@github.com:acme/locked.git")
+	storeLog, ghLog := filepath.Join(x.dir, "store.log"), filepath.Join(x.dir, "gh.log")
+	store := filepath.Join(x.dir, "store.sh")
+	os.WriteFile(store, []byte("#!/bin/sh\necho \"$1\" >> '"+storeLog+"'\ncat > /dev/null\n"), 0o755)
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\n[ \"$1\" = --version ] && exit 0\ncat > /dev/null\necho \"$3\" >> '"+ghLog+"'\n[ \"$3\" = get ] && printf 'username=x\\npassword=tok\\n'\nexit 0\n"), 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	git(t, x.dir, "config", "--file", x.gitcfg, "url."+srv.URL+"/locked.git.insteadOf", "https://github.com/acme/locked")
+	git(t, x.dir, "config", "--file", x.gitcfg, "credential.helper", "!"+store)
+	if _, err := x.runner().Plan(context.Background(), co); err == nil {
+		t.Fatal("fetching from a server that isn't git succeeded")
+	}
+	sb, _ := os.ReadFile(storeLog)
+	gb, _ := os.ReadFile(ghLog)
+	if !strings.Contains(string(sb), "get") {
+		t.Errorf("the machine's helper wasn't asked first: %q", sb)
+	}
+	if strings.Contains(string(sb), "store") {
+		t.Errorf("the machine's helper was asked to store gh's token: %q", sb)
+	}
+	if !strings.Contains(string(gb), "get") || !strings.Contains(string(gb), "store") {
+		t.Errorf("gh: %q, want get then store", gb)
+	}
+}
+
 // A hanging origin with a pending change in another repo: fetching stays
 // within its budget, the build uses the last fetched commit and still
 // completes, the header shows the failure, and commands don't re-fetch
