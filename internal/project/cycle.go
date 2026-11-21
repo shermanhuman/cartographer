@@ -122,8 +122,11 @@ func (e *ErrWrongStore) Error() string {
 
 func (r *Runner) cycle(ctx context.Context, name string, force bool) (Result, error) {
 	hookLocked()
-	// Main maps go only into the store the project was registered with.
-	if reg, err := Load(r.StateDir, name); err == nil && !reg.InStore(r.DB) {
+	// Main maps go only into the store the project was registered with,
+	// and a project removed meanwhile gets no new state.
+	if reg, err := Load(r.StateDir, name); errors.Is(err, os.ErrNotExist) {
+		return Result{}, fmt.Errorf("project %s is not registered", name)
+	} else if err == nil && !reg.InStore(r.DB) {
 		return Result{}, &ErrWrongStore{Project: name, Store: reg.Store, DB: r.DB}
 	}
 	now := r.now().UTC()
@@ -417,7 +420,7 @@ func (r *Runner) fetchAll(ctx context.Context, reg *Registration, st *State, env
 			return nil, err
 		}
 		in.Settings = s
-		pins, err := ResolvePins(func(p string) ([]byte, error) { return ReadAt(ctx, in.Path, in.Commit, p) }, s)
+		pins, err := ResolvePins(func(p string) ([]byte, error) { return ReadAt(ctx, in.Path, in.Commit, p) })
 		if err != nil {
 			return nil, &StepError{in.Repo, in.Commit, "tools", err}
 		}
@@ -460,9 +463,8 @@ func (r *Runner) resolvePins(ctx context.Context, in *Input) {
 }
 
 // ResolvePins is the one place a member's language versions come from:
-// the repo's own pin files (Pins). s is the member's settings, for a
-// policy that would also consult them.
-func ResolvePins(read func(string) ([]byte, error), s *Settings) (map[string]string, error) {
+// the repo's own pin files (Pins).
+func ResolvePins(read func(string) ([]byte, error)) (map[string]string, error) {
 	return Pins(read)
 }
 
@@ -546,6 +548,13 @@ func (r *Runner) Head(ctx context.Context, from string) (Result, error) {
 			return Result{}, err
 		}
 	}
+	inList := false
+	for _, spec := range as.MemberList(anchor) {
+		inList = inList || strings.EqualFold(spec.Repo, slug)
+	}
+	if !inList {
+		return Result{}, fmt.Errorf("%s isn't in %s's member list (members in its %s), so --from it builds nothing of its own", slug, anchor, SettingsFile)
+	}
 	var inputs []Input
 	for _, spec := range as.MemberList(anchor) {
 		m := Member{Repo: spec.Repo, Branch: spec.Branch}
@@ -575,7 +584,7 @@ func (r *Runner) Head(ctx context.Context, from string) (Result, error) {
 				return nil, ErrNoFile
 			}
 			return b, err
-		}, ms)
+		})
 		if err != nil {
 			return Result{}, &StepError{spec.Repo, "", "tools", err}
 		}

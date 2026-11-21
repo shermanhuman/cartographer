@@ -456,6 +456,9 @@ func projectCmd(ctx context.Context, w io.Writer, c *common, pos []string) error
 			return err
 		}
 		reg := plan.Reg
+		if old, err := project.Load(sd, reg.Name); err == nil {
+			fmt.Fprintf(w, "project %s is already registered (anchor %s, store %s); registering replaces it\n", reg.Name, old.Anchor, old.Store)
+		}
 		fmt.Fprintf(w, "project %s, anchor %s:\n", reg.Name, reg.Anchor)
 		for _, m := range reg.Members {
 			p := m.Path

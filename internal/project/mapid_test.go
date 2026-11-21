@@ -450,3 +450,42 @@ func TestHeadPrefersSiblingWorktrees(t *testing.T) {
 		}
 	}
 }
+
+// Small edges of registering and removing: --head from a repo outside the
+// anchor's list fails, init needs a GitHub remote, remove waits for a
+// running refresh, and a cycle after remove leaves no state behind.
+func TestRegistrationEdges(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	stray := x.repo("stray", map[string]string{".cartographer/repo.toml": settings("shop", "acme/admin", `extract = ["elixir"]`), ".tool-versions": elixirPins})
+	if _, err := x.runner().Head(context.Background(), stray); err == nil || !strings.Contains(err.Error(), "isn't in acme/admin's member list") {
+		t.Errorf("--head from a repo outside the list: %v", err)
+	}
+	plain := filepath.Join(x.dir, "plain")
+	os.MkdirAll(plain, 0o755)
+	git(t, plain, "init", "-q")
+	if _, _, err := project.Init(context.Background(), plain, "shop", ""); err == nil || !strings.Contains(err.Error(), "no remote on github.com") {
+		t.Errorf("init without a GitHub remote: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(plain, ".cartographer")); err == nil {
+		t.Error("init wrote settings without a GitHub remote")
+	}
+	x.register(sales)
+	unlock, err := project.Lock(x.state, "shop").Lock("shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := project.Remove(context.Background(), x.state, "shop", x.s); err == nil || !strings.Contains(err.Error(), "is running") {
+		t.Errorf("remove during a refresh: %v", err)
+	}
+	unlock()
+	if err := project.Remove(context.Background(), x.state, "shop", x.s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.runner().Cycle(context.Background(), "shop", true); err == nil {
+		t.Error("a cycle of a removed project succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(project.Dir(x.state, "shop"), "state.json")); err == nil {
+		t.Error("a cycle after remove recreated the state")
+	}
+}

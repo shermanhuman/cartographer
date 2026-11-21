@@ -172,7 +172,7 @@ func TestPinsReadTablesArraysAndToolVersions(t *testing.T) {
 			return []byte(c), nil
 		}
 		return nil, project.ErrNoFile
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

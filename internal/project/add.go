@@ -123,6 +123,9 @@ func Init(ctx context.Context, dir, project, anchor string) (file string, comman
 		return "", nil, fmt.Errorf("%s is not in a git checkout", dir)
 	}
 	slug := Identify(ctx, root)
+	if slug == "" {
+		return "", nil, fmt.Errorf("%s has no remote on github.com: a project member is fetched from https://github.com/<owner>/<name>", root)
+	}
 	file = filepath.Join(root, filepath.FromSlash(SettingsFile))
 	if _, err := os.Stat(file); err == nil {
 		return "", nil, fmt.Errorf("%s already exists; edit it instead", file)

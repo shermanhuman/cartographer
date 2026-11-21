@@ -152,6 +152,14 @@ func Remove(ctx context.Context, stateDir, name string, s *store.Store) error {
 		}
 		return err
 	}
+	// Under the project's lock: a running cycle would recreate the state.
+	unlock, err := Lock(stateDir, name).Lock(name)
+	if errors.Is(err, rebuild.ErrRunning) {
+		return fmt.Errorf("a refresh of project %s is running (log: %s); remove it when that is done", name, LogPath(stateDir, name))
+	} else if err != nil {
+		return err
+	}
+	defer unlock()
 	if s != nil {
 		if _, err := s.Relabel(ctx, name, "main", "published"); err != nil {
 			return fmt.Errorf("relabel project %s's maps: %w", name, err)
