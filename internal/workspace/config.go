@@ -208,11 +208,14 @@ command = ["elixir", "{plugins}/extract-elixir/extract.exs", "--repo", "{repo}",
 # command = ["node", "{plugins}/extract-javascript/extract.mjs", "--repo", "{repo}", "--root", "{root}", "--revision", "{revision}"]
 
 # Optional: database schema from migrations run against a disposable database.
+# postgres = "managed" runs it against a throwaway PostgreSQL (from mise) on
+# {pg_host}:{pg_port}, which expand in env and command.
 # [schema]
 # prepare_repo = "my-app"
+# postgres = "managed"
 # prepare = "mix ecto.create && mix ecto.migrate"
-# env = { MIX_ENV = "test" }
+# env = { MIX_ENV = "test", DB_PORT = "{pg_port}" }
 # cache_key = ["priv/repo/migrations"]
 # version = "0.1.0"
-# command = ["elixir", "{plugins}/extract-postgres-schema/capture.exs", "--database", "cartographer_schema"]
+# command = ["elixir", "{plugins}/extract-postgres-schema/capture.exs", "--database", "cartographer_schema", "--port", "{pg_port}"]
 `
