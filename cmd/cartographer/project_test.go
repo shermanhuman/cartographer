@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -230,5 +231,60 @@ func TestBackgroundRefreshStartFailureIsRecorded(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(project.LogPath(sd, "solo")); !strings.Contains(string(b), "the refresh could not start") {
 		t.Errorf("log:\n%s", b)
+	}
+}
+
+// A start failure recorded while another cycle holds the project's lock
+// leaves that cycle's state and log alone (A-M5): its digest-bearing
+// failure, and with it the six-hour hold, stay. Once the lock is free the
+// failure is recorded; after the project is removed, nothing is.
+func TestStartFailureWaitsForTheLock(t *testing.T) {
+	co, _ := cliProject(t)
+	db := filepath.Join(t.TempDir(), "carto.db")
+	cli(t, db, "project", "add", co, "--yes")
+	sd := project.StateDir()
+	running := &project.State{Fetch: map[string]project.FetchResult{}, Attempt: time.Now().UTC(),
+		Failed: &project.Failure{At: time.Now().UTC(), Digest: "d1", Step: "extract elixir", Message: "boom"}}
+	if err := project.SaveState(sd, "solo", running); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(project.LogPath(sd, "solo"), []byte("the running cycle's log\n"), 0o644)
+	// The refresh child's store failed to open: that path reaches
+	// startFailed before any running check.
+	refresh := func() {
+		t.Helper()
+		if err := startFailed(sd, "solo", errors.New("store: unable to open")); err == nil {
+			t.Fatal("startFailed lost its error")
+		}
+	}
+	unlock, err := project.Lock(sd, "solo").Lock("solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresh()
+	st, err := project.LoadState(sd, "solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Failed == nil || st.Failed.Step != "extract elixir" || st.Failed.Digest != "d1" {
+		t.Errorf("while a cycle held the lock, the start failure replaced its state: failed %+v", st.Failed)
+	}
+	if b, _ := os.ReadFile(project.LogPath(sd, "solo")); string(b) != "the running cycle's log\n" {
+		t.Errorf("while a cycle held the lock, its log became:\n%s", b)
+	}
+	unlock()
+	refresh()
+	if st, _ := project.LoadState(sd, "solo"); st.Failed == nil || st.Failed.Step != "start" {
+		t.Errorf("with the lock free, failed %+v; want a start failure", st.Failed)
+	}
+	var buf bytes.Buffer
+	if err := run(context.Background(), []string{"project", "remove", "solo", "--db", db}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if err := startFailed(sd, "solo", errors.New("late")); err == nil {
+		t.Error("startFailed lost its error")
+	}
+	if _, err := os.Stat(project.Dir(sd, "solo")); err == nil {
+		t.Error("a start failure after remove recreated the project's state directory")
 	}
 }

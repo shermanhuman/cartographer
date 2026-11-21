@@ -184,26 +184,38 @@ func refreshOne(ctx context.Context, w io.Writer, c *common, s *store.Store, nam
 // could start (the plugins, the store): the detached child's stderr goes
 // nowhere, so the error goes to the project's log, and the state gets the
 // attempt and a "start" failure, which the header shows and which holds
-// the next automatic attempt to the cadence. It returns err.
+// the next automatic attempt to the cadence. It does so under the
+// project's lock, rechecking the registration there: while another cycle
+// holds the lock its outcome is the newer one, and nothing is recorded
+// (its state and log stay as it writes them); a project removed meanwhile
+// gets no state back. It returns err.
 func startFailed(sd, name string, err error) error {
 	if _, lerr := project.Load(sd, name); lerr != nil {
 		return err // not registered: nothing to record against
 	}
-	os.MkdirAll(project.Dir(sd, name), 0o755)
-	logPath := project.LogPath(sd, name)
-	if f, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); ferr == nil {
-		fmt.Fprintf(f, "cartographer: the refresh could not start: %v\n", err)
-		f.Close()
+	herr := project.Lock(sd, name).Hold(name, func() error {
+		if _, lerr := project.Load(sd, name); lerr != nil {
+			return nil // removed while we waited
+		}
+		logPath := project.LogPath(sd, name)
+		if f, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); ferr == nil {
+			fmt.Fprintf(f, "cartographer: the refresh could not start: %v\n", err)
+			f.Close()
+		}
+		st, serr := project.LoadState(sd, name)
+		if serr != nil {
+			st = &project.State{Fetch: map[string]project.FetchResult{}}
+		}
+		now := time.Now().UTC()
+		st.Attempt = now
+		st.Failed = &project.Failure{At: now, Step: "start", Message: err.Error(), Log: logPath}
+		return project.SaveState(sd, name, st)
+	})
+	if _, lerr := project.Load(sd, name); lerr != nil {
+		os.Remove(project.Dir(sd, name)) // the lock's directory, if left empty
 	}
-	st, serr := project.LoadState(sd, name)
-	if serr != nil {
-		st = &project.State{Fetch: map[string]project.FetchResult{}}
-	}
-	now := time.Now().UTC()
-	st.Attempt = now
-	st.Failed = &project.Failure{At: now, Step: "start", Message: err.Error(), Log: logPath}
-	if serr := project.SaveState(sd, name, st); serr != nil {
-		return errors.Join(err, serr)
+	if herr != nil && !errors.Is(herr, rebuild.ErrRunning) {
+		return errors.Join(err, herr)
 	}
 	return err
 }
