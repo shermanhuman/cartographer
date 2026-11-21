@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shermanhuman/cartographer/internal/project"
+	"github.com/shermanhuman/cartographer/internal/store"
 )
 
 // cliProject makes acme/solo, its own anchor with no extractors, behind
@@ -157,5 +159,41 @@ func TestQuerySpawnsAProjectRefresh(t *testing.T) {
 	cli(t, db, "status", "--no-pull")
 	if spawns() != 1 {
 		t.Errorf("%d spawns within the cadence", spawns())
+	}
+}
+
+// The web map's status for a registered project's map is stale only when
+// something differs or failed, not because its header line is set.
+func TestServeStatusOfProjectMap(t *testing.T) {
+	co, _ := cliProject(t)
+	db := filepath.Join(t.TempDir(), "carto.db")
+	cli(t, db, "project", "add", co, "--yes")
+	cli(t, db, "refresh")
+	t.Chdir(co)
+	s, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sess := newSession(&common{db: db, noRebuild: true, noPull: true}, s, io.Discard)
+	sess.Rebuild, sess.ProjectRebuild = nil, nil
+	id, err := sess.Choose(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := func() map[string]any {
+		v, err := serveStatus(sess)(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.(map[string]any)
+	}
+	if st := status(); st["stale"] != false || st["summary"] == "" {
+		t.Errorf("a current project map: %v", st)
+	}
+	os.WriteFile(filepath.Join(co, "README.md"), []byte("# Changed\n"), 0o644)
+	sess.Forget()
+	if st := status(); st["stale"] != true {
+		t.Errorf("a changed file: %v", st)
 	}
 }

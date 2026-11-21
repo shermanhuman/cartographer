@@ -64,7 +64,7 @@ func serveStatus(sess *session.Session) func(ctx context.Context, snapshot strin
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"summary": rep.Summary(), "stale": rep.Summary() != "", "repos": rep.Lines()}, nil
+		return map[string]any{"summary": rep.Summary(), "stale": rep.Stale(), "repos": rep.Lines()}, nil
 	}
 }
 

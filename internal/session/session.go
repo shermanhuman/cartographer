@@ -362,7 +362,7 @@ func (s *Session) projectReport(ctx context.Context, m *memo, id string, reg *pr
 		v.Created, _ = time.Parse(time.RFC3339, si.CreatedAt)
 	}
 	v.Manifest, _ = s.Store.Manifest(ctx, id)
-	rep.Lead, rep.Detail, rep.Title = v.Lead(), v.Detail(), v.Label()
+	rep.Lead, rep.Detail, rep.Title, rep.Problems = v.Lead(), v.Detail(), v.Label(), v.Problems()
 	return rep
 }
 

@@ -60,6 +60,24 @@ type Report struct {
 	// Hints are status-only advice about keeping the map fresh (e.g. a
 	// workspace to register); not part of Summary or Lines.
 	Hints []string
+	// Problems are what keeps a registered project's map behind (a failed
+	// build, a failing fetch, a rebuild running).
+	Problems []string
+}
+
+// Stale reports whether the map needs the reader's care: a checkout has
+// commits or files the map doesn't, a rebuild note, or a project problem.
+// A project's header line alone (Lead) is not staleness.
+func (r *Report) Stale() bool {
+	if len(r.Problems) > 0 || r.Rebuild != "" {
+		return true
+	}
+	for _, s := range r.Repos {
+		if s.Behind > 0 || len(s.Changed) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
