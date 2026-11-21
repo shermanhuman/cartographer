@@ -58,6 +58,10 @@ func TestProjectCommands(t *testing.T) {
 	if !strings.Contains(out, "acme/solo") || !strings.Contains(out, co) || !strings.Contains(out, "registered solo") {
 		t.Fatalf("add:\n%s", out)
 	}
+	// The tests run with CARTOGRAPHER_NO_REBUILD: nothing builds by itself.
+	if !strings.Contains(out, "automatic builds are off here") || strings.Contains(out, "the next command builds") {
+		t.Errorf("add with rebuilds off promised a background build:\n%s", out)
+	}
 	if out := cli(t, db, "project", "list"); !strings.Contains(out, "solo (anchor acme/solo)") || !strings.Contains(out, "never built") {
 		t.Errorf("list:\n%s", out)
 	}

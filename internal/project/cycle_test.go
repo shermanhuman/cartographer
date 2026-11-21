@@ -12,6 +12,7 @@ import (
 
 	"github.com/shermanhuman/cartographer/internal/project"
 	"github.com/shermanhuman/cartographer/internal/rebuild"
+	"github.com/shermanhuman/cartographer/internal/session"
 )
 
 // A pushed commit is mapped by the first command once the last fetch is
@@ -401,5 +402,25 @@ printf '{"facts_version":2,"producer":{"name":"fake-scip","version":"1"},"repo":
 		if !strings.Contains(l, want) {
 			t.Errorf("extract scip %q lacks %q", l, want)
 		}
+	}
+}
+
+// With no map yet, the error says what will build it: the build this
+// command just started, or nothing at all when automatic builds are off.
+func TestFirstBuildMessageSaysWhatBuildsIt(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	query := func(rebuild func(string)) error {
+		sess := &session.Session{Store: x.s, DB: x.db, Cwd: sales, StateDir: x.state, Now: x.clock, ProjectRebuild: rebuild}
+		_, _, err := sess.Query(context.Background())
+		return err
+	}
+	if err := query(nil); err == nil || !strings.Contains(err.Error(), "automatic builds are off here") {
+		t.Errorf("rebuilds off: %v", err)
+	}
+	started := 0
+	if err := query(func(string) { started++ }); started != 1 || err == nil || !strings.Contains(err.Error(), "its first build has started in the background") {
+		t.Errorf("rebuild started (%d): %v", started, err)
 	}
 }

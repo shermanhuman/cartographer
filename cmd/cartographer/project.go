@@ -452,7 +452,11 @@ without another prompt. Nothing is written into the checkouts but refs/cartograp
 		if err := project.Save(sd, reg); err != nil {
 			return err
 		}
-		fmt.Fprintf(w, "registered %s in %s; the next command builds its map in the background, or run `cartographer refresh` now\n", reg.Name, sd)
+		if rebuildEnabled(c, nil) {
+			fmt.Fprintf(w, "registered %s in %s; the next command builds its map in the background, or run `cartographer refresh` now\n", reg.Name, sd)
+		} else {
+			fmt.Fprintf(w, "registered %s in %s; automatic builds are off here (auto_rebuild = false, --no-rebuild or $CARTOGRAPHER_NO_REBUILD), so run `cartographer refresh` to build its map\n", reg.Name, sd)
+		}
 		return nil
 	}
 	return usage

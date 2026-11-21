@@ -84,6 +84,9 @@ type Session struct {
 
 	mu   sync.Mutex // guards memo; held while computing it so bursts share one computation
 	memo *memo
+
+	startedMu sync.Mutex
+	started   map[string]bool // projects whose cycle this session started
 }
 
 // memo caches what one directory resolves to.
@@ -308,6 +311,12 @@ func (s *Session) scheduleProjects(m *memo) {
 			continue
 		}
 		s.ProjectRebuild(reg.Name)
+		s.startedMu.Lock()
+		if s.started == nil {
+			s.started = map[string]bool{}
+		}
+		s.started[reg.Name] = true
+		s.startedMu.Unlock()
 	}
 }
 
@@ -376,13 +385,30 @@ func (e *ErrFirstBuild) Error() string {
 	return fmt.Sprintf("no map of project %s yet: %s", e.Project, e.Status)
 }
 
+// firstBuild says why a registered project has no map yet and what will
+// build it: a build running or just started by this command, a failure,
+// automatic builds being off, or the next command after the cadence.
 func (s *Session) firstBuild(reg *project.Registration) error {
-	status := "its first build starts with the next command, or run `cartographer refresh`"
-	if since, ok := project.Lock(s.StateDir, reg.Name).Running(reg.Name); ok {
-		status = fmt.Sprintf("its first build is running since %s (log: %s)", since.Local().Format("15:04"), project.LogPath(s.StateDir, reg.Name))
-	} else if st, err := project.LoadState(s.StateDir, reg.Name); err == nil && st.Failed != nil {
+	s.startedMu.Lock()
+	started := s.started[reg.Name]
+	s.startedMu.Unlock()
+	log := project.LogPath(s.StateDir, reg.Name)
+	st, err := project.LoadState(s.StateDir, reg.Name)
+	var status string
+	switch since, running := project.Lock(s.StateDir, reg.Name).Running(reg.Name); {
+	case running:
+		status = fmt.Sprintf("its first build is running since %s (log: %s)", since.Local().Format("15:04"), log)
+	case started:
+		status = fmt.Sprintf("its first build has started in the background (log: %s); a later command answers from it, or run `cartographer refresh` to wait for it", log)
+	case err == nil && st.Failed != nil:
 		v := &project.View{Reg: reg, State: st, Now: s.now()}
 		status = strings.Join(v.Problems(), "; ")
+	case s.ProjectRebuild == nil:
+		status = "automatic builds are off here (auto_rebuild = false, --no-rebuild or $CARTOGRAPHER_NO_REBUILD): run `cartographer refresh` to build it"
+	case err == nil && !st.Attempt.IsZero():
+		status = fmt.Sprintf("its next build starts with a command after %s, or run `cartographer refresh`", st.Attempt.Add(project.Cadence).Local().Format("15:04"))
+	default:
+		status = "its first build starts with the next command, or run `cartographer refresh`"
 	}
 	return &ErrFirstBuild{Project: reg.Name, Status: status}
 }
