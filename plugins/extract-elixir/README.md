@@ -110,8 +110,8 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   those naming a module outside it (Kernel and Erlang included),
   `unresolved` the rest (dynamic calls, unattributed unqualified calls, a
   function missing from a module that is here). `not_extracted` counts the
-  routes and refs above that were not extracted. `dispatch` and `refs` are
-  0.
+  routes and refs above that were not extracted; only the count is kept in
+  the document, not which sites they were. `dispatch` and `refs` are 0.
 - `notes`:
 
   | Kind | Meaning |
