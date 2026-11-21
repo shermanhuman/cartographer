@@ -130,11 +130,11 @@ func TestElixirPluginWebContract(t *testing.T) {
 			t.Errorf("rosearch: ref %+v: base want Rosearch.ApiClient", r)
 		}
 	}
-	if len(rosearch.HTTPRefs) != 5 || refs["GET /tenants/:p1/vehicle-cleanup"] != "rosearch:Rosearch.VehicleList.cleanup/3" {
+	if len(rosearch.HTTPRefs) != 6 || refs["GET /tenants/:p1/vehicle-cleanup"] != "rosearch:Rosearch.VehicleList.cleanup/3" || refs["POST /tenants/:p1/vehicle-cleanup/wont-fix"] != "rosearch:Rosearch.VehicleList.wont_fix/3" {
 		t.Errorf("rosearch: refs = %+v", rosearch.HTTPRefs)
 	}
-	if rosearch.Stats[0].NotExtracted != 2 {
-		t.Errorf("rosearch: not_extracted = %d, want 2", rosearch.Stats[0].NotExtracted)
+	if rosearch.Stats[0].NotExtracted != 1 {
+		t.Errorf("rosearch: not_extracted = %d, want 1", rosearch.Stats[0].NotExtracted)
 	}
 
 	sites := run("sites", "shared-libs/lib")

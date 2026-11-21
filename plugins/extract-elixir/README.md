@@ -99,8 +99,9 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   (`request(:post, path)`), and `base` the carrier's module. A string that
   already names a path (`"/subscriptions/#{id}"`) starts a request where it
   is written, so a helper that builds one is where the ref is; so is a Req
-  call with such a literal URL. Not extracted, only counted: a piped path
-  (`path |> ApiClient.get()`), a variable or call (a path built in another
+  call with such a literal URL. A path piped into a carrier counts as its
+  argument (`"/x/#{id}" |> ApiClient.get()`). Not extracted, only counted: a
+  piped value that isn't such a path (`path |> ApiClient.get()`), a variable or call (a path built in another
   function), a capture of a carrier, and a Req call whose URL comes from no
   parameter and no literal (`url:` reaching `Req.new` through a pipe in
   another function, a module attribute).

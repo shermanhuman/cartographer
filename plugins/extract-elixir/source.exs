@@ -457,13 +457,18 @@ defmodule Cartographer.ElixirSource do
 
   defp walk({:|>, _, [left, right]}, env, acc) do
     {_, acc} = walk(left, env, acc)
+    # The piped value stands first in the call's arguments as a placeholder
+    # (walked as a variable, so the left side's calls aren't recorded twice)
+    # that carries the left side for readers of the arguments: a literal
+    # path piped into a Req wrapper is still that path.
+    piped = {:__pipe_arg__, [value: left], nil}
 
     case right do
       {{:., dotmeta, [mod, fun]}, meta, args} when is_list(args) ->
-        walk({{:., dotmeta, [mod, fun]}, meta, [{:__pipe_arg__, [], nil} | args]}, env, acc)
+        walk({{:., dotmeta, [mod, fun]}, meta, [piped | args]}, env, acc)
 
       {fun, meta, args} when ident?(fun) and is_list(args) ->
-        walk({fun, meta, [{:__pipe_arg__, [], nil} | args]}, env, acc)
+        walk({fun, meta, [piped | args]}, env, acc)
 
       _ ->
         walk(right, env, acc)

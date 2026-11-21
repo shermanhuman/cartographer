@@ -343,6 +343,9 @@ defmodule Cartographer.ElixirExtractTest do
                {"GET", "/auth/me/preferences", "rosearch:Rosearch.VehicleList.preferences/1", 5},
                {"GET", "/tenants/:p1/vehicle-cleanup", "rosearch:Rosearch.VehicleList.cleanup/3",
                 9},
+               # A literal path piped into the wrapper.
+               {"POST", "/tenants/:p1/vehicle-cleanup/wont-fix",
+                "rosearch:Rosearch.VehicleList.wont_fix/3", 14},
                # fetch/2 passes its path to get/2.
                {"GET", "/vehicles/supported-makes", "rosearch:Rosearch.VehicleList.makes/1", 22},
                {"DELETE", "/tenants/:p1/users/:p2", "rosearch:Rosearch.VehicleList.remove_user/3",
@@ -351,9 +354,9 @@ defmodule Cartographer.ElixirExtractTest do
              ]
 
       assert Enum.all?(doc.http_refs, &(&1.base == "Rosearch.ApiClient"))
-      # The piped path (wont_fix) and the path built by path/1 (boilerplate).
-      assert %{not_extracted: 2} = stats(doc)
-      assert skips(web("rosearch")) == [{14, "piped"}, {19, "not a literal path"}]
+      # The path built by path/1 (boilerplate).
+      assert %{not_extracted: 1} = stats(doc)
+      assert skips(web("rosearch")) == [{19, "not a literal path"}]
       refute Map.has_key?(doc, :routes)
     end
 

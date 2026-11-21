@@ -122,8 +122,14 @@ defmodule Cartographer.ElixirHTTP do
     end
   end
 
-  # The pipe placeholder ElixirSource puts first in a piped call.
-  defp path_of({:__pipe_arg__, [], nil}), do: :piped
+  # The pipe placeholder ElixirSource puts first in a piped call: the path
+  # its left side names ("/x" |> get()), else :piped.
+  defp path_of({:__pipe_arg__, meta, nil}) do
+    case template(Keyword.get(meta, :value)) do
+      {:ok, path} -> {:ok, path, nil}
+      :none -> :piped
+    end
+  end
 
   defp path_of(list) when is_list(list) do
     with true <- keyword?(list),
