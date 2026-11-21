@@ -221,12 +221,12 @@ func (r *Runner) digest(inputs []Input) string {
 // missing pins fail later, at the build.
 func toolsOf(in Input) []Tool {
 	var out []Tool
-	steps := append([]string(nil), in.Settings.Extract...)
-	if in.Settings.Schema != nil {
-		steps = append(steps, "schema")
-	}
-	for _, s := range steps {
+	for _, s := range in.Settings.Extract {
 		ts, _ := ExtractorTools(s, in.Pins)
+		out = append(out, ts...)
+	}
+	if in.Settings.Schema != nil {
+		ts, _ := SchemaTools(in.Settings.Schema, in.Pins)
 		out = append(out, ts...)
 	}
 	return out

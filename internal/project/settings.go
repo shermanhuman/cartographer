@@ -72,13 +72,20 @@ type MemberSpec struct {
 // SchemaSettings is the schema step: Prepare runs in this repo's archive
 // (e.g. migrations against a disposable database), then Capture prints the
 // schema facts document. Both are skipped while the files under CacheKey
-// (or, with none, the commit) and the commands are unchanged.
+// (or, with none, the commit) and the commands are unchanged. Postgres =
+// "managed" runs both against a throwaway PostgreSQL cluster (the release's
+// Postgres pin, from mise) whose {pg_host} and {pg_port} expand in Env and
+// Capture, with its programs (psql) on their PATH.
 type SchemaSettings struct {
 	Prepare  string            `toml:"prepare"`
 	Env      map[string]string `toml:"env"`
 	CacheKey []string          `toml:"cache_key"`
 	Capture  []string          `toml:"capture"`
+	Postgres string            `toml:"postgres"`
 }
+
+// Managed reports postgres = "managed".
+func (s *SchemaSettings) Managed() bool { return s != nil && s.Postgres == "managed" }
 
 // RustSettings configure the Rust extractor.
 type RustSettings struct {
@@ -181,6 +188,9 @@ func ParseSettings(b []byte, self string) (*Settings, error) {
 	}
 	if s.Schema != nil && len(s.Schema.Capture) == 0 {
 		return nil, errors.New("schema.capture is required")
+	}
+	if s.Schema != nil && s.Schema.Postgres != "" && !s.Schema.Managed() {
+		return nil, fmt.Errorf(`schema.postgres %q: the only value is "managed"`, s.Schema.Postgres)
 	}
 	for _, r := range s.SourceRoots {
 		if r == "" || strings.HasPrefix(r, "/") || slices.Contains(strings.Split(r, "/"), "..") || strings.Contains(r, ",") {
