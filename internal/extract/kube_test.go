@@ -3,7 +3,10 @@ package extract
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/shermanhuman/cartographer/internal/facts"
 )
 
 func TestKubernetesKeepsOnlyURLEnv(t *testing.T) {
@@ -44,5 +47,54 @@ spec: {selector: {app: web}}
 	}
 	if d.Services[0].Image != "ghcr.io/x/web:latest" || d.Services[1].Selector["app"] != "web" {
 		t.Errorf("image or selector: %+v", d.Services)
+	}
+}
+
+// A malformed YAML document is reported as a parse_error note in both
+// documents, and the file's later documents are still read.
+func TestMalformedYAMLDocumentIsReportedAndSkipped(t *testing.T) {
+	root := t.TempDir()
+	manifest := `apiVersion: v1
+kind: Service
+metadata: {name: first}
+spec: {selector: {app: first}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: [broken
+---
+apiVersion: v1
+kind: Service
+metadata: {name: second}
+spec: {selector: {app: second}}
+---
+cold:
+  admin_url: http://admin.shop.svc/api
+`
+	if err := os.WriteFile(filepath.Join(root, "k8s.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Kubernetes("infra", root, "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, s := range d.Services {
+		names = append(names, s.Name)
+	}
+	if len(names) != 2 || names[0] != "first" || names[1] != "second" {
+		t.Errorf("services %v, want first and second", names)
+	}
+	u, err := ConfigURLs("infra", root, "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u.ConfigURLs) != 1 || u.ConfigURLs[0].Line != 16 {
+		t.Errorf("config urls %+v, want cold.admin_url at line 16", u.ConfigURLs)
+	}
+	for _, doc := range []*facts.Doc{d, u} {
+		if len(doc.Notes) != 1 || doc.Notes[0].Kind != "parse_error" || doc.Notes[0].File != "k8s.yaml" || !strings.Contains(doc.Notes[0].Message, "document at line 6: ") {
+			t.Errorf("%s notes %+v, want one parse_error for k8s.yaml's document at line 6", doc.Producer.Name, doc.Notes)
+		}
 	}
 }

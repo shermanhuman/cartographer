@@ -1,7 +1,6 @@
 package extract
 
 import (
-	"path/filepath"
 	"strings"
 
 	"github.com/shermanhuman/cartographer/internal/facts"
@@ -19,7 +18,9 @@ func ConfigURLs(repo, root, revision string) (*facts.Doc, error) {
 	}
 	for _, rel := range files {
 		found := false
-		for _, n := range yamlDocs(filepath.Join(root, filepath.FromSlash(rel))) {
+		docs, notes := yamlDocs(root, rel)
+		d.Notes = append(d.Notes, notes...)
+		for _, n := range docs {
 			if str(get(n, "kind")) != "" && str(get(n, "apiVersion")) != "" {
 				continue // a manifest
 			}

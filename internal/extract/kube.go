@@ -6,10 +6,12 @@ package extract
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -56,24 +58,95 @@ func yamlFiles(root string) ([]string, error) {
 	return out, err
 }
 
-// docs decodes every YAML document in a file; a file that doesn't parse
-// yields what parsed before the error.
-func yamlDocs(path string) []*yaml.Node {
-	raw, err := os.ReadFile(path)
+// yamlDocs decodes every YAML document in a file. A document that doesn't
+// parse is skipped and reported in the returned notes (kind parse_error,
+// with its line); the documents after it are still read.
+func yamlDocs(root, rel string) ([]*yaml.Node, []facts.Note) {
+	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 	if err != nil {
-		return nil
+		return nil, []facts.Note{{Kind: "parse_error", File: rel, Message: err.Error()}}
 	}
+	if docs, err := decodeAll(raw); err == nil {
+		return docs, nil
+	}
+	// One bad document stops the decoder: decode each document on its own.
+	var out []*yaml.Node
+	var notes []facts.Note
+	for _, ch := range splitDocs(raw) {
+		docs, err := decodeAll(ch.src)
+		if err != nil {
+			notes = append(notes, facts.Note{Kind: "parse_error", File: rel, Message: docErr(err, ch) + " (document skipped)"})
+			continue
+		}
+		for _, n := range docs {
+			shiftLines(n, ch.line-1)
+		}
+		out = append(out, docs...)
+	}
+	return out, notes
+}
+
+func decodeAll(raw []byte) ([]*yaml.Node, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	var out []*yaml.Node
 	for {
 		var n yaml.Node
 		err := dec.Decode(&n)
-		if errors.Is(err, io.EOF) || err != nil {
-			return out
+		if errors.Is(err, io.EOF) {
+			return out, nil
+		}
+		if err != nil {
+			return out, err
 		}
 		if len(n.Content) > 0 {
 			out = append(out, n.Content[0])
 		}
+	}
+}
+
+type yamlChunk struct {
+	src  []byte
+	line int // the file line its first line is
+}
+
+// splitDocs splits a YAML stream at its "---" document markers.
+func splitDocs(raw []byte) []yamlChunk {
+	var out []yamlChunk
+	lines := bytes.SplitAfter(raw, []byte("\n"))
+	start := 0
+	for i, l := range lines {
+		t := bytes.TrimRight(l, "\r\n")
+		if i > start && (bytes.Equal(t, []byte("---")) || bytes.HasPrefix(t, []byte("--- ")) || bytes.HasPrefix(t, []byte("---\t"))) {
+			out = append(out, yamlChunk{bytes.Join(lines[start:i], nil), start + 1})
+			start = i
+		}
+	}
+	if start < len(lines) {
+		out = append(out, yamlChunk{bytes.Join(lines[start:], nil), start + 1})
+	}
+	return out
+}
+
+var reYAMLLine = regexp.MustCompile(`^yaml: (line \d+: )?`)
+
+// docErr is a skipped document's message: the file line the document starts
+// at (the decoder's own line numbers are relative to the document, and not
+// always exact) and the decoder's complaint.
+func docErr(err error, ch yamlChunk) string {
+	start := ch.line
+	if bytes.HasPrefix(ch.src, []byte("---")) {
+		start++
+	}
+	return fmt.Sprintf("document at line %d: %s", start, reYAMLLine.ReplaceAllString(err.Error(), ""))
+}
+
+func shiftLines(n *yaml.Node, by int) {
+	if n == nil || by == 0 {
+		return
+	}
+	n.Line += by
+	for _, c := range n.Content {
+		shiftLines(c, by)
 	}
 }
 
@@ -126,7 +199,9 @@ func Kubernetes(repo, root, revision string) (*facts.Doc, error) {
 	}
 	for _, rel := range files {
 		listed := false
-		for _, n := range yamlDocs(filepath.Join(root, filepath.FromSlash(rel))) {
+		docs, notes := yamlDocs(root, rel)
+		d.Notes = append(d.Notes, notes...)
+		for _, n := range docs {
 			kind, name := str(get(n, "kind")), str(get(n, "metadata", "name"))
 			if name == "" {
 				continue
