@@ -353,7 +353,7 @@ func (im *importer) calls(d *facts.Doc, idx *targetIndex) error {
 				target = fmt.Sprintf("%s/%d", c.Target.Name, c.Target.Arity)
 			}
 		}
-		if to == "" && c.Target != nil && c.Kind != "dynamic" && !strings.HasPrefix(c.Kind, "js_") {
+		if to == "" && c.Target != nil && resolvable(c.Kind) {
 			to, precision = idx.resolve(d.Repo, im.callerModule(c.From), *c.Target, defPrecision)
 		}
 		if to != "" && precision == "" {
@@ -369,6 +369,14 @@ func (im *importer) calls(d *facts.Doc, idx *targetIndex) error {
 		}
 	}
 	return nil
+}
+
+// resolvable reports whether a call of this kind may be resolved by name.
+// dynamic and js_* calls lack lexical binding; unresolved is a producer's
+// explicit "no target" (SCIP: call syntax the indexer gave no symbol), so a
+// same-named local function must not become its precise callee.
+func resolvable(kind string) bool {
+	return kind != "dynamic" && kind != "unresolved" && !strings.HasPrefix(kind, "js_")
 }
 
 func (im *importer) callerModule(fnID string) string {

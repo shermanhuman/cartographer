@@ -63,7 +63,9 @@ documents are merged:
 Targets without a `module` resolve only against the caller's own module (a
 local call); they never match elsewhere. Calls with `kind` `dynamic`, or any
 kind starting with `js_`, are never resolved: name-only evidence without
-lexical binding is not enough. See each plugin's README for its call kinds.
+lexical binding is not enough. Nor are calls with `kind` `unresolved`: the
+producer says it found no target, so a same-named function in the caller's
+module is not one. See each plugin's README for its call kinds.
 
 ## Precision
 
