@@ -2,6 +2,7 @@ package project_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -71,5 +72,33 @@ func TestHeadSchemaFollowsUncommittedChange(t *testing.T) {
 	}
 	if got := tables(res.Snapshot); len(got) != 1 || got[0] != "invoices" {
 		t.Errorf("after an uncommitted schema change, head build tables = %v, want [invoices]", got)
+	}
+}
+
+// A --head build stages the working copy with its executable bits (A-M3):
+// a checked-in script the schema step runs works as it does from the
+// fetched archive.
+func TestHeadKeepsExecutableScripts(t *testing.T) {
+	x := newH(t)
+	admin, sales, _ := x.world()
+	writeFiles(t, admin, map[string]string{
+		".cartographer/repo.toml": settings("shop", "", `members = [{repo = "acme/admin"}, {repo = "acme/sales"}, {repo = "acme/infra"}]`, `extract = ["elixir"]`,
+			"[schema]", `prepare = "./scripts/prepare-schema"`, `capture = ["sh", "-c", "cat {root}/schema.json"]`),
+		"scripts/prepare-schema": "#!/bin/sh\necho '" + schemaDoc("orders") + "' > schema.json\n",
+	})
+	if err := os.Chmod(filepath.Join(admin, "scripts", "prepare-schema"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, admin, "add", "-A")
+	git(t, admin, "commit", "-q", "-m", "schema script")
+	hr, hs := x.headRunner()
+	res, err := hr.Head(context.Background(), sales)
+	if err != nil {
+		t.Fatalf("head build with an executable prepare script: %v", err)
+	}
+	var n int
+	hs.DB.QueryRow(`SELECT count(*) FROM db_tables WHERE snapshot_id = ? AND name = 'orders'`, res.Snapshot).Scan(&n)
+	if n != 1 {
+		t.Errorf("orders tables = %d, want 1", n)
 	}
 }

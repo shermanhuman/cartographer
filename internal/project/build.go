@@ -496,7 +496,9 @@ func schemaKey(root, commit string, staged []string, sc *SchemaSettings, plugins
 }
 
 // copyWorkingCopy copies a checkout's tracked and untracked (not ignored)
-// regular files into dst, as they are on disk.
+// regular files into dst, as they are on disk: executable ones stay
+// executable (0755, as git checks them out), so a build script runs as it
+// does from the fetched archive.
 func copyWorkingCopy(ctx context.Context, src, dst string) ([]string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", src, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	var out, errb bytes.Buffer
@@ -516,8 +518,14 @@ func copyWorkingCopy(ctx context.Context, src, dst string) ([]string, error) {
 		if err != nil || !fi.Mode().IsRegular() {
 			continue // deleted, a symlink or a submodule
 		}
-		if err := workspace.CopyFile(p, filepath.Join(dst, filepath.FromSlash(f))); err != nil {
+		to := filepath.Join(dst, filepath.FromSlash(f))
+		if err := workspace.CopyFile(p, to); err != nil {
 			return nil, err
+		}
+		if fi.Mode().Perm()&0o111 != 0 {
+			if err := os.Chmod(to, 0o755); err != nil {
+				return nil, err
+			}
 		}
 		files = append(files, f)
 	}
