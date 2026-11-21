@@ -143,7 +143,9 @@ The 0.1 layout still works: a workspace directory holding
 `cartographer.toml` that lists the repositories, registered with
 `workspace add <dir>` and rebuilt from each checkout's `HEAD` with
 `build --local --import`. A workspace with a registered project's name is
-ignored while the project is registered.
+ignored while the project is registered; `project remove` deletes the
+project's maps from its store, so the workspace's own map answers again and
+rebuilds as before.
 
 ## Query it
 

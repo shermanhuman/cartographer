@@ -265,18 +265,37 @@ func deleteSnapshot(ctx context.Context, tx *sql.Tx, id string) error {
 	return err
 }
 
-// Relabel gives workspace's snapshots of source from the source to
-// instead, in the source column and the stored manifest ("published" is
-// stored as no source, as an imported manifest has). It returns how many
-// changed.
-func (s *Store) Relabel(ctx context.Context, workspace, from, to string) (int64, error) {
-	res, err := s.DB.ExecContext(ctx, `UPDATE snapshots SET source = ?3,
-		manifest = CASE WHEN ?3 = 'published' THEN json_remove(manifest, '$.source') ELSE json_set(manifest, '$.source', ?3) END
-		WHERE workspace = ?1 AND source = ?2`, workspace, from, to)
+// DeleteSource removes workspace's snapshots of source (and everything
+// imported with them) and returns how many.
+func (s *Store) DeleteSource(ctx context.Context, workspace, source string) (int, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM snapshots WHERE workspace = ? AND source = ?`, workspace, source)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if err := deleteSnapshot(ctx, tx, id); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), tx.Commit()
 }
 
 // Prune keeps the newest keep snapshots of each workspace and deletes the

@@ -67,7 +67,7 @@ UI:
 Projects (each repo's .cartographer/repo.toml, read from its fetched default branch):
   project add <member checkout | owner/name> [--yes]
                               register a project: fetch it, list its members and their checkouts
-  project remove <name>       unregister it
+  project remove <name>       unregister it and delete its maps
   project list                registered projects, members, checkouts and last cycle
   project init <checkout> [--project NAME] [--anchor owner/name]
                               write a starter .cartographer/repo.toml (commits nothing)

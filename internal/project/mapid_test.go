@@ -246,19 +246,17 @@ func (x *h) legacySnapshot(source, rev string, at time.Time) string {
 	return id
 }
 
-// The Mac case: a legacy local_workspaces entry and a project of the same
-// name, the legacy map older than the project's. The project's main
-// snapshots are chosen and the legacy one doesn't build. project remove
-// relabels the project's maps published, so the legacy rules apply again:
-// the newest map of the name answers, and the legacy workspace rebuilds
-// from a checkout ahead of it.
+// The Mac case (F1-M3), in its real order: a legacy local_workspaces
+// entry and a project of the same name, the legacy map (Nov 10) older than
+// the project's, and the checkout behind the project's main. While the
+// project is registered its main map is chosen and the legacy workspace
+// doesn't build. project remove deletes the project's main maps from its
+// store, so the legacy map answers at once, and the 0.1 trigger works from
+// it: a commit past the legacy map rebuilds the legacy workspace.
 func TestLegacyWorkspaceOfSameNameIgnored(t *testing.T) {
 	x := newH(t)
 	_, sales, _ := x.world()
 	first := git(t, sales, "rev-parse", "HEAD")
-	writeFiles(t, sales, map[string]string{"lib/local.ex": "x\n"})
-	git(t, sales, "add", ".")
-	git(t, sales, "commit", "-q", "-m", "local") // ahead of the legacy map
 	ws := filepath.Join(x.dir, "legacy-map")
 	writeFiles(t, ws, map[string]string{"cartographer.toml": "name = \"shop\"\n[[repos]]\nname = \"sales\"\nurl = \"https://github.com/acme/sales\"\npath = \"" + sales + "\"\n"})
 	cfg := filepath.Join(x.dir, "config.toml")
@@ -267,8 +265,9 @@ func TestLegacyWorkspaceOfSameNameIgnored(t *testing.T) {
 	if err := userconfig.AddLocalWorkspace(ws); err != nil {
 		t.Fatal(err)
 	}
-	// The real order: the legacy map (Nov 10) is older than the project's.
 	legacy := x.legacySnapshot("", first, time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC))
+	// Upstream moves on; the checkout stays behind the project's main.
+	upstream := x.push("sales", map[string]string{"lib/up.ex": "upstream\n"})
 	x.register(sales)
 	if _, err := x.runner().Cycle(context.Background(), "shop", true); err != nil {
 		t.Fatal(err)
@@ -277,7 +276,11 @@ func TestLegacyWorkspaceOfSameNameIgnored(t *testing.T) {
 	if !ok {
 		t.Fatal("no main snapshot")
 	}
+	if revs, _ := x.mapped(); revs["sales"] != upstream || git(t, sales, "rev-parse", "HEAD") != first {
+		t.Fatalf("setup: the project's main maps sales %s, the checkout is at %s; want the checkout behind it", revs["sales"], git(t, sales, "rev-parse", "HEAD"))
+	}
 	command := func() (string, int) {
+		t.Helper()
 		legacyBuilds := 0
 		sess := &session.Session{Store: x.s, DataDir: filepath.Dir(x.db), DB: x.db, Cwd: sales, StateDir: x.state, Now: x.clock,
 			Rebuild:        func(ws, dir string) { legacyBuilds++ },
@@ -300,14 +303,20 @@ func TestLegacyWorkspaceOfSameNameIgnored(t *testing.T) {
 	if _, ok, _ := x.s.Newest(context.Background(), "shop", "main"); ok {
 		t.Error("project remove left main snapshots of shop")
 	}
-	if si, _, _ := x.s.Info(context.Background(), main.ID); si.Source != "published" {
-		t.Errorf("the project's map is labelled %q after remove, want published", si.Source)
+	if _, ok, _ := x.s.Info(context.Background(), main.ID); ok {
+		t.Error("project remove left the project's map in its store")
 	}
-	if si, _, _ := x.s.Info(context.Background(), legacy); si.Source != "published" {
-		t.Errorf("the legacy map is labelled %q", si.Source)
+	if _, ok, _ := x.s.Info(context.Background(), legacy); !ok {
+		t.Error("project remove deleted the legacy map")
 	}
-	if id, n := command(); id != main.ID || n != 1 {
-		t.Fatalf("after project remove: chose %s (want the newest map %s), legacy builds %d (want 1)", id, main.ID, n)
+	if id, n := command(); id != legacy || n != 0 {
+		t.Fatalf("after project remove: chose %s (want the legacy map %s), legacy builds %d (want 0: the checkout is at its revision)", id, legacy, n)
+	}
+	writeFiles(t, sales, map[string]string{"lib/local.ex": "x\n"})
+	git(t, sales, "add", ".")
+	git(t, sales, "commit", "-q", "-m", "local")
+	if id, n := command(); id != legacy || n != 1 {
+		t.Fatalf("a commit past the legacy map: chose %s (want %s), legacy builds %d (want 1)", id, legacy, n)
 	}
 }
 

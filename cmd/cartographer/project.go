@@ -410,7 +410,7 @@ func projectCmd(ctx context.Context, w io.Writer, c *common, pos []string) error
 		} else if err != nil {
 			return err
 		}
-		// Its maps stay, relabelled published, in the store it built into.
+		// Its main maps are deleted from the store it built into.
 		var s *store.Store
 		if _, err := os.Stat(reg.Store); reg.Store != "" && err == nil {
 			if s, err = store.Open(reg.Store); err != nil {
@@ -421,7 +421,7 @@ func projectCmd(ctx context.Context, w io.Writer, c *common, pos []string) error
 		if err := project.Remove(ctx, sd, pos[1], s); err != nil {
 			return err
 		}
-		fmt.Fprintf(w, "removed project %s; its maps stay in %s, labelled published, until pruned, and refs/cartographer/* stay in its checkouts\n", pos[1], reg.Store)
+		fmt.Fprintf(w, "removed project %s and its maps in %s; refs/cartographer/* stay in its checkouts\n", pos[1], reg.Store)
 		return nil
 	case "init":
 		if len(pos) < 2 {

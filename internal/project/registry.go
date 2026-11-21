@@ -157,11 +157,12 @@ func Register(stateDir string, reg *Registration) error {
 	return Save(stateDir, reg)
 }
 
-// Remove deletes a registration and the project's state directory, and
-// relabels the project's main maps in s (its store; nil skips this)
-// published, so a legacy workspace of the same name is chosen and rebuilt by
-// the legacy rules again. Its refs/cartographer/* refs stay in the
-// checkouts (harmless; `git update-ref -d` removes them).
+// Remove deletes a registration, the project's state directory and its
+// main maps in s (its store; nil skips this), so a legacy workspace of the
+// same name answers from its own map at once and is rebuilt by the legacy
+// rules again (rollback restores carto-0.1.db; it doesn't need these
+// maps). Its refs/cartographer/* refs stay in the checkouts (harmless;
+// `git update-ref -d` removes them).
 func Remove(ctx context.Context, stateDir, name string, s *store.Store) error {
 	if _, err := Load(stateDir, name); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -178,8 +179,8 @@ func Remove(ctx context.Context, stateDir, name string, s *store.Store) error {
 	}
 	defer unlock()
 	if s != nil {
-		if _, err := s.Relabel(ctx, name, "main", "published"); err != nil {
-			return fmt.Errorf("relabel project %s's maps: %w", name, err)
+		if _, err := s.DeleteSource(ctx, name, "main"); err != nil {
+			return fmt.Errorf("delete project %s's maps: %w", name, err)
 		}
 	}
 	if err := os.Remove(regPath(stateDir, name)); err != nil {
