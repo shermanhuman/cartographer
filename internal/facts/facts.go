@@ -199,7 +199,7 @@ type Service struct {
 	Image     string            `json:"image,omitempty"`    // deployment
 	Selector  map[string]string `json:"selector,omitempty"` // service
 	Labels    map[string]string `json:"labels,omitempty"`   // deployment pod labels
-	Env       map[string]string `json:"env,omitempty"`      // literal env values
+	Env       map[string]string `json:"env,omitempty"`      // literal env values that are URLs
 	File      string            `json:"file"`
 	Line      int               `json:"line,omitempty"`
 }

@@ -117,7 +117,7 @@ func strMap(n *yaml.Node) map[string]string {
 
 // Kubernetes reads Deployments, StatefulSets and Services from plain
 // manifests under root: name, namespace, container images, pod labels,
-// literal env values, and Service selectors.
+// literal env values that are URLs, and Service selectors.
 func Kubernetes(repo, root, revision string) (*facts.Doc, error) {
 	d := &facts.Doc{FactsVersion: facts.Version, Producer: facts.Producer{Name: "cartographer-kubernetes", Version: producerVersion}, Repo: repo, Revision: revision}
 	files, err := yamlFiles(root)
@@ -143,8 +143,10 @@ func Kubernetes(repo, root, revision string) (*facts.Doc, error) {
 					env := map[string]string{}
 					if list := get(c, "env"); list != nil && list.Kind == yaml.SequenceNode {
 						for _, e := range list.Content {
-							if k, v := str(get(e, "name")), get(e, "value"); k != "" && v != nil {
-								env[k] = str(v)
+							// Only URLs: they are what links services, and
+							// nothing else from a manifest belongs in a map.
+							if k, v := str(get(e, "name")), str(get(e, "value")); k != "" && isURL(v) {
+								env[k] = strings.TrimSpace(v)
 							}
 						}
 					}

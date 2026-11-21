@@ -131,7 +131,7 @@ the Kubernetes extractor.
 ### Services
 
 `services[]` come from manifests (`cartographer extract kubernetes`):
-`kind` `deployment` (with `image`, pod `labels` and literal `env` values) or
+`kind` `deployment` (with `image`, pod `labels` and the literal `env` values that are http(s) URLs; nothing else from a manifest is kept) or
 `service` (with its `selector`), plus `name`, `namespace` (empty means
 `default`), `file`, `line`. A Deployment's image resolves to the repository
 that builds it: the manifest's `images` map (image name → repo), else a repo
