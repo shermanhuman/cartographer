@@ -107,8 +107,10 @@ entities: they can be searched, shown and walked like functions.
 ### HTTP references and links
 
 `http_refs[]` are requests a function builds to a path: `from` (the calling
-function), `method`, `path` (interpolations as `:p1`, `:p2`, …), `base` (what
-supplies the base URL, when the extractor knows), `file`, `line`.
+function), `method`, `path` (each parameter segment starts with `:`: Elixir
+writes interpolations as `:p1`, `:p2`, …, Go writes the parameter's name,
+`/people/:id`), `base` (what supplies the base URL, when the extractor
+knows), `file`, `line`.
 
 The core links a reference to routes in **other** repositories after all
 documents are merged. A link is never `precise`:
@@ -124,7 +126,7 @@ documents are merged. A link is never `precise`:
 
 Path matching: a route's `:x`, `{x}` and `*x` segments match any one segment,
 `{x...}` the rest, and Go's `{$}` anchors the end; a reference's `:pN`
-segment matches only a route parameter. The query string is ignored. Each
+segment (any `:` segment of a reference) matches only a route parameter. The query string is ignored. Each
 link records its provenance (`config.yaml cold.admin_url -> breakdown-admin`).
 
 ### Config URLs
@@ -137,7 +139,7 @@ the Kubernetes extractor.
 ### Services
 
 `services[]` come from manifests (`cartographer extract kubernetes`):
-`kind` `deployment` (with `image`, pod `labels` and the literal `env` values that are http(s) URLs; nothing else from a manifest is kept) or
+`kind` `deployment` (a Deployment or a StatefulSet, with `image`, pod `labels` and the literal `env` values that are http(s) URLs; nothing else from a manifest is kept) or
 `service` (with its `selector`), plus `name`, `namespace` (empty means
 `default`), `file`, `line`. A Deployment's image resolves to the repository
 that builds it: the manifest's `images` map (image name → repo), else a repo
