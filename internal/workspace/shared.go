@@ -166,13 +166,21 @@ func RunSchema(ctx context.Context, st SchemaStep) (string, error) {
 		}
 		envMap[k] = v
 	}
-	env := append(mapEnv(envMap), st.ExtraEnv...)
+	// The process environment, then ExtraEnv (the tools'), then the repo's
+	// own [schema] env, so the repo's values win over the caller's (a
+	// TEST_DB_PORT or MIX_ENV in an MCP or shell environment). A step with
+	// its own database sees none of libpq's PG* variables from the caller.
+	env := append(childEnv(os.Environ()), st.ExtraEnv...)
+	if st.DB != nil {
+		env = WithoutPG(env)
+	}
+	env = append(env, mapEnv(envMap)...)
 	wrap := st.Wrap
 	if wrap == nil {
 		wrap = func(a []string) []string { return a }
 	}
 	if st.Prepare != "" {
-		stderr, err := runCmd(ctx, st.Root, env, wrap([]string{"sh", "-c", st.Prepare}), nil)
+		stderr, err := runCmdIn(ctx, st.Root, env, wrap([]string{"sh", "-c", st.Prepare}), nil)
 		if err != nil {
 			return "", fmt.Errorf("build: schema prepare: %w", err)
 		}
@@ -180,7 +188,7 @@ func RunSchema(ctx context.Context, st SchemaStep) (string, error) {
 			logf("schema prepare stderr:\n%s", tail(stderr))
 		}
 	}
-	stderr, err := runPlugin(ctx, st.Dir, env, wrap(expand(st.Command, vars)), cached, "")
+	stderr, err := runPluginIn(ctx, st.Dir, env, wrap(expand(st.Command, vars)), cached, "")
 	if err != nil {
 		return "", fmt.Errorf("build: schema: %w", err)
 	}
@@ -188,6 +196,20 @@ func RunSchema(ctx context.Context, st SchemaStep) (string, error) {
 		logf("schema stderr:\n%s", tail(stderr))
 	}
 	return cached, nil
+}
+
+// WithoutPG drops libpq's PG* variables, so nothing run against a
+// throwaway cluster is pointed at another server by the caller's
+// environment.
+func WithoutPG(env []string) []string {
+	var out []string
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PG") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 var pluginRef = regexp.MustCompile(`\{plugins\}[/\\]([^/\\]+)`)

@@ -153,18 +153,8 @@ func (p *ManagedPostgres) Start(ctx context.Context, scratch string) (map[string
 	return nil, nil, lastErr
 }
 
-// withoutPG drops libpq's PG* variables, so nothing run against the
-// cluster is pointed at another server by the caller's environment.
-func withoutPG(env []string) []string {
-	var out []string
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "PG") {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
-}
+// withoutPG drops libpq's PG* variables (workspace.WithoutPG).
+func withoutPG(env []string) []string { return workspace.WithoutPG(env) }
 
 func freePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")

@@ -312,3 +312,41 @@ func TestManagedPostgresCancelled(t *testing.T) {
 		t.Errorf("left after cancel:\n%s", strings.Join(l, "\n"))
 	}
 }
+
+// fakeDB is a SchemaDB that starts nothing and names a fixed port.
+type fakeDB struct{}
+
+func (fakeDB) Start(context.Context, string) (map[string]string, func(), error) {
+	return map[string]string{"pg_host": "127.0.0.1", "pg_port": "55999"}, func() {}, nil
+}
+
+// The repo's [schema] env beats the caller's environment, and libpq's PG*
+// variables don't reach a managed step: an MCP or shell environment that
+// already sets TEST_DB_PORT, MIX_ENV or PGHOST can't point the step at
+// another database.
+func TestSchemaEnvBeatsCallerEnvironment(t *testing.T) {
+	x := newH(t)
+	x.fakeTool(project.Postgres.Spec(), "postgres", "#!/bin/sh\nexit 0\n")
+	t.Setenv("TEST_DB_PORT", "5432")
+	t.Setenv("MIX_ENV", "prod")
+	t.Setenv("PGHOST", "docker.example")
+	seen := filepath.Join(x.dir, "seen")
+	_, sales, _ := x.world()
+	x.push("admin", map[string]string{
+		".cartographer/repo.toml": settings("shop", "", `members = [{repo = "acme/admin"}, {repo = "acme/sales"}, {repo = "acme/infra"}]`, `extract = ["elixir"]`,
+			"[schema]", `postgres = "managed"`, `prepare = "echo $TEST_DB_PORT $MIX_ENV ${PGHOST:-none} > `+seen+`"`,
+			`env = { MIX_ENV = "test", TEST_DB_PORT = "{pg_port}" }`,
+			`capture = ["sh", "-c", "cat {root}/schema.json"]`),
+		"schema.json": `{"facts_version":2,"producer":{"name":"schema","version":"1"},"tables":[]}`,
+	})
+	x.register(sales)
+	r := x.runner()
+	r.SchemaDB = fakeDB{}
+	if _, err := r.Cycle(context.Background(), "shop", true); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(seen)
+	if got := strings.TrimSpace(string(b)); got != "55999 test none" {
+		t.Errorf("prepare saw TEST_DB_PORT, MIX_ENV, PGHOST = %q, want \"55999 test none\"", got)
+	}
+}

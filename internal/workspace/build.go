@@ -529,13 +529,20 @@ func mapEnv(m map[string]string) []string {
 	return env
 }
 
+// runCmd runs argv with the process environment (less credentials) and env
+// after it (later entries win).
 func runCmd(ctx context.Context, dir string, env, argv []string, stdout io.Writer) (string, error) {
+	return runCmdIn(ctx, dir, append(childEnv(os.Environ()), env...), argv, stdout)
+}
+
+// runCmdIn runs argv with exactly the environment env.
+func runCmdIn(ctx context.Context, dir string, env, argv []string, stdout io.Writer) (string, error) {
 	if len(argv) == 0 {
 		return "", errors.New("empty command")
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(childEnv(os.Environ()), env...)
+	cmd.Env = env
 	// Cancelling ends the command's whole process group (ownGroup); after
 	// WaitDelay the command is killed and its output pipes closed.
 	cmd.WaitDelay = 5 * time.Second
@@ -568,8 +575,13 @@ func tail(s string) string {
 // runPlugin runs an extractor, validates its facts output and writes it. It
 // returns the extractor's stderr (warnings) for the caller to log.
 func runPlugin(ctx context.Context, dir string, env, argv []string, out, repo string) (string, error) {
+	return runPluginIn(ctx, dir, append(childEnv(os.Environ()), env...), argv, out, repo)
+}
+
+// runPluginIn is runPlugin with exactly the environment env.
+func runPluginIn(ctx context.Context, dir string, env, argv []string, out, repo string) (string, error) {
 	var buf bytes.Buffer
-	stderr, err := runCmd(ctx, dir, env, argv, &buf)
+	stderr, err := runCmdIn(ctx, dir, env, argv, &buf)
 	if err != nil {
 		return "", err
 	}
