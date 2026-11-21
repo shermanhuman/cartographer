@@ -46,6 +46,17 @@ var languageExts = map[string][]string{
 	"python":     {".py"},
 }
 
+// coverageFunctionsSQL lists a snapshot's functions with whether any
+// resolved edge starts or ends at each. The linked ids are gathered once: a
+// correlated EXISTS over the edges view rebuilt the view per function
+// (about 26 s on an 11k-function map).
+const coverageFunctionsSQL = `
+  WITH linked(id) AS (
+    SELECT from_id FROM edges WHERE snapshot_id = ?1
+    UNION
+    SELECT to_id FROM edges WHERE snapshot_id = ?1)
+  SELECT f.repo, f.file, f.id IN linked FROM functions f WHERE f.snapshot_id = ?1`
+
 // inventoryOnly languages have an extractor that lists files and functions
 // but resolves no calls.
 var inventoryOnly = map[string]bool{"javascript": true}
@@ -132,9 +143,7 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 
 	// Functions, and those with a resolved edge either way, by the language
 	// of their file.
-	rows, err = db.QueryContext(ctx, `
-	  SELECT f.repo, f.file, EXISTS(SELECT 1 FROM edges e WHERE e.snapshot_id = f.snapshot_id AND (e.from_id = f.id OR e.to_id = f.id))
-	    FROM functions f WHERE f.snapshot_id = ?`, q.Snapshot)
+	rows, err = db.QueryContext(ctx, coverageFunctionsSQL, q.Snapshot)
 	if err != nil {
 		return nil, err
 	}
