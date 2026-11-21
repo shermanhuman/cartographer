@@ -73,7 +73,14 @@ func moduleLabel(name, file string) string {
 	if name == "" {
 		return path.Base(file)
 	}
+	root := strings.HasPrefix(name, "./") // the package or crate at the repository root
+	if root {
+		name = name[2:]
+	}
 	parts := strings.Split(name, ".")
+	if root {
+		parts[0] = "./" + parts[0]
+	}
 	return parts[len(parts)-1]
 }
 

@@ -727,3 +727,19 @@ func TestPathAndGraphErrorCodes(t *testing.T) {
 		t.Errorf("graph over a broken store: %d %v", errCode(err), err)
 	}
 }
+
+// A root package or crate's module (./, ./[test], ./::a) keeps its ./, not
+// "/" (F3-P3).
+func TestModuleLabel(t *testing.T) {
+	for name, want := range map[string]string{
+		"./": "./", "./[test]": "./[test]", "./::a": "./::a", "./.Shape": "Shape", "./::a.A[impl Service]": "A[impl Service]",
+		"Shop.Orders": "Orders", "internal/app": "internal/app", "app[test]": "app[test]", "crates/shapes::geo.Circle": "Circle",
+	} {
+		if got := moduleLabel(name, "x.go"); got != want {
+			t.Errorf("moduleLabel(%q) = %q, want %q", name, got, want)
+		}
+	}
+	if got := moduleLabel("", "lib/a.ex"); got != "a.ex" {
+		t.Errorf("unnamed module: %q", got)
+	}
+}
