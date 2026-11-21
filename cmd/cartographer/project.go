@@ -489,7 +489,7 @@ without another prompt. Nothing is written into the checkouts but refs/cartograp
 				return errors.New("not registered")
 			}
 		}
-		if err := project.Save(sd, reg); err != nil {
+		if err := project.Register(sd, reg); err != nil {
 			return err
 		}
 		if rebuildEnabled(c, nil) {

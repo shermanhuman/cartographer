@@ -140,6 +140,23 @@ func Save(stateDir string, r *Registration) error {
 	return workspace.WriteAtomic(regPath(stateDir, r.Name), append(b, '\n'))
 }
 
+// Register saves reg, replacing any registration of its name, under the
+// project's lock: a running cycle saves the registration it loaded (with
+// the member list it read), which would undo the replacement.
+func Register(stateDir string, reg *Registration) error {
+	if !nameRe.MatchString(reg.Name) {
+		return fmt.Errorf("project name %q must match %s", reg.Name, nameRe)
+	}
+	unlock, err := Lock(stateDir, reg.Name).Lock(reg.Name)
+	if errors.Is(err, rebuild.ErrRunning) {
+		return fmt.Errorf("a refresh of project %s is running (log: %s); register it again when that is done", reg.Name, LogPath(stateDir, reg.Name))
+	} else if err != nil {
+		return err
+	}
+	defer unlock()
+	return Save(stateDir, reg)
+}
+
 // Remove deletes a registration and the project's state directory, and
 // relabels the project's main maps in s (its store; nil skips this)
 // published, so a legacy workspace of the same name is chosen and rebuilt by
