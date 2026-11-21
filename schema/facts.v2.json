@@ -385,7 +385,8 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^/"
           },
           "handler": {
             "type": "string"
@@ -420,7 +421,8 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^/"
           },
           "base": {
             "type": "string"
@@ -552,6 +554,34 @@
           "not_extracted": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "facts_version": {
+        "const": 1
+      }
+    },
+    "required": [
+      "facts_version"
+    ]
+  },
+  "then": {
+    "properties": {
+      "routes": false,
+      "http_refs": false,
+      "config_urls": false,
+      "services": false,
+      "stats": false,
+      "functions": {
+        "items": {
+          "not": {
+            "required": [
+              "test"
+            ]
           }
         }
       }

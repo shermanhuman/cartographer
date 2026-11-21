@@ -235,6 +235,10 @@ func (e *ValidationError) Error() string {
 	return "facts: invalid document:\n  " + strings.Join(e.Problems, "\n  ")
 }
 
+// Version2Sections are the document sections a version 1 document may
+// not carry (with functions[].test).
+var Version2Sections = []string{"routes", "http_refs", "config_urls", "services", "stats"}
+
 // Validate checks required fields, id uniqueness and internal references.
 func (d *Doc) Validate() error {
 	var p []string
@@ -244,8 +248,9 @@ func (d *Doc) Validate() error {
 		add("$.facts_version: want %d to %d, got %d", MinVersion, Version, d.FactsVersion)
 	}
 	if d.FactsVersion == 1 {
-		for name, n := range map[string]int{"routes": len(d.Routes), "http_refs": len(d.HTTPRefs), "config_urls": len(d.ConfigURLs), "services": len(d.Services), "stats": len(d.Stats)} {
-			if n > 0 {
+		counts := []int{len(d.Routes), len(d.HTTPRefs), len(d.ConfigURLs), len(d.Services), len(d.Stats)}
+		for i, name := range Version2Sections { // in order: errors read the same every time
+			if counts[i] > 0 {
 				add("$.%s: needs facts_version 2", name)
 			}
 		}
