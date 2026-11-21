@@ -1150,9 +1150,11 @@ func pathView(ctx context.Context, q *query.Q, from, to string) (any, error) {
 	if from == "" || to == "" {
 		return nil, errNotFound{"path needs from and to"}
 	}
+	// A reference that matches nothing (or several things) is a 404
+	// through errCode; anything else, a database error, is a 500.
 	c, err := q.FindPath(ctx, from, to)
 	if err != nil {
-		return nil, errNotFound{err.Error()}
+		return nil, err
 	}
 	steps := []obj{}
 	for _, st := range c.Steps {
@@ -1255,7 +1257,7 @@ func graph(ctx context.Context, q *query.Q, ref string, depth int) (any, error) 
 	}
 	start, note, err := q.FunctionsOf(ctx, e)
 	if err != nil {
-		return nil, errNotFound{err.Error()}
+		return nil, err // a database error: 500
 	}
 	const maxNodes = 60
 	level := map[string]int{}

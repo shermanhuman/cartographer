@@ -685,3 +685,36 @@ func TestOverviewShowsCrossRepoHTTPEdge(t *testing.T) {
 		t.Errorf("admin repository: %v", s)
 	}
 }
+
+// A path or graph request with a reference that matches nothing is a 404;
+// a database failure underneath is a 500, not "not found".
+func TestPathAndGraphErrorCodes(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if _, err := s.Import(ctx, fixture); err != nil {
+		t.Fatal(err)
+	}
+	q, err := query.New(ctx, s, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pathView(ctx, q, "NoSuchThing.at_all/9", "Shop.Billing.charge/2"); errCode(err) != http.StatusNotFound {
+		t.Errorf("path to nothing: %d %v", errCode(err), err)
+	}
+	if _, err := s.DB.Exec(`DROP TABLE calls`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pathView(ctx, q, "Shop.Billing.charge/2", "Shop.Orders.create/2"); err == nil || errCode(err) != http.StatusInternalServerError {
+		t.Errorf("path over a broken store: %d %v", errCode(err), err)
+	}
+	if _, err := s.DB.Exec(`DROP TABLE functions`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := graph(ctx, q, "Shop.Billing", 1); err == nil || errCode(err) != http.StatusInternalServerError {
+		t.Errorf("graph over a broken store: %d %v", errCode(err), err)
+	}
+}
