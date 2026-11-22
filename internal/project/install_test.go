@@ -3,6 +3,7 @@ package project_test
 import (
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +13,13 @@ import (
 
 func (x *h) installs(spec string) int {
 	b, _ := os.ReadFile(x.miseLog)
-	return strings.Count(string(b), "install "+spec+"\n")
+	n := 0
+	for _, line := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(line); len(f) > 1 && f[0] == "install" && slices.Contains(f[1:], spec) {
+			n++
+		}
+	}
+	return n
 }
 
 // A tool whose install fails fails its inputs, and those inputs are held

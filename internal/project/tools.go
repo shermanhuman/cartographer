@@ -244,10 +244,18 @@ func miseFree(env []string) []string {
 	return out
 }
 
+// installDeps names the tools whose install runs another tool: Elixir's
+// install checks itself with erl.
+var installDeps = map[string][]string{"elixir": {"erlang"}}
+
 // ensure installs t when mise doesn't have it and returns its bin paths.
-// before holds the bin paths of tools already ensured in the same set, put
-// ahead of PATH for the install.
-func (m *Mise) ensure(ctx context.Context, t Tool, before ...string) ([]string, error) {
+// prior holds the tools already ensured in the same set, and before their
+// bin paths. The install names t's installDeps from prior in the same
+// `mise install`, because newer mise (2026.11) leaves its own install dirs
+// off the PATH an install's check runs with, so only a dependency mise
+// installs alongside is seen; before also goes ahead of PATH, which older
+// mise honours.
+func (m *Mise) ensure(ctx context.Context, t Tool, prior []Tool, before ...string) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if p, ok := m.paths[t.Spec()]; ok {
@@ -262,7 +270,13 @@ func (m *Mise) ensure(ctx context.Context, t Tool, before ...string) ([]string, 
 			timeout = DefaultInstallTimeout
 		}
 		ictx, cancel := context.WithTimeout(ctx, timeout)
-		_, err := m.miseWith(ictx, before, "install", t.Spec())
+		args := []string{"install"}
+		for _, p := range prior {
+			if slices.Contains(installDeps[t.Name], p.Name) {
+				args = append(args, p.Spec())
+			}
+		}
+		_, err := m.miseWith(ictx, before, append(args, t.Spec())...)
 		cancel()
 		if err != nil {
 			if errors.Is(ictx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
@@ -303,11 +317,13 @@ func (m *Mise) ensure(ctx context.Context, t Tool, before ...string) ([]string, 
 func (m *Mise) Env(ctx context.Context, tools []Tool) ([]string, error) {
 	var bins []string
 	owned := map[string][]string{}
+	var prior []Tool
 	for _, t := range installOrder(tools) {
-		p, err := m.ensure(ctx, t, bins...)
+		p, err := m.ensure(ctx, t, prior, bins...)
 		if err != nil {
 			return nil, err
 		}
+		prior = append(prior, t)
 		bins = append(bins, p...)
 		owned[t.Spec()] = p
 	}
@@ -360,11 +376,13 @@ func (m *Mise) Env(ctx context.Context, tools []Tool) ([]string, error) {
 // install seeing the ones before it on PATH).
 func (m *Mise) Install(ctx context.Context, tools []Tool) error {
 	var bins []string
+	var prior []Tool
 	for _, t := range installOrder(tools) {
-		p, err := m.ensure(ctx, t, bins...)
+		p, err := m.ensure(ctx, t, prior, bins...)
 		if err != nil {
 			return err
 		}
+		prior = append(prior, t)
 		bins = append(bins, p...)
 	}
 	return nil
@@ -405,7 +423,7 @@ func (m *Mise) ResolveInstalled(ctx context.Context, tools []Tool) ([]Tool, erro
 // BinPaths installs t when mise doesn't have it and returns its bin paths,
 // once each of bins resolves inside them.
 func (m *Mise) BinPaths(ctx context.Context, t Tool, bins ...string) ([]string, error) {
-	paths, err := m.ensure(ctx, t)
+	paths, err := m.ensure(ctx, t, nil)
 	if err != nil {
 		return nil, err
 	}

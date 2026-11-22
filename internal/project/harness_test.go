@@ -116,7 +116,7 @@ resolve() { s=$(san "$1"); if [ -d "$T/$s" ]; then echo "$s"; return; fi; m=$(ls
 cmd=$1; shift
 case $cmd in
 where) s=$(resolve "$1"); [ -n "$s" ] && echo "$T/$s" && exit 0; echo "$1 not installed" >&2; exit 1 ;;
-install) s=$(san "$1"); [ -d "$T/available/$s" ] && mv "$T/available/$s" "$T/$s" && exit 0; echo "no such version $1" >&2; exit 1 ;;
+install) for t in "$@"; do s=$(san "$t"); [ -d "$T/$s" ] && continue; [ -d "$T/available/$s" ] && mv "$T/available/$s" "$T/$s" && continue; echo "no such version $t" >&2; exit 1; done ;;
 bin-paths) s=$(resolve "$1"); echo "$T/$s/bin" ;;
 latest) s=$(resolve "$2"); [ -n "$s" ] && echo "${s#$(san "${2%@*}")_}"; exit 0 ;;
 env) echo '{"FAKE_MISE_ENV":"1"}' ;;
