@@ -46,8 +46,10 @@ lists with `limit`/`offset`.
   cross-repo call). Table mentions are `[candidate]` text matches, not proven
   reads/writes.
 - Unresolved, dynamic and external calls are not traced: an empty caller
-  list is not proof that nothing calls X through `apply`, behaviours or HTTP.
-  Say so when it matters. Details: `references/precision.md`.
+  list is not proof that nothing calls X through `apply`, behaviours, or an
+  HTTP request whose path the extractors couldn't read. HTTP calls between
+  services they could read are hops to routes, never `precise`. Say so when
+  it matters. Details: `references/precision.md`.
 
 ## Delegating
 
