@@ -192,12 +192,6 @@ type Mise struct {
 const DefaultInstallTimeout = 30 * time.Minute
 
 func (m *Mise) mise(ctx context.Context, args ...string) (string, error) {
-	return m.miseWith(ctx, nil, args...)
-}
-
-// miseWith runs mise with pathFirst ahead of PATH: an install whose own
-// check runs another tool (Elixir's runs erl) finds that tool there.
-func (m *Mise) miseWith(ctx context.Context, pathFirst []string, args ...string) (string, error) {
 	bin := m.Bin
 	if bin == "" {
 		var err error
@@ -209,9 +203,6 @@ func (m *Mise) miseWith(ctx context.Context, pathFirst []string, args ...string)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = m.Dir
 	cmd.Env = append(miseFree(os.Environ()), "MISE_NO_CONFIG=1", "MISE_YES=1")
-	if len(pathFirst) > 0 {
-		cmd.Env = append(cmd.Env, "PATH="+strings.Join(pathFirst, string(os.PathListSeparator))+string(os.PathListSeparator)+os.Getenv("PATH"))
-	}
 	// Its own process group: a cancelled install ends the compilers and
 	// downloads it started too, and WaitDelay closes the pipes they hold.
 	cmd.WaitDelay = 5 * time.Second
@@ -245,17 +236,17 @@ func miseFree(env []string) []string {
 }
 
 // installDeps names the tools whose install runs another tool: Elixir's
-// install checks itself with erl.
+// install checks itself with erl. mise keeps its own install dirs off the
+// PATH an install's check runs with, so putting Erlang's bin dir ahead of
+// PATH doesn't help; mise sees a dependency only when it is named in the
+// same `mise install`.
 var installDeps = map[string][]string{"elixir": {"erlang"}}
 
 // ensure installs t when mise doesn't have it and returns its bin paths.
-// prior holds the tools already ensured in the same set, and before their
-// bin paths. The install names t's installDeps from prior in the same
-// `mise install`, because newer mise (2026.11) leaves its own install dirs
-// off the PATH an install's check runs with, so only a dependency mise
-// installs alongside is seen; before also goes ahead of PATH, which older
-// mise honours.
-func (m *Mise) ensure(ctx context.Context, t Tool, prior []Tool, before ...string) ([]string, error) {
+// prior holds the tools already ensured in the same set, at the versions
+// mise has installed; the install names t's installDeps from prior, so an
+// exact installed version is named and mise installs nothing new for it.
+func (m *Mise) ensure(ctx context.Context, t Tool, prior []Tool) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if p, ok := m.paths[t.Spec()]; ok {
@@ -276,7 +267,7 @@ func (m *Mise) ensure(ctx context.Context, t Tool, prior []Tool, before ...strin
 				args = append(args, p.Spec())
 			}
 		}
-		_, err := m.miseWith(ictx, before, append(args, t.Spec())...)
+		_, err := m.mise(ictx, append(args, t.Spec())...)
 		cancel()
 		if err != nil {
 			if errors.Is(ictx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
@@ -319,11 +310,13 @@ func (m *Mise) Env(ctx context.Context, tools []Tool) ([]string, error) {
 	owned := map[string][]string{}
 	var prior []Tool
 	for _, t := range installOrder(tools) {
-		p, err := m.ensure(ctx, t, prior, bins...)
+		p, err := m.ensure(ctx, t, prior)
 		if err != nil {
 			return nil, err
 		}
-		prior = append(prior, t)
+		if prior, err = m.addPrior(ctx, prior, t); err != nil {
+			return nil, err
+		}
 		bins = append(bins, p...)
 		owned[t.Spec()] = p
 	}
@@ -372,20 +365,46 @@ func (m *Mise) Env(ctx context.Context, tools []Tool) ([]string, error) {
 	return env, nil
 }
 
-// Install installs each tool mise doesn't have (in installOrder, each
-// install seeing the ones before it on PATH).
+// Install installs each tool mise doesn't have, in installOrder.
 func (m *Mise) Install(ctx context.Context, tools []Tool) error {
-	var bins []string
 	var prior []Tool
 	for _, t := range installOrder(tools) {
-		p, err := m.ensure(ctx, t, prior, bins...)
-		if err != nil {
+		if _, err := m.ensure(ctx, t, prior); err != nil {
 			return err
 		}
-		prior = append(prior, t)
-		bins = append(bins, p...)
+		var err error
+		if prior, err = m.addPrior(ctx, prior, t); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// addPrior appends t, just ensured, to prior when another tool's install
+// needs it, at the version mise has installed: a prefix pin (erlang 28)
+// named in a later `mise install` would otherwise install a newer 28.x.
+func (m *Mise) addPrior(ctx context.Context, prior []Tool, t Tool) ([]Tool, error) {
+	if !isInstallDep(t.Name) {
+		return prior, nil
+	}
+	out, err := m.mise(ctx, "latest", "--installed", t.Spec())
+	if err != nil {
+		return nil, err
+	}
+	v := strings.TrimSpace(out)
+	if v == "" || strings.ContainsAny(v, " \n") {
+		return nil, fmt.Errorf("%s: mise names no installed version (%q)", t.Spec(), v)
+	}
+	return append(prior, Tool{Name: t.Name, Version: v}), nil
+}
+
+func isInstallDep(name string) bool {
+	for _, deps := range installDeps {
+		if slices.Contains(deps, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveInstalled returns the tools at the concrete versions mise runs
@@ -511,13 +530,12 @@ func lookIn(env []string, bin string) (string, error) {
 	return "", fmt.Errorf("%s not found on the tools' PATH", bin)
 }
 
-// installOrder puts the tools another tool's install needs first (Erlang
-// before Elixir), keeping the rest in their order.
+// installOrder puts the tools another tool's install needs (installDeps)
+// first, keeping the rest in their order.
 func installOrder(tools []Tool) []Tool {
-	first := map[string]bool{"erlang": true}
 	var a, b []Tool
 	for _, t := range tools {
-		if first[t.Name] {
+		if isInstallDep(t.Name) {
 			a = append(a, t)
 		} else {
 			b = append(b, t)
