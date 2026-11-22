@@ -52,7 +52,7 @@ annotations are committed, in a `.cartographer/` folder in each member.
    `~/.config/cartographer/config.toml`), prints the members and what
    registering trusts (rebuilds run the members' schema step, Rust build
    scripts and declared commands from their fetched main), and asks. Show
-   the user that list, and run it again with `--yes` only after they say
+   the user that list and trust text, and run it again with `--yes` only after they say
    yes. Missing checkouts get their `git clone` command; nothing is cloned.
 6. **Fresh by itself:** on use, at most every 15 minutes, a background
    rebuild fetches each member into `refs/cartographer/<branch>` (branches,

@@ -5,8 +5,9 @@
 Only one member may declare `[schema]`: the repo whose migrations define
 the database. With `postgres = "managed"`, cartographer starts a throwaway
 PostgreSQL (pinned by the release) on a free local port, runs `prepare`
-against it, runs `capture` to read the catalog, and removes it. Both reruns
-are skipped while the `cache_key` paths are unchanged.
+against it, runs `capture` to read the catalog, and removes it. The result
+is cached: the step runs again only when a `cache_key` path, the commands,
+`env` or the tool versions change.
 
 ```toml
 [schema]
@@ -35,11 +36,11 @@ annotation reads *needs review*.
     {
       "kind": "journey",
       "id": "cold-check",
-      "title": "A cold campaign checks admin before sending",
-      "summary": "Sales asks admin whether a contact may be cold-emailed.",
+      "title": "A cold campaign checks the app before sending",
+      "summary": "The worker asks the app whether a contact may be cold-emailed.",
       "steps": [
-        {"id": "enroll", "title": "Enroll contacts", "cites": ["breakdown-sales:internal/dialer.Server.campaignEnrollSave/2"]},
-        {"id": "check", "title": "Admin decides", "cites": ["breakdown-admin:route:BreakdownAdminWeb.Router:POST /api/v1/sales/cold/check"]}
+        {"id": "enroll", "title": "Enroll contacts", "cites": ["my-worker:internal/campaigns.Server.enroll/2"]},
+        {"id": "check", "title": "Admin decides", "cites": ["my-app:route:MyAppWeb.Router:POST /api/v1/cold/check"]}
       ]
     }
   ]
