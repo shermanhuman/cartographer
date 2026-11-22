@@ -13,11 +13,14 @@ entities: `map_entity` shows a route's handler and its HTTP callers, and
 Not traced: dynamic dispatch in Elixir (`apply/3` with variables,
 `var.fun()`), behaviour callbacks invoked by a framework, macro-generated
 functions, calls into dependencies (counted as external), requests whose
-path is built across functions or piped, TypeScript and templates.
+path is built across functions or piped, JavaScript calls (functions are
+listed, calls aren't resolved), TypeScript and templates.
 `map_status` shows coverage per repository and language (files, call sites
 resolved in the repo, functions linked), so you can tell how much is
 missing.
 
-The map is each member's default branch as last fetched, at the revisions
-in its header. Your branch, commits ahead and uncommitted edits show only as
-⚠ marks on changed files.
+For a registered project the map is each member's default branch as last
+fetched, at the revisions in its header; your branch, commits ahead and
+uncommitted edits show only as ⚠ marks on changed files. A `--head` map
+(header: "your checkouts") is built from working copies, and a 0.1
+workspace map from each checkout's HEAD.
