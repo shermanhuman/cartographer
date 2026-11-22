@@ -22,7 +22,7 @@ import (
 // go test ./internal/scip -update re-runs the indexers on the fixtures and
 // rewrites the committed indexes and goldens. The indexers must be on PATH:
 //
-//	mise exec github:sourcegraph/scip-go@0.2.9 aqua:rust-lang/rust-analyzer@2026-11-16 rust@1.99.1 -- go test ./internal/scip -update
+//	mise exec github:scip-code/scip-go@0.2.9 aqua:rust-lang/rust-analyzer@2026-11-16 rust@1.99.1 -- go test ./internal/scip -update
 var update = flag.Bool("update", false, "re-index the fixtures and rewrite the goldens")
 
 type fixture struct {

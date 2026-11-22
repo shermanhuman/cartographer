@@ -24,7 +24,7 @@ import (
 
 // Indexer versions pinned by this release.
 var (
-	ScipGo       = Tool{Name: "github:sourcegraph/scip-go", Version: "0.2.9"}
+	ScipGo       = Tool{Name: "github:scip-code/scip-go", Version: "0.2.9"}
 	RustAnalyzer = Tool{Name: "aqua:rust-lang/rust-analyzer", Version: "2026-11-16"}
 	// Node runs the bundled JavaScript inventory plugin, which runs none of
 	// the repo's code, so its version is cartographer's, not the repo's
