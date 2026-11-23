@@ -587,7 +587,7 @@ defmodule Cartographer.ElixirFacts do
           (mods = Map.get(envs, stem <> ".ex", [])) != [] ->
             {hd(Enum.sort_by(mods, & &1.module)), "render"}
 
-          (e = embed_owner(acc.embeds, stem)) != nil ->
+          (e = embed_owner(acc.embeds, String.replace_suffix(rel, ".heex", ""))) != nil ->
             {Map.get(by_module, e.module), base <> e.suffix}
 
           true ->
@@ -653,9 +653,10 @@ defmodule Cartographer.ElixirFacts do
 
   defp embed_owner(embeds, stem) do
     Enum.find_value(embeds, fn e ->
-      # Matched against the path without its extensions, as the template's
-      # stem is: "page_html/*.html" is "page_html/*".
-      pattern = Path.join(Path.dirname(e.file), String.replace(e.pattern, ~r/(\.[a-z]+)+$/, ""))
+      # Matched against the path without .heex ("mail/welcome.html"), as
+      # Phoenix does: "mail/*.html" takes only html templates, and a pattern
+      # with no format ("mail/*") takes every format.
+      pattern = Path.join(Path.dirname(e.file), e.pattern)
 
       regex =
         pattern

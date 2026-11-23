@@ -163,10 +163,14 @@ defmodule Cartographer.HEExTest do
     defmodule ShopWeb.MailHTML do
       use ShopWeb, :html
       embed_templates "mail_html/*.html", suffix: "_html"
+      embed_templates "mail_html/*.text", suffix: "_text"
     end
     ''',
     "lib/shop_web/mail_html/welcome.html.heex" => ~S'''
     <.icon />
+    ''',
+    "lib/shop_web/mail_html/welcome.text.heex" => ~S'''
+    Welcome
     ''',
     "lib/shop_web/live/broken2.ex" => ~S'''
     defmodule ShopWeb.Broken2 do
@@ -366,6 +370,9 @@ defmodule Cartographer.HEExTest do
              &(short(&1.from) == "ShopWeb.PageLive.render/1" and &1.target.name == "show_modal" and
                  &1.kind == "local")
            )
+
+    assert Enum.find(doc.functions, &(&1.id == "x:ShopWeb.MailHTML.welcome_text/1")).file ==
+             "lib/shop_web/mail_html/welcome.text.heex"
 
     assert Enum.find(doc.functions, &(&1.id == "x:ShopWeb.MailHTML.welcome_html/1")).file ==
              "lib/shop_web/mail_html/welcome.html.heex"

@@ -36,7 +36,7 @@ Exit status 2 means bad arguments, and 1 any other failure (the compiler couldn'
 
 **Skipped files.**
 - A file with a line over 10,000 characters is treated as generated (a vendored SDK) and skipped, with a `minified_skipped` note.
-- A minified, too-deep or unparsable file doesn't exist for the compiler either, so a call into it is `external`.
+- A minified, too-deep or unparsable file doesn't exist for the compiler either, so a call into it is counted `not_extracted` (a package that isn't installed is `external`).
 - A file whose expressions nest more than 250 deep is inventoried without resolution, with a `too_deep` note.
 
 ## Output
@@ -77,10 +77,11 @@ dropped. The method comes from the init object, `GET` when there is none.
   repository.
 - **Absolute URL:** `base` names its source, the constant it came from
   (`ADMIN = process.env.ADMIN || "http://…"`) or the origin.
-- **A parameter inside a readable path** (`/users/${id}`, `"/search?q=" + term`)
-  is an interpolation: the function makes the request itself.
-- **Wrapper:** a function whose `fetch` path can't be read without its
-  parameter (`fetch(path)`, `BASE + path`), like `api(method, path)`. Each
+- **A parameter that fills a whole segment after a literal `/`**
+  (`/users/${id}`) **or sits in the query** (`"/search?q=" + term`) is an
+  interpolation: the function makes the request itself.
+- **Wrapper:** a function whose `fetch` path is carried by its parameter
+  (`fetch(path)`, `"/api" + path`, `BASE + path`), like `api(method, path)`. Each
   call to it is a request from the caller, one level deep, with the method
   too when it is a parameter. A wrapper no call reaches counts as
   `not_extracted`.

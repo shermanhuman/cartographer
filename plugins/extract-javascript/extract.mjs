@@ -876,6 +876,29 @@ function buildRef(parts, method, base0) {
   return {method, path: text, ...(origin ? {origin} : {}), ...(base ? {base} : {})};
 }
 
+// paramsInPlace: every parameter in the URL fills a whole path segment
+// after a literal "/" (`/users/${id}`) or sits in the query or fragment.
+// Otherwise ("/api" + path, BASE + path) the parameter carries the path and
+// the function is a wrapper.
+function paramsInPlace(parts) {
+  let before = '';
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.lit !== undefined) { before += p.lit; continue; }
+    if (p.param !== undefined) {
+      const inQuery = /[?#]/.test(before);
+      // What follows, past empty template text: the end, or a separator.
+      let j = i + 1;
+      while (parts[j]?.lit === '') j++;
+      const after = parts[j];
+      const segment = before.endsWith('/') && (after === undefined || (after.lit !== undefined && /^[/?#]/.test(after.lit)));
+      if (!inQuery && !segment) return false;
+    }
+    before += '\u0000';
+  }
+  return true;
+}
+
 // fetchRef records one fetch(url, init): a ref, or, when the URL comes from
 // the enclosing function's parameter, that function as a wrapper.
 function fetchRef({ts, K, N, checker, node, encl, from, file, line, http}) {
@@ -901,7 +924,9 @@ function fetchRef({ts, K, N, checker, node, encl, from, file, line, http}) {
   // just an interpolation: the function makes the request itself. Only a
   // path that can't be read without the parameter (fetch(path),
   // BASE + path) makes the function a wrapper whose callers make it.
-  const own = buildRef(parts.map(p => (p.param !== undefined ? {dyn: p.name} : p)), typeof method === 'object' ? '' : method);
+  const own = paramsInPlace(parts)
+    ? buildRef(parts.map(p => (p.param !== undefined ? {dyn: p.name} : p)), typeof method === 'object' ? '' : method)
+    : null;
   if (!own && parts.some(p => p.param !== undefined) && encl) {
     const base = parts.find(p => p.base)?.base;
     if (!http.wrappers.has(from)) http.wrappers.set(from, []);
@@ -940,8 +965,9 @@ function resolve({ts, K, N, node, callee, jsx, checker, relOf, extracted, repo})
     else sym = target;
   }
   if (!decl || decl.kind === K.JSDocSignature || !decl.parent) {
-    // An import that doesn't resolve names a package that isn't installed.
-    if (aliasFailed) return {outcome: 'external'};
+    // An import that doesn't resolve names a package that isn't installed
+    // (external), or an in-repo file the plugin doesn't read (not extracted).
+    if (aliasFailed) return {outcome: importedFromPackage(ts, K, callee, checker) ? 'external' : 'not_extracted'};
     decl = sym?.valueDeclaration ?? sym?.declarations?.[0];
   }
   if (!decl) {
@@ -984,7 +1010,9 @@ function stableBinding(ts, K, checker, id) {
   if (sym.flags & ts.SymbolFlags.Alias) return true;
   const d = sym.valueDeclaration ?? sym.declarations?.[0];
   if (!d) return false;
-  if (d.kind === K.FunctionDeclaration || d.kind === K.ClassDeclaration) return true;
+  // A function or class declaration, or a named function or class
+  // expression calling itself by its own name.
+  if (d.kind === K.FunctionDeclaration || d.kind === K.ClassDeclaration || d.kind === K.FunctionExpression || d.kind === K.ClassExpression) return true;
   if (d.kind === K.VariableDeclaration) return (ts.getCombinedNodeFlags(d) & ts.NodeFlags.Const) !== 0;
   return false;
 }

@@ -419,7 +419,8 @@ test('a call into an unread file (syntax error, minified, too deep) is external,
     assert.deepEqual(edges(doc), []);
     const ids = new Set(doc.functions.map(f => f.id));
     assert.ok(doc.calls.every(c => !c.to || ids.has(c.to)));
-    assert.equal(doc.stats.find(s => s.language === 'javascript').external >= 3, true);
+    // In-repo files the plugin doesn't read: not extracted, not external.
+    assert.equal(doc.stats.find(s => s.language === 'javascript').not_extracted, 3);
   } finally { fs.rmSync(root, {recursive: true}); }
 });
 
@@ -431,7 +432,10 @@ export function search(term) { return fetch("/api/search?q=" + term, {method: "P
 export function unused(path) { return fetch(path); }
 const BASE = "https://api.example.com";
 export function remote(path) { return fetch(BASE + path); }
-export function go() { remote("/v1/items"); }
+export function go() { remote("/v1/items"); prefixed("/orders"); versioned("/orders"); }
+function prefixed(path) { return fetch("/api" + path); }
+const API = "https://api.example.com/v1";
+function versioned(path) { return fetch(API + path); }
 `,
   });
   try {
@@ -439,10 +443,12 @@ export function go() { remote("/v1/items"); }
     assert.deepEqual(doc.http_refs.map(r => [short(r.from), r.method, r.path, r.origin ?? r.base]), [
       ['src/api.js:loadUser/1', 'GET', '/api/users/:id', 'same'],
       ['src/api.js:search/1', 'POST', '/api/search', 'same'],
+      ['src/api.js:go/0', 'GET', '/api/orders', 'same'],
       ['src/api.js:go/0', 'GET', '/v1/items', 'BASE'],
+      ['src/api.js:go/0', 'GET', '/v1/orders', 'API'],
     ]);
     const http = doc.stats.find(s => s.language === 'http');
-    assert.deepEqual([http.call_sites, http.refs, http.not_extracted], [4, 3, 1]);
+    assert.deepEqual([http.call_sites, http.refs, http.not_extracted], [6, 5, 1]);
   } finally { fs.rmSync(root, {recursive: true}); }
 });
 
