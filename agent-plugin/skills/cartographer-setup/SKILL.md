@@ -25,6 +25,10 @@ annotations are committed, in a `.cartographer/` folder in each member.
    docs = ["README.md"]          # an audited list; false for none
    ```
 
+   A member entry may add `branch = "release"` to map that branch instead
+   of the remote's default; wherever this skill says "default branch", it
+   means that branch.
+
    Every other member names `project`, `anchor = "my-org/my-app"`,
    `extract` (`go`, `rust`, `elixir`, `javascript`, `kubernetes`) and
    `docs`. Optional keys: `source_roots`, `images` (container images built
@@ -53,8 +57,9 @@ annotations are committed, in a `.cartographer/` folder in each member.
    `~/.config/cartographer/config.toml`), prints the members and what
    registering trusts (rebuilds run the members' schema step, Rust build
    scripts and declared commands from their fetched main), and asks. Show
-   the user that list and trust text, and run it again with `--yes` only after they say
-   yes. Missing checkouts get their `git clone` command; nothing is cloned.
+   the user that list and trust text, and run it again with `--yes` only
+   after they say yes. Missing checkouts get their `git clone` command;
+   nothing is cloned.
 6. **Fresh by itself:** on use, at most every 15 minutes, a background
    rebuild fetches each member into `refs/cartographer/<branch>` (branches,
    files, `origin/*` and tags untouched) and rebuilds when anything moved.

@@ -65,8 +65,8 @@ map_* tools first; read only the lines they cite."
 
 ## Sharing
 
-`map_embed` returns ready-to-post Markdown (summary, Mermaid diagram of at
-most 40 nodes, source links pinned to the snapshot). Post it with
+`map_embed` returns ready-to-post Markdown (summary, Mermaid diagram of 40
+nodes by default, `max` up to 200, source links pinned to the snapshot). Post it with
 `gh issue comment N --body-file FILE` (or `gh pr comment`). PDFs and SVGs:
 `references/sharing.md`.
 
