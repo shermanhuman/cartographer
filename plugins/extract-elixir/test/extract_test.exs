@@ -66,7 +66,7 @@ defmodule Cartographer.ElixirExtractTest do
 
       assert doc.producer == %{
                name: "extract-elixir",
-               version: "0.2.0",
+               version: "0.3.0",
                call_precision: "precise"
              }
 

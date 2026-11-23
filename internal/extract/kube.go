@@ -20,7 +20,7 @@ import (
 )
 
 // Producer version of the built-in extractors.
-const producerVersion = "0.2.0"
+const producerVersion = "0.3.0"
 
 // skipDir reports directories no extractor here reads: VCS and tool state,
 // dependencies and build output.
