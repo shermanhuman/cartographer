@@ -44,7 +44,8 @@ annotations are committed, in a `.cartographer/` folder in each member.
    branch and open one pull request per repository; the user merges them.
    Registration reads the settings from each member's default branch, so
    register only once every member's settings are there.
-5. **Register once per machine (the user's decision):** run `cartographer
+5. **Register once per machine (the user's decision; only this skill runs
+   it, other sessions give the user the command):** run `cartographer
    project add <member checkout or owner/name>` without `--yes`. It reads
    the settings from the fetched default branches, finds each member's
    checkout by its GitHub remote (under `checkout_roots`, default

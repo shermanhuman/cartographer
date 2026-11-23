@@ -12,6 +12,6 @@ Use it before grep or reading files when the question is about structure:
 
 Refs may be ids (repo:Mod.fun/2), labels (Mod.fun/2, Mod.fun, public.users) or words. On a miss, map_find returns the map's own vocabulary: retry with those words, don't invent synonyms.
 
-Results are ranked and budgeted. Every line has file:line: open only those. ⚠ marks a file changed relative to the map: read it before trusting the line. The header says when a fresher map is building or a rebuild failed, with its log. Registering trusts code: `project add` needs the user's yes, `workspace add` is the user's. [precise] edges are statically resolved; [heuristic] are name-matched, or dispatch to every implementation; [candidate] are text or path matches. Service-to-service calls are HTTP hops to routes. Unresolved, dynamic and external calls aren't traced.
+Results are ranked and budgeted. Every line has file:line: open only those. ⚠ marks a file changed relative to the map: read it before trusting the line. The header says when a fresher map is building or a rebuild failed, with its log. Registering trusts code: give the user the `project add` or `workspace add` command. [precise] edges are statically resolved; [heuristic] are name-matched, or dispatch to every implementation; [candidate] are text or path matches. Service-to-service calls are HTTP hops to routes. Unresolved, dynamic and external calls aren't traced.
 
 When you delegate code exploration to a subagent, tell it to use the cartographer map_* tools first.

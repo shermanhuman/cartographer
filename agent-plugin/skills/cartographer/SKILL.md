@@ -52,10 +52,11 @@ lists with `limit`/`offset`.
   resolved) and HTTP requests whose path the extractors couldn't read. An
   empty caller list is not proof that nothing calls X; say so when it
   matters. Details: `references/precision.md`.
-- Registering a project trusts its code to run on this machine: run
-  `cartographer project add` without `--yes`, show the user the members and
-  trust text it prints, and pass `--yes` only after they say yes. A 0.1
-  workspace's `workspace add` is the user's to run.
+- Registering a project trusts its code to run on this machine, so don't
+  run `cartographer project add` here: give the user the command (any
+  member checkout or `owner/name`), or suggest the cartographer-setup
+  skill, which asks for their yes. A 0.1 workspace's `workspace add` is the
+  user's to run.
 
 ## Delegating
 
