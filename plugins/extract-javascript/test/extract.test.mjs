@@ -508,7 +508,8 @@ const BASE = "https://api.example.com";
 function joined(path) { return fetch(\`\${BASE}/\${path}\`); }
 function slash(path) { return fetch("/" + path); }
 function json(id) { return fetch("/users/" + id + ".json"); }
-export function go() { joined("orders"); slash("api/x"); }
+function req(id = "me") { return fetch("/people/" + id); }
+export function go() { joined("orders"); slash("api/x"); req("one"); req(); }
 `,
   });
   try {
@@ -516,6 +517,8 @@ export function go() { joined("orders"); slash("api/x"); }
     assert.deepEqual(doc.http_refs.map(r => [short(r.from), r.path, r.origin ?? r.base]).sort(), [
       ['src/w.js:go/0', '/api/x', 'same'],
       ['src/w.js:go/0', '/orders', 'BASE'],
+      ['src/w.js:go/0', '/people/:id', 'same'],
+      ['src/w.js:go/0', '/people/one', 'same'],
       ['src/w.js:json/1', '/users/:id.json', 'same'],
     ]);
   } finally { fs.rmSync(root, {recursive: true}); }

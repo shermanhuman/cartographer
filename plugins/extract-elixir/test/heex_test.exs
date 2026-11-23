@@ -76,6 +76,7 @@ defmodule Cartographer.HEExTest do
     defmodule ShopWeb.PageLive do
       use ShopWeb, :live_view
       @events ~w(a1 a2)
+      @more ["", "b1"]
 
       def render(assigns) do
         ~H"""
@@ -105,6 +106,7 @@ defmodule Cartographer.HEExTest do
       def handle_event("blurred", _, s), do: {:noreply, s}
       def handle_event("dead", _, s), do: {:noreply, s}
       def handle_event("", _, s), do: {:noreply, s}
+      def handle_event(e, _, s) when e in @more, do: {:noreply, s}
     end
     ''',
     "lib/shop_web/live/row_component.ex" => ~S'''
@@ -160,6 +162,9 @@ defmodule Cartographer.HEExTest do
       <script :type={Phoenix.LiveView.ColocatedHook} name=".Sig">
         // this.pushEvent("ghost", {});
         const note = "this.pushEvent(\"inside\")";
+        const label = `${this.pushEvent("templated", {})}`;
+        const r = /"/; this.pushEvent("\u0073igned", {});
+        this.pushEvent("row_" + id, {});
         export default { mounted() { this.pushEvent("signed", {}); this.pushEventTo("#x", "aimed", {}); this.pushEvent(this.el.dataset.event, {}) } }
       </script>
     </div>
@@ -326,7 +331,8 @@ defmodule Cartographer.HEExTest do
                {"a2", "attribute"},
                {"go", "head"},
                {"blurred", "head"},
-               {"dead", "head"}
+               {"dead", "head"},
+               {"b1", "attribute"}
              ])
 
     assert [%{source: "delegate", delegate: "x:ShopWeb.Report.handle_event/3"}] =
@@ -397,9 +403,9 @@ defmodule Cartographer.HEExTest do
     founders = for {"ShopWeb.FoundersLive.render/1", ev, _, _, _, _} <- s, do: ev
 
     assert Enum.sort(founders, &(inspect(&1) <= inspect(&2))) ==
-             Enum.sort([:dynamic, "aimed", "signed"], &(inspect(&1) <= inspect(&2)))
+             Enum.sort([:dynamic, "aimed", "signed", "templated"], &(inspect(&1) <= inspect(&2)))
 
-    refute Enum.any?(doc.events, &(&1[:event] in ["ghost", "inside", ""]))
+    refute Enum.any?(doc.events, &(&1[:event] in ["ghost", "inside", "", "row_"]))
     # <.button click="delete"> and <.button click={@event}>: one named, one dynamic.
     assert {"ShopWeb.PageLive.render/1", "delete", "phx-click", "",
             ["ShopWeb.PageLive.handle_event/3"], "heuristic"} in s

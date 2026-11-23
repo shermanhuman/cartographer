@@ -647,7 +647,9 @@ function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, mo
       fetchRef({ts, K, N, checker, node, encl, from, file, line, http});
     }
     if (r.to) {
-      if (checker && node.kind === K.CallExpression && node.arguments.length) {
+      // Every resolved call, with or without arguments: a wrapper's
+      // defaulted parameter is still a request from the caller.
+      if (checker && node.kind === K.CallExpression) {
         http.calls.push({from, to: r.to, file, line, args: node.arguments.map(a => valueParts(ts, K, N, checker, a, encl, 0))});
       }
       s.in_repo++;

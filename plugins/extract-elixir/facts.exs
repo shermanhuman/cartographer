@@ -739,6 +739,7 @@ defmodule Cartographer.ElixirFacts do
       |> Enum.flat_map(fn
         %{source: "attribute"} = h ->
           for e <- Map.get(attrs, {h.module, h.attr}, []),
+              e != "",
               do: %{function: h.function, event: e, source: "attribute", line: h.line}
 
         %{source: "delegate"} = h ->

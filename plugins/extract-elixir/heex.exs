@@ -94,8 +94,9 @@ defmodule Cartographer.HEEx do
     * `{:colocated_hook, name, script_text, line}`: a
       `<script :type={ColocatedHook} name=".Name">` body.
 
-  `attrs` is `[{name, value}]` for a component's literal attributes, which
-  the walker reads for pass-through event names.
+  `attrs` is `[{name, value}]` for a component's attributes: the literal
+  text, or `:dynamic` for code. The walker reads them for pass-through
+  event names.
   """
   def items(tokens) do
     # Each token with its successor (a <script> tag's body).
@@ -204,46 +205,180 @@ defmodule Cartographer.HEEx do
       pos = if via == "pushEventTo", do: after_first_arg(code, pos), else: pos
       pos = skip_space(code, pos)
 
+      # A name only when the literal stands alone as the argument
+      # ("row_" + id is built at runtime).
       name =
         case pos && Map.get(strings, pos) do
-          {content, false} when content != "" -> content
-          _ -> :dynamic
+          {content, false, stop} when content != "" ->
+            if alone?(code, stop), do: content, else: :dynamic
+
+          _ ->
+            :dynamic
         end
 
       {name, via}
     end)
   end
 
-  # The script with comments and string contents blanked (same length), and
-  # each string literal by its opening quote's offset: {content, interpolated?}.
-  defp mask(text), do: mask(text, 0, [], %{})
+  # The script with comments, string and template text and regex literals
+  # blanked (same byte length, quotes kept), and each string or template
+  # literal by its opening quote's offset: {decoded value, interpolated?,
+  # offset just past it}.
+  # Code inside a template's ${...} is kept, so a send there is found.
+  defp mask(text) do
+    {_rest, _i, acc} = code(text, 0, %{out: [], strings: %{}, last: :start}, :top)
+    {IO.iodata_to_binary(Enum.reverse(acc.out)), acc.strings}
+  end
 
-  defp mask(<<>>, _i, out, strings), do: {IO.iodata_to_binary(Enum.reverse(out)), strings}
+  @regex_words ~w(return typeof instanceof in of new delete void throw case do else yield await)
 
-  defp mask(<<"//", rest::binary>>, i, out, strings) do
+  defp put(acc, bytes), do: %{acc | out: [bytes | acc.out]}
+  defp blank(acc, n), do: put(acc, String.duplicate(" ", n))
+
+  # Code, until the end (:top) or the } closing a ${ (:sub, depth).
+  defp code(<<>>, i, acc, _mode), do: {<<>>, i, acc}
+
+  defp code(<<"}", rest::binary>>, i, acc, {:sub, 0}), do: {rest, i + 1, put(acc, "}")}
+
+  defp code(<<"//", rest::binary>>, i, acc, mode) do
     {comment, rest} = take_until(rest, "\n")
-    n = 2 + byte_size(comment)
-    mask(rest, i + n, [String.duplicate(" ", n) | out], strings)
+    code(rest, i + 2 + byte_size(comment), blank(acc, 2 + byte_size(comment)), mode)
   end
 
-  defp mask(<<"/*", rest::binary>>, i, out, strings) do
+  defp code(<<"/*", rest::binary>>, i, acc, mode) do
     {comment, rest} = take_until(rest, "*/")
-    rest = String.replace_prefix(rest, "*/", "")
-    n = 2 + byte_size(comment) + 2
-    mask(rest, i + n, [String.duplicate(" ", n) | out], strings)
+    closed = String.starts_with?(rest, "*/")
+    rest = if closed, do: binary_part(rest, 2, byte_size(rest) - 2), else: rest
+    n = 2 + byte_size(comment) + if(closed, do: 2, else: 0)
+    code(rest, i + n, blank(acc, n), mode)
   end
 
-  defp mask(<<q, rest::binary>>, i, out, strings) when q in [?", ?', ?`] do
-    {content, interp, rest} = string_body(rest, q, [], false)
-    closed = rest != :eof
-    rest = if closed, do: rest, else: ""
-    # The quotes stay, so a call's argument is found at its opening quote.
-    blank = <<q>> <> String.duplicate(" ", byte_size(content)) <> if(closed, do: <<q>>, else: "")
+  defp code(<<q, rest::binary>>, i, acc, mode) when q in [?", ?'] do
+    {raw, rest, closed} = quoted(rest, q, [])
+    n = 1 + byte_size(raw) + if(closed, do: 1, else: 0)
 
-    mask(rest, i + byte_size(blank), [blank | out], Map.put(strings, i, {content, interp}))
+    acc =
+      put(acc, <<q>> <> String.duplicate(" ", byte_size(raw)) <> if(closed, do: <<q>>, else: ""))
+
+    acc = %{acc | strings: Map.put(acc.strings, i, {decode(raw), false, i + n}), last: :value}
+    code(rest, i + n, acc, mode)
   end
 
-  defp mask(<<c, rest::binary>>, i, out, strings), do: mask(rest, i + 1, [<<c>> | out], strings)
+  defp code(<<"`", rest::binary>>, i, acc, mode) do
+    {rest, j, acc, text, interp} = template(rest, i + 1, put(acc, "`"), [], false)
+    acc = %{acc | strings: Map.put(acc.strings, i, {decode(text), interp, j}), last: :value}
+    code(rest, j, acc, mode)
+  end
+
+  defp code(<<"/", rest::binary>>, i, acc, mode) do
+    if regex_allowed?(acc.last) do
+      {body, rest} = regex_body(rest, [], false)
+      n = 1 + byte_size(body)
+      code(rest, i + n, %{blank(acc, n) | last: :value}, mode)
+    else
+      code(rest, i + 1, %{put(acc, "/") | last: :punct}, mode)
+    end
+  end
+
+  defp code(<<c, _::binary>> = bin, i, acc, mode)
+       when c in ?a..?z or c in ?A..?Z or c in [?_, ?$] do
+    [word] = Regex.run(~r/\A[A-Za-z0-9_$]+/, bin)
+    n = byte_size(word)
+    rest = binary_part(bin, n, byte_size(bin) - n)
+    code(rest, i + n, %{put(acc, word) | last: {:word, word}}, mode)
+  end
+
+  defp code(<<c, rest::binary>>, i, acc, mode) do
+    last =
+      cond do
+        c in ~c" \t\r\n" -> acc.last
+        c in ?0..?9 or c in ~c")]" -> :value
+        true -> :punct
+      end
+
+    mode =
+      case {mode, c} do
+        {{:sub, d}, ?{} -> {:sub, d + 1}
+        {{:sub, d}, ?}} -> {:sub, d - 1}
+        _ -> mode
+      end
+
+    code(rest, i + 1, %{put(acc, <<c>>) | last: last}, mode)
+  end
+
+  defp regex_allowed?(:start), do: true
+  defp regex_allowed?(:punct), do: true
+  defp regex_allowed?({:word, w}), do: w in @regex_words
+  defp regex_allowed?(_), do: false
+
+  # A regex literal's body after the opening /, through its flags.
+  defp regex_body(<<>>, acc, _class), do: {IO.iodata_to_binary(Enum.reverse(acc)), <<>>}
+
+  defp regex_body(<<"\\", c, rest::binary>>, acc, class),
+    do: regex_body(rest, [<<?\\, c>> | acc], class)
+
+  defp regex_body(<<"[", rest::binary>>, acc, false), do: regex_body(rest, ["[" | acc], true)
+  defp regex_body(<<"]", rest::binary>>, acc, true), do: regex_body(rest, ["]" | acc], false)
+
+  defp regex_body(<<"/", rest::binary>>, acc, false) do
+    [flags] = Regex.run(~r/\A[a-z]*/, rest)
+    n = byte_size(flags)
+
+    {IO.iodata_to_binary(Enum.reverse([flags, "/" | acc])),
+     binary_part(rest, n, byte_size(rest) - n)}
+  end
+
+  defp regex_body(<<"\n", _::binary>> = rest, acc, _class),
+    do: {IO.iodata_to_binary(Enum.reverse(acc)), rest}
+
+  defp regex_body(<<c, rest::binary>>, acc, class), do: regex_body(rest, [<<c>> | acc], class)
+
+  # A quoted string's raw body (escapes kept), the rest, and whether it closed.
+  defp quoted(<<>>, _q, acc), do: {IO.iodata_to_binary(Enum.reverse(acc)), <<>>, false}
+  defp quoted(<<"\\", c, rest::binary>>, q, acc), do: quoted(rest, q, [<<?\\, c>> | acc])
+
+  defp quoted(<<q, rest::binary>>, q, acc),
+    do: {IO.iodata_to_binary(Enum.reverse(acc)), rest, true}
+
+  defp quoted(<<"\n", _::binary>> = rest, _q, acc),
+    do: {IO.iodata_to_binary(Enum.reverse(acc)), rest, false}
+
+  defp quoted(<<c, rest::binary>>, q, acc), do: quoted(rest, q, [<<c>> | acc])
+
+  # A template literal after its backtick: text blanked, ${...} kept as code.
+  defp template(<<>>, i, acc, text, interp),
+    do: {<<>>, i, acc, IO.iodata_to_binary(Enum.reverse(text)), interp}
+
+  defp template(<<"`", rest::binary>>, i, acc, text, interp),
+    do: {rest, i + 1, put(acc, "`"), IO.iodata_to_binary(Enum.reverse(text)), interp}
+
+  defp template(<<"\\", c, rest::binary>>, i, acc, text, interp),
+    do: template(rest, i + 2, blank(acc, 2), [<<?\\, c>> | text], interp)
+
+  defp template(<<"${", rest::binary>>, i, acc, text, _interp) do
+    {rest, j, acc} = code(rest, i + 2, %{put(acc, "${") | last: :punct}, {:sub, 0})
+    template(rest, j, acc, text, true)
+  end
+
+  defp template(<<c, rest::binary>>, i, acc, text, interp),
+    do: template(rest, i + 1, blank(acc, 1), [<<c>> | text], interp)
+
+  # A JavaScript string's value from its raw body.
+  defp decode(raw) do
+    Regex.replace(~r/\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|\n|.)/s, raw, fn _, e ->
+      case e do
+        "u{" <> hex -> <<String.to_integer(String.trim_trailing(hex, "}"), 16)::utf8>>
+        "u" <> hex -> <<String.to_integer(hex, 16)::utf8>>
+        "x" <> hex -> <<String.to_integer(hex, 16)::utf8>>
+        "n" -> "\n"
+        "t" -> "\t"
+        "r" -> "\r"
+        "0" -> <<0>>
+        "\n" -> ""
+        other -> other
+      end
+    end)
+  end
 
   defp take_until(text, stop) do
     case :binary.match(text, stop) do
@@ -252,20 +387,12 @@ defmodule Cartographer.HEEx do
     end
   end
 
-  defp string_body(<<>>, _q, acc, interp),
-    do: {IO.iodata_to_binary(Enum.reverse(acc)), interp, :eof}
-
-  defp string_body(<<?\\, c, rest::binary>>, q, acc, interp),
-    do: string_body(rest, q, [<<?\\, c>> | acc], interp)
-
-  defp string_body(<<q, rest::binary>>, q, acc, interp),
-    do: {IO.iodata_to_binary(Enum.reverse(acc)), interp, rest}
-
-  defp string_body(<<"${", rest::binary>>, ?`, acc, _interp),
-    do: string_body(rest, ?`, ["${" | acc], true)
-
-  defp string_body(<<c, rest::binary>>, q, acc, interp),
-    do: string_body(rest, q, [<<c>> | acc], interp)
+  defp alone?(code, stop) do
+    case skip_space(code, stop) do
+      nil -> false
+      at -> :binary.at(code, at) in ~c",)"
+    end
+  end
 
   defp skip_space(code, pos) when pos < byte_size(code) do
     if :binary.at(code, pos) in ~c" \t\r\n", do: skip_space(code, pos + 1), else: pos
