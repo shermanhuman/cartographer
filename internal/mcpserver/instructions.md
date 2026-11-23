@@ -1,4 +1,4 @@
-cartographer serves a prebuilt map of this project's repositories: functions, calls, database tables, docs and reviewed journeys.
+cartographer serves a prebuilt map of this project's repositories: functions, calls, tables, docs and reviewed journeys.
 
 Use it before grep or reading files when the question is about structure:
 - where is X defined → map_find / map_entity
@@ -10,8 +10,8 @@ Use it before grep or reading files when the question is about structure:
 - freshness of the map → map_status
 - post it to an issue or PR → map_embed (Markdown + Mermaid, pinned links)
 
-Refs may be ids (repo:Mod.fun/2), labels (Mod.fun/2, Mod.fun, public.users) or words. On a miss, map_find returns the map's own vocabulary: retry with those words, don't invent synonyms.
+Refs may be ids (repo:Mod.fun/2), labels (Mod.fun/2, Mod.fun, public.users) or words. On a miss, map_find returns the map's own vocabulary: retry with those, don't invent synonyms.
 
-Results are ranked and budgeted. Every line has file:line: open only those. ⚠ marks a file changed relative to the map: read it before trusting the line. The header says when a fresher map is building or a rebuild failed, with its log. Registering trusts code: give the user the `project add` or `workspace add` command. [precise] edges are statically resolved; [heuristic] are name-matched, or dispatch to every implementation; [candidate] are text or path matches. Service-to-service calls are HTTP hops to routes. Unresolved, dynamic and external calls aren't traced.
+Results are ranked and budgeted. Every line has file:line: open only those. ⚠ marks a file changed relative to the map: read it before trusting the line. The header says when a fresher map is building or a rebuild failed, with its log. Registering trusts code: give the user the `project add` or `workspace add` command; only the cartographer-setup skill runs `project add`, after their yes. [precise] edges are statically resolved; [heuristic] are name-matched, or dispatch to every implementation; [candidate] are text or path matches. Service calls are HTTP hops to routes. Unresolved, dynamic and external calls aren't traced.
 
-When you delegate code exploration to a subagent, tell it to use the cartographer map_* tools first.
+Tell subagents exploring code to use the map_* tools first.

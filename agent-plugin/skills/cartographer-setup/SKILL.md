@@ -26,8 +26,8 @@ annotations are committed, in a `.cartographer/` folder in each member.
    ```
 
    A member entry may add `branch = "release"` to map that branch instead
-   of the remote's default; wherever this skill says "default branch", it
-   means that branch.
+   of the remote's default. `project add` still reads each member's
+   settings from its default branch, so keep `.cartographer/` on both.
 
    Every other member names `project`, `anchor = "my-org/my-app"`,
    `extract` (`go`, `rust`, `elixir`, `javascript`, `kubernetes`) and
