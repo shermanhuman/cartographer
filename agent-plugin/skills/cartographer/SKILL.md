@@ -72,7 +72,8 @@ No snapshot, not a mapped repo, or the tools are missing:
 unavailable.
 
 Registering a project trusts its code to run on this machine, so it's the
-user's: don't run `cartographer project add`. Give them the command (any
-member checkout or `owner/name`), or tell them they can start the
-cartographer-setup skill (only they can), which asks for their yes. A 0.1
-workspace's `workspace add` is theirs to run too.
+user's: outside the cartographer-setup skill, don't run `cartographer
+project add`. When the project's `.cartographer/` settings are already
+merged, give them the command (any member checkout or `owner/name`);
+when they aren't, tell them they can start the cartographer-setup skill
+(only they can).
