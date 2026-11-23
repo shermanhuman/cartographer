@@ -25,9 +25,10 @@ import (
 
 // Format is the snapshot format this package writes; MinFormat is the oldest
 // it reads. Format 2 adds the manifest's source, inventory, tools and
-// inputs digest, and allows facts version 2.
+// inputs digest, and allows facts version 2; format 3 allows facts version 3
+// (so an older cartographer refuses it as "a newer snapshot").
 const (
-	Format    = 2
+	Format    = 3
 	MinFormat = 1
 )
 
@@ -203,8 +204,8 @@ func Read(dir string) (*Bundle, error) {
 		if err := d.Validate(); err != nil {
 			return nil, fmt.Errorf("bundle: %s: %w", rel, err)
 		}
-		if d.FactsVersion > 1 && m.SnapshotFormat == 1 {
-			return nil, fmt.Errorf("bundle: %s: facts_version %d in a snapshot_format 1 snapshot", rel, d.FactsVersion)
+		if d.FactsVersion > 1 && m.SnapshotFormat == 1 || d.FactsVersion > 2 && m.SnapshotFormat == 2 {
+			return nil, fmt.Errorf("bundle: %s: facts_version %d in a snapshot_format %d snapshot", rel, d.FactsVersion, m.SnapshotFormat)
 		}
 		if d.Repo != "" && !repos[d.Repo] {
 			return nil, fmt.Errorf("bundle: %s: repo %q is not in the manifest", rel, d.Repo)

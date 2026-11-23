@@ -380,12 +380,28 @@ defmodule Cartographer.ElixirSource do
     expand_use(name(mod, env), kind, env, acc, 0)
   end
 
-  defp walk({:embed_templates, meta, [pattern | _]}, %{module: m, caller: nil} = env, acc)
+  defp walk({:embed_templates, meta, [pattern | rest]}, %{module: m, caller: nil} = env, acc)
        when m != nil and is_binary(pattern) do
+    # `suffix: "_html"` is added to each function name.
+    suffix =
+      case rest do
+        [opts] when is_list(opts) ->
+          Enum.find_value(opts, "", fn
+            {k, v} when is_binary(v) -> if ident?(k) and str(k) == "suffix", do: v
+            _ -> nil
+          end)
+
+        _ ->
+          ""
+      end
+
     {env,
      %{
        acc
-       | embeds: [%{module: m, pattern: pattern, file: env.file, line: line(meta)} | acc.embeds]
+       | embeds: [
+           %{module: m, pattern: pattern, suffix: suffix, file: env.file, line: line(meta)}
+           | acc.embeds
+         ]
      }}
   end
 
@@ -678,6 +694,16 @@ defmodule Cartographer.ElixirSource do
   defp template_item({:event, attr, value, target, l}, env, acc) do
     target = target_of(target)
 
+    # The attribute's code is code: its calls are calls (show_modal("x")).
+    acc =
+      with {:expr, code, _} <- value,
+           {:ok, ast} <- expr(code, l) do
+        {_, acc} = walk(ast, env, acc)
+        acc
+      else
+        _ -> acc
+      end
+
     case event_value(value, env, l) do
       {:names, names} ->
         Enum.reduce(names, acc, &add_event(&2, env, attr, &1, target, l))
@@ -748,10 +774,13 @@ defmodule Cartographer.ElixirSource do
 
   # A colocated hook's script runs in the element that renders it, so its
   # literal pushEvent goes where that template's events go.
+  # pushEventTo goes to whatever its selector matches: a dynamic target.
   defp template_item({:colocated_hook, _hook, text, l}, env, acc) do
     text
     |> Cartographer.HEEx.script_pushes()
-    |> Enum.reduce(acc, &add_event(&2, env, "pushEvent", &1, "", l))
+    |> Enum.reduce(acc, fn {name, via}, acc ->
+      add_event(acc, env, via, name, if(via == "pushEventTo", do: "dynamic", else: ""), l)
+    end)
   end
 
   defp component_call(acc, env, module, fun, l, attrs) do
@@ -883,10 +912,15 @@ defmodule Cartographer.ElixirSource do
   defp push_info(args) do
     # JS.push("e"), JS.push(js, "e"), JS.push("e", target: ...).
     name = Enum.find(args, &is_binary/1) || :dynamic
-    opts = Enum.find(args, [], &(is_list(&1) and Keyword.keyword?(&1)))
 
+    opts =
+      Enum.find(args, [], fn a ->
+        is_list(a) and a != [] and Enum.all?(a, &match?({k, _} when ident?(k), &1))
+      end)
+
+    # By name: another option's key may be an encoded (unknown) atom.
     target =
-      case List.keyfind(opts, :target, 0) do
+      case Enum.find(opts, fn {k, _} -> ident?(k) and str(k) == "target" end) do
         nil ->
           ""
 

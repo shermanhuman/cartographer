@@ -106,7 +106,9 @@ func (im *importer) takes(fn, event string) (bool, []string) {
 // template. A dynamic name, or a hook no template mounts, links nothing.
 func (im *importer) linkEvents() error {
 	for _, s := range im.sends {
-		if s.Dynamic {
+		// A dynamic name links nothing; nor does pushEventTo, which goes to
+		// whatever its selector matches (as a template's dynamic target).
+		if s.Dynamic || s.Target == "dynamic" {
 			continue
 		}
 		type target struct{ to, prov string }

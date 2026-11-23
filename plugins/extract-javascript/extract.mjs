@@ -20,7 +20,7 @@ const MAX_ARITY = 255;
 const MINIFIED_LINE = 10000;
 // Nesting deeper than this (a 5,000-link call chain) overflows the
 // compiler's recursive binder: such a file is inventoried without resolution.
-const MAX_DEPTH = 1000;
+const MAX_DEPTH = 250;
 export const TOP = '(top)';
 const USAGE = 'usage: node extract.mjs --repo NAME --root DIR [--revision SHA] [--source-roots assets/js] [--typescript DIR]';
 
@@ -101,14 +101,20 @@ export function listFiles(root, roots) {
 // snapshot (symlinks resolved, and refused when they leave it) and the
 // pinned compiler's own lib directory. Everything else does not exist, so a
 // node_modules or tsconfig above the snapshot can't change the map.
-function fence(ts, rootReal, libDir) {
+function fence(ts, rootReal, libDir, hidden = new Set()) {
   const inside = (real) => real === rootReal || real.startsWith(rootReal + '/') || real.startsWith(libDir + '/');
+  // The real path, refused when it differs from the asked path only by case
+  // (a case-insensitive disk would otherwise find ./Foo as foo.js, which
+  // Linux never does).
   const real = (p) => {
-    try { return fs.realpathSync.native(p); } catch { return null; }
+    let r, asked;
+    try { r = fs.realpathSync.native(p); asked = fs.realpathSync(p); } catch { return null; }
+    if (r !== asked && r.toLowerCase() === asked.toLowerCase()) return null;
+    return r;
   };
   const allowed = (p) => {
     const r = real(path.resolve(p));
-    return r !== null && inside(r) ? r : null;
+    return r !== null && inside(r) && !hidden.has(r) ? r : null;
   };
   return {
     fileExists: (p) => { const r = allowed(p); return r !== null && fs.statSync(r).isFile(); },
@@ -349,7 +355,11 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
   const N = naming(ts);
   const rootReal = fs.realpathSync.native(path.resolve(root));
   const libDir = fs.realpathSync.native(path.dirname(ts.getDefaultLibFilePath({})));
-  const host0 = fence(ts, rootReal, libDir);
+  // Files the plugin doesn't read (minified, too deep, unparsable) don't
+  // exist for the compiler either: an import of one is a call into an
+  // unread file, never into functions the facts don't list.
+  const hidden = new Set();
+  const host0 = fence(ts, rootReal, libDir, hidden);
   const {files: listed, notes} = listFiles(root, sourceRoots);
 
   // Minified files are listed but not read.
@@ -358,6 +368,7 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
     const text = fs.readFileSync(path.join(root, file), 'utf8');
     if (text.split('\n').some(l => l.length > MINIFIED_LINE)) {
       notes.push({kind: 'minified_skipped', file, message: `a line is over ${MINIFIED_LINE} characters; treated as generated code and not read`});
+      hidden.add(fs.realpathSync.native(path.join(rootReal, file)));
     } else files.push(file);
   }
 
@@ -370,6 +381,14 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
     if (depthOf(ts, sf) > MAX_DEPTH) {
       notes.push({kind: 'too_deep', file, message: `expressions nest more than ${MAX_DEPTH} deep; functions listed, calls not resolved`});
       deep.push({file, sf});
+      hidden.add(fs.realpathSync.native(path.join(rootReal, file)));
+      continue;
+    }
+    if (sf.parseDiagnostics?.length) {
+      const d = sf.parseDiagnostics[0];
+      const where = d.start !== undefined ? `line ${sf.getLineAndCharacterOfPosition(d.start).line + 1}: ` : '';
+      notes.push({kind: 'parse_error', file, message: where + ts.flattenDiagnosticMessageText(d.messageText, ' ')});
+      hidden.add(fs.realpathSync.native(path.join(rootReal, file)));
       continue;
     }
     const cfg = configFor(ts, host0, root, file, configs, notes);
@@ -388,7 +407,8 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
   // the pushEvent calls inside hook objects.
   const hooks = {registry: new Map(), pushes: []};
   const stat = (lang) => { if (!stats.has(lang)) stats.set(lang, {language: lang, call_sites: 0, in_repo: 0, dispatch: 0, external: 0, unresolved: 0, refs: 0, not_extracted: 0}); return stats.get(lang); };
-  const extracted = new Set(files);
+  const extracted = new Set(files.filter(f => !hidden.has(fs.realpathSync.native(path.join(rootReal, f)))));
+  for (const {file} of deep) extracted.add(file);
 
   for (const key of [...groups.keys()].sort()) {
     const {cfg, files: group} = groups.get(key);
@@ -430,9 +450,9 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
 
   // One level of wrapper: a call to api("GET", "/dial/me") is a request
   // from the caller.
-  for (const c of http.calls) {
-    const w = http.wrappers.get(c.to);
-    if (!w) continue;
+  const reached = new Set();
+  for (const c of http.calls) for (const w of http.wrappers.get(c.to) ?? []) {
+    reached.add(w);
     http.sites++;
     const parts = w.parts.flatMap(p => p.param !== undefined ? (c.args[p.param] ?? [{dyn: p.name}]).map(a => a.param !== undefined ? {dyn: a.name} : a) : [p]);
     let method = w.method;
@@ -444,13 +464,17 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
     if (ref) http.refs.push({from: c.from, ...ref, file: c.file, line: c.line});
     else http.unbuilt++;
   }
-  if (http.sites > 0) {
-    stats.set('http', {language: 'http', call_sites: http.sites, in_repo: 0, dispatch: 0, external: 0, unresolved: 0, refs: http.refs.length, not_extracted: http.unbuilt});
+  // A wrapper no resolved call reaches: a request with no path to link.
+  for (const ws of http.wrappers.values()) for (const w of ws) {
+    if (!reached.has(w)) { http.sites++; http.unbuilt++; }
   }
   // Every ref's from is a listed function: (top) is listed when its file's
   // top-level code made the call.
   const known = new Set(functions.map(f => f.id));
-  http.refs = http.refs.filter(r => known.has(r.from));
+  http.refs = [...new Map(http.refs.filter(r => known.has(r.from)).map(r => [JSON.stringify(r), r])).values()];
+  if (http.sites > 0) {
+    stats.set('http', {language: 'http', call_sites: http.sites, in_repo: 0, dispatch: 0, external: 0, unresolved: 0, refs: http.refs.length, not_extracted: http.unbuilt});
+  }
   const events = hooks.pushes.filter(p => known.has(p.from)).map(p => ({
     from: p.from,
     ...(p.event === null ? {dynamic: true} : {event: p.event}),
@@ -476,7 +500,7 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
     calls: uniqueCalls.sort(cmp(c => c.file, c => c.line, c => c.from, c => c.to ?? '', c => c.target?.module ?? '', c => c.target?.name ?? '', c => c.target?.arity ?? 0, c => c.kind)),
     notes: notes.sort(cmp(n => n.file ?? '', n => n.kind, n => n.message)),
     ...(events.length ? {events: events.sort(cmp(e => e.file, e => e.line, e => e.from, e => e.event ?? ''))} : {}),
-    http_refs: [...new Map(http.refs.map(r => [JSON.stringify(r), r])).values()].sort(cmp(r => r.file, r => r.line, r => r.from, r => r.method, r => r.path)),
+    http_refs: http.refs.sort(cmp(r => r.file, r => r.line, r => r.from, r => r.method, r => r.path)),
     stats: [...stats.values()].filter(s => s.call_sites > 0).sort(cmp(s => s.language)),
   };
 }
@@ -589,11 +613,11 @@ function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, mo
   for (const node of pending) {
     const encl = enclosingFn(node.parent);
     const from = encl ? idx.byNode.get(encl).id : idx.top.id;
-    if (!encl) topUsed = true;
     const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
     const jsx = node.kind === K.JsxOpeningElement || node.kind === K.JsxSelfClosingElement;
     const callee = N.skip(jsx ? node.tagName : node.expression);
     if (jsx && callee.kind === K.Identifier && /^[a-z]/.test(callee.text)) continue; // <div>: an element, not a call
+    if (!encl) topUsed = true;
     const arity = jsx ? 1 : Math.min(node.arguments?.length ?? 0, MAX_ARITY);
     s.call_sites++;
     const r = resolve({ts, K, N, node, callee, jsx, checker, relOf, extracted, repo});
@@ -612,12 +636,11 @@ function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, mo
     }
     if (checker && !jsx && node.kind === K.CallExpression) hookCall({ts, K, N, checker, node, callee, encl, from, file, line, hooks, methodOwner});
     if (checker && !jsx && node.kind === K.CallExpression && isFetch(K, callee)) {
-      if (fetchRef({ts, K, N, checker, node, encl, from, file, line, http})) topUsed ||= !encl;
+      fetchRef({ts, K, N, checker, node, encl, from, file, line, http});
     }
     if (r.to) {
       if (checker && node.kind === K.CallExpression && node.arguments.length) {
         http.calls.push({from, to: r.to, file, line, args: node.arguments.map(a => valueParts(ts, K, N, checker, a, encl, 0))});
-        if (!encl) topUsed = true;
       }
       s.in_repo++;
       calls.push({from, to: r.to, kind: jsx ? 'jsx' : 'call', file, line, precision: r.precision});
@@ -656,23 +679,23 @@ function hookCall({ts, K, N, checker, node, callee, encl, from, file, line, hook
     if (!arg) return;
     const parts = valueParts(ts, K, N, checker, arg, encl, 0);
     const event = parts.length && parts.every(p => p.lit !== undefined && !p.base) ? parts.map(p => p.lit).join('') : null;
-    hooks.pushes.push({from, owner: encl ? methodOwner(encl) : null, event, via, file, line});
+    const owner = encl ? methodOwner(encl) : null;
+    hooks.pushes.push({from, owner: owner ? nodeKey(owner) : null, event, via, file, line});
   }
 }
 
 // The hook objects a `hooks` registry names: {Name: obj} and {obj} entries,
 // followed through imports and `const A = B` aliases to an object literal.
 function registerHooks(ts, K, N, checker, registry, hooks) {
-  const reg = N.skip(registry);
-  let props = [];
-  if (reg.kind === K.ObjectLiteralExpression) props = reg.properties;
-  else if (reg.kind === K.Identifier) {
-    const obj = objectOf(ts, K, N, checker, reg, 0);
-    if (obj) props = obj.properties;
-  }
-  for (const p of props) {
+  for (const p of registryEntries(ts, K, N, checker, registry, 0)) {
     let name, value;
-    if (p.kind === K.ShorthandPropertyAssignment) {
+    if (p.kind === 'export') {
+      name = p.name;
+      value = declObject(ts, K, N, checker, p.sym, 0);
+    } else if (p.kind === 'assigned') {
+      name = p.name;
+      value = objectOf(ts, K, N, checker, p.expr, 0);
+    } else if (p.kind === K.ShorthandPropertyAssignment) {
       name = p.name.text;
       let sym;
       try { sym = checker.getShorthandAssignmentValueSymbol(p); } catch { sym = undefined; }
@@ -682,9 +705,60 @@ function registerHooks(ts, K, N, checker, registry, hooks) {
       value = objectOf(ts, K, N, checker, p.initializer, 0);
     }
     if (!name || !value) continue;
-    if (!hooks.registry.has(value)) hooks.registry.set(value, new Set());
-    hooks.registry.get(value).add(name);
+    const key = nodeKey(value);
+    if (!hooks.registry.has(key)) hooks.registry.set(key, new Set());
+    hooks.registry.get(key).add(name);
   }
+}
+
+// A node's place, the same in every program that reads its file (the
+// registry and a hook may be read under different configs).
+const nodeKey = (node) => `${node.getSourceFile().fileName}:${node.pos}`;
+
+// The {name: node} entries a registry expression names: an object literal
+// (with spreads followed), a variable holding one plus `X.Name = {...}`
+// assignments in its file, or a namespace import's exports.
+function registryEntries(ts, K, N, checker, expr, depth) {
+  expr = N.skip(expr);
+  if (depth > 4) return [];
+  if (expr.kind === K.ObjectLiteralExpression) {
+    return expr.properties.flatMap(p => p.kind === K.SpreadAssignment ? registryEntries(ts, K, N, checker, p.expression, depth + 1) : [p]);
+  }
+  if (expr.kind !== K.Identifier) return [];
+  let sym;
+  try { sym = checker.getSymbolAtLocation(expr); } catch { sym = undefined; }
+  if (!sym) return [];
+  let target = sym;
+  if (sym.flags & ts.SymbolFlags.Alias) {
+    try { target = checker.getAliasedSymbol(sym); } catch { return []; }
+  }
+  if (target && target.flags & ts.SymbolFlags.ValueModule) {
+    // import * as Hooks from "./hooks": each export is an entry.
+    let exports = [];
+    try { exports = checker.getExportsOfModule(target); } catch { exports = []; }
+    return exports.map(e => ({kind: 'export', name: e.escapedName === 'default' ? null : e.escapedName, sym: e})).filter(e => e.name);
+  }
+  const d = target?.valueDeclaration ?? target?.declarations?.[0];
+  if (!d || d.kind !== K.VariableDeclaration || !d.initializer) return [];
+  const own = registryEntries(ts, K, N, checker, d.initializer, depth + 1);
+  // Hooks.Chart = {...} anywhere in the declaring file.
+  const assigned = [];
+  const work = [d.getSourceFile()];
+  while (work.length) {
+    const n = work.pop();
+    if (n.kind === K.BinaryExpression && n.operatorToken.kind === K.EqualsToken) {
+      const left = N.skip(n.left);
+      if (left.kind === K.PropertyAccessExpression && left.expression.kind === K.Identifier) {
+        let s2;
+        try { s2 = checker.getSymbolAtLocation(left.expression); } catch { s2 = undefined; }
+        // Compared by declaration: a JS expando (`Hooks.X = ...`) can give
+        // the reference a merged symbol.
+        if (s2 && (s2 === target || (s2.valueDeclaration ?? s2.declarations?.[0]) === d)) assigned.push({kind: 'assigned', name: left.name.text, expr: n.right});
+      }
+    }
+    ts.forEachChild(n, (c) => { work.push(c); });
+  }
+  return own.concat(assigned);
 }
 
 function objectOf(ts, K, N, checker, expr, depth) {
@@ -703,6 +777,11 @@ function declObject(ts, K, N, checker, sym, depth) {
   }
   const d = sym?.valueDeclaration ?? sym?.declarations?.[0];
   if (d && d.kind === K.VariableDeclaration && d.initializer) return objectOf(ts, K, N, checker, d.initializer, depth + 1);
+  // export default {...}
+  if (d && d.kind === K.ExportAssignment) return objectOf(ts, K, N, checker, d.expression, depth + 1);
+  // A JS expando member (`Hooks.Chart = {...}`): its assignment's value.
+  const assign = d && (d.kind === K.BinaryExpression ? d : d.parent?.kind === K.BinaryExpression ? d.parent : null);
+  if (assign && assign.operatorToken.kind === K.EqualsToken) return objectOf(ts, K, N, checker, assign.right, depth + 1);
   return null;
 }
 
@@ -818,14 +897,19 @@ function fetchRef({ts, K, N, checker, node, encl, from, file, line, http}) {
       }
     }
   }
-  if (parts.some(p => p.param !== undefined) && encl) {
-    const id = from;
+  // A parameter inside a readable path (`/users/${id}`, `?q=` + term) is
+  // just an interpolation: the function makes the request itself. Only a
+  // path that can't be read without the parameter (fetch(path),
+  // BASE + path) makes the function a wrapper whose callers make it.
+  const own = buildRef(parts.map(p => (p.param !== undefined ? {dyn: p.name} : p)), typeof method === 'object' ? '' : method);
+  if (!own && parts.some(p => p.param !== undefined) && encl) {
     const base = parts.find(p => p.base)?.base;
-    http.wrappers.set(id, {parts, method, ...(base ? {base} : {})});
+    if (!http.wrappers.has(from)) http.wrappers.set(from, []);
+    http.wrappers.get(from).push({parts, method, file, line, ...(base ? {base} : {})});
     return false;
   }
   http.sites++;
-  const ref = buildRef(parts, typeof method === 'object' ? '' : method);
+  const ref = own;
   if (!ref) { http.unbuilt++; return false; }
   http.refs.push({from, ...ref, file, line});
   return true;
@@ -884,11 +968,26 @@ function resolve({ts, K, N, node, callee, jsx, checker, relOf, extracted, repo})
   const idx = fnIndex(ts, N, dsf, `${repo}:${rel}`);
   const entry = idx.byNode.get(target);
   if (!entry) return {outcome: 'unresolved'};
-  const direct = callee.kind === K.Identifier || jsx || N.isFn(callee) || isNamespaceMember(ts, K, callee, checker);
+  const direct = (callee.kind === K.Identifier && stableBinding(ts, K, checker, callee)) || jsx || N.isFn(callee) || isNamespaceMember(ts, K, callee, checker);
   return {to: entry.id, precision: direct ? 'precise' : 'heuristic'};
 }
 
 const isClassLike = (K, n) => n.kind === K.ClassDeclaration || n.kind === K.ClassExpression;
+
+// A name that always holds what it was declared with: a function or class
+// declaration, an import or a const. A let, var or parameter may be
+// reassigned (or defaulted), so a call through it is heuristic.
+function stableBinding(ts, K, checker, id) {
+  let sym;
+  try { sym = checker.getSymbolAtLocation(id); } catch { return false; }
+  if (!sym) return false;
+  if (sym.flags & ts.SymbolFlags.Alias) return true;
+  const d = sym.valueDeclaration ?? sym.declarations?.[0];
+  if (!d) return false;
+  if (d.kind === K.FunctionDeclaration || d.kind === K.ClassDeclaration) return true;
+  if (d.kind === K.VariableDeclaration) return (ts.getCombinedNodeFlags(d) & ts.NodeFlags.Const) !== 0;
+  return false;
+}
 
 function isNamespaceMember(ts, K, callee, checker) {
   if (callee.kind !== K.PropertyAccessExpression || callee.expression.kind !== K.Identifier) return false;

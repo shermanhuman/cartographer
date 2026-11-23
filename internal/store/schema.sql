@@ -201,6 +201,7 @@ CREATE TABLE IF NOT EXISTS http_links (
   line INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS http_links_route ON http_links(snapshot_id, route_id);
+CREATE INDEX IF NOT EXISTS http_links_from ON http_links(snapshot_id, from_id);
 
 CREATE TABLE IF NOT EXISTS config_urls (
   snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,

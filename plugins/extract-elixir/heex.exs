@@ -31,14 +31,17 @@ defmodule Cartographer.HEEx do
                   phx-focus phx-keyup phx-keydown phx-window-keyup phx-window-keydown
                   phx-window-blur phx-window-focus phx-viewport-top phx-viewport-bottom
                   phx-auto-recover)
-  def event_attrs, do: @event_attrs
 
   @doc """
   Tokenizes a template. `line` is the line its first character is on.
   `{:ok, tokens}` or `{:error, message}` (a syntax error, line included).
   """
   def tokenize(source, file, line) do
-    {:ok, eex} = EEx.tokenize(source, line: line, file: file)
+    eex =
+      case EEx.tokenize(source, line: line, file: file) do
+        {:ok, eex} -> eex
+        {:error, message, meta} -> throw({:eex, "line #{meta[:line] || line}: #{message}"})
+      end
 
     {tokens, cont} =
       Enum.reduce(eex, {[], {:text, :enabled}}, fn
@@ -74,6 +77,8 @@ defmodule Cartographer.HEEx do
         end
 
       {:error, line <> (e |> Map.get(:description, Exception.message(e)) |> to_string())}
+  catch
+    {:eex, message} -> {:error, message}
   end
 
   @doc """
@@ -93,9 +98,10 @@ defmodule Cartographer.HEEx do
   the walker reads for pass-through event names.
   """
   def items(tokens) do
+    # Each token with its successor (a <script> tag's body).
     tokens
-    |> Enum.with_index()
-    |> Enum.flat_map(fn {token, i} -> item(token, Enum.at(tokens, i + 1)) end)
+    |> Enum.zip(tl(tokens ++ [nil]))
+    |> Enum.flat_map(fn {token, next} -> item(token, next) end)
   end
 
   # `<%= for x <- items(@y) do %>` is half an expression: closed here so
@@ -151,9 +157,6 @@ defmodule Cartographer.HEEx do
         {_n, {:expr, code, ameta}, _} ->
           [{:expr, code, ameta.line}]
 
-        {:root, {:expr, code, ameta}, _} ->
-          [{:expr, code, ameta.line}]
-
         _ ->
           []
       end)
@@ -177,12 +180,16 @@ defmodule Cartographer.HEEx do
     end)
   end
 
-  @doc "Literal names a colocated hook's script sends with `this.pushEvent`."
+  @doc """
+  Literal names a colocated hook's script sends: `{name, "pushEvent"}` for
+  `this.pushEvent("name")`, `{name, "pushEventTo"}` for
+  `pushEventTo(selector, "name")`.
+  """
   def script_pushes(text) do
     to = ~r/\bpushEventTo\s*\(\s*[^,()]+,\s*(["'])([^"'\\]+)\1/
     plain = ~r/\bpushEvent\s*\(\s*(["'])([^"'\\]+)\1/
 
-    (Regex.scan(plain, text) ++ Regex.scan(to, text))
-    |> Enum.map(fn [_, _, name] -> name end)
+    Enum.map(Regex.scan(plain, text), fn [_, _, name] -> {name, "pushEvent"} end) ++
+      Enum.map(Regex.scan(to, text), fn [_, _, name] -> {name, "pushEventTo"} end)
   end
 end

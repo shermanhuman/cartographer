@@ -87,11 +87,13 @@ defmodule Cartographer.HEExTest do
           <a phx-click={if @x == "payouts", do: "go"}></a>
           <div phx-click={"filter_#{@n}"} phx-blur={JS.push("blurred") |> JS.hide()}></div>
           <p>{format(@n)}</p>
+          <button phx-click={show_modal("confirm")}>?</button>
         </div>
         """
       end
 
       defp format(n), do: n
+      defp show_modal(id), do: id
 
       def handle_event("save", _, s), do: {:noreply, s}
       def handle_event("delete", _, s), do: {:noreply, s}
@@ -108,11 +110,13 @@ defmodule Cartographer.HEExTest do
 
       def render(assigns) do
         ~H"""
-        <div><b phx-click="toggle" phx-target={@myself}></b><i phx-click="save"></i></div>
+        <div><b phx-click="toggle" phx-target={@myself}></b><i phx-click="save"></i>
+          <u phx-click={JS.push("pick", target: @myself, zz_never_an_atom_q7: true)}></u></div>
         """
       end
 
       def handle_event("toggle", _, s), do: {:noreply, s}
+      def handle_event("pick", _, s), do: {:noreply, s}
     end
     ''',
     "lib/shop_web/report.ex" => ~S'''
@@ -151,9 +155,24 @@ defmodule Cartographer.HEExTest do
     "lib/shop_web/live/founders.html.heex" => ~S'''
     <div id="sig" phx-hook=".Sig">
       <script :type={Phoenix.LiveView.ColocatedHook} name=".Sig">
-        export default { mounted() { this.pushEvent("signed", {}) } }
+        export default { mounted() { this.pushEvent("signed", {}); this.pushEventTo("#x", "aimed", {}) } }
       </script>
     </div>
+    ''',
+    "lib/shop_web/mail_html.ex" => ~S'''
+    defmodule ShopWeb.MailHTML do
+      use ShopWeb, :html
+      embed_templates "mail_html/*.html", suffix: "_html"
+    end
+    ''',
+    "lib/shop_web/mail_html/welcome.html.heex" => ~S'''
+    <.icon />
+    ''',
+    "lib/shop_web/live/broken2.ex" => ~S'''
+    defmodule ShopWeb.Broken2 do
+      use ShopWeb, :html
+      def bad(assigns), do: ~H|<%= foo|
+    end
     ''',
     "lib/shop_web/live/broken.ex" => ~S'''
     defmodule ShopWeb.Broken do
@@ -243,7 +262,7 @@ defmodule Cartographer.HEExTest do
     # JS.push in a chain.
     assert {"ShopWeb.PageLive.render/1", "blurred", "JS.push", "", [page], "precise"} in s
     # Interpolated names and unfilled assigns are dynamic; lv: events are LiveView's.
-    assert Enum.count(s, &match?({"ShopWeb.PageLive.render/1", :dynamic, _, _, [], nil}, &1)) == 2
+    assert Enum.count(s, &match?({"ShopWeb.PageLive.render/1", :dynamic, _, _, [], nil}, &1)) == 3
     assert {"ShopWeb.CoreComponents.unfilled/1", :dynamic, "phx-submit", "", [], nil} in s
     refute Enum.any?(doc.events, &String.starts_with?(&1[:event] || "", "lv:"))
   end
@@ -317,7 +336,7 @@ defmodule Cartographer.HEExTest do
     heex = Enum.find(doc.stats, &(&1.language == "heex"))
     assert heex.call_sites == length(doc.events)
     assert heex.call_sites == heex.in_repo + heex.unresolved + heex.not_extracted
-    assert heex.not_extracted == 3
+    assert heex.not_extracted == 4
     assert doc.facts_version == 3
   end
 
@@ -331,5 +350,32 @@ defmodule Cartographer.HEExTest do
 
     assert {json, 0} = out
     assert %{"facts_version" => 3, "events" => [_ | _]} = JSON.decode!(json)
+  end
+
+  test "review round 1: JS.push target by name, pushEventTo, attribute calls, embed suffix, EEx errors",
+       %{doc: doc} do
+    s = sends(doc)
+
+    assert {"ShopWeb.RowComponent.render/1", "pick", "JS.push", "myself",
+            ["ShopWeb.RowComponent.handle_event/3"], "precise"} in s
+
+    assert {"ShopWeb.FoundersLive.render/1", "aimed", "pushEventTo", "dynamic", [], "heuristic"} in s
+
+    assert Enum.any?(
+             doc.calls,
+             &(short(&1.from) == "ShopWeb.PageLive.render/1" and &1.target.name == "show_modal" and
+                 &1.kind == "local")
+           )
+
+    assert Enum.find(doc.functions, &(&1.id == "x:ShopWeb.MailHTML.welcome_html/1")).file ==
+             "lib/shop_web/mail_html/welcome.html.heex"
+
+    refute Enum.any?(doc.notes, &(&1.kind == "heex_unowned"))
+
+    assert Enum.any?(
+             doc.notes,
+             &(&1.kind == "heex_parse_error" and &1.file == "lib/shop_web/live/broken2.ex" and
+                 String.starts_with?(&1.message, "line "))
+           )
   end
 end

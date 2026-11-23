@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -964,11 +965,55 @@ func (q *Q) Status(ctx context.Context) (*output.Doc, error) {
 			d.L("annotations: %s", strings.Join(st, ", "))
 		}
 	}
+	q.unreachedHandlers(ctx, d)
 	q.extractorNotes(ctx, d)
 	for _, n := range q.Notes {
 		d.L("%s", n)
 	}
 	return d, nil
+}
+
+// unreachedHandlers lists, per repo, the handle_event names no send reaches
+// (dead handlers, or ones sent by code the map can't read), eight at most.
+func (q *Q) unreachedHandlers(ctx context.Context, d *output.Doc) {
+	rows, err := q.S.DB.QueryContext(ctx, `
+	  SELECT h.repo, h.function_id, h.event, f.file, h.line FROM event_handlers h
+	    LEFT JOIN functions f ON f.snapshot_id = h.snapshot_id AND f.id = h.function_id
+	   WHERE h.snapshot_id = ? AND h.event != ''
+	     AND NOT EXISTS (SELECT 1 FROM event_links l WHERE l.snapshot_id = h.snapshot_id AND l.to_id = h.function_id AND l.event = h.event)
+	   ORDER BY h.repo, f.file, h.line, h.event`, q.Snapshot)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	byRepo := map[string][]string{}
+	var repos []string
+	for rows.Next() {
+		var repo, fn, ev string
+		var file sql.NullString
+		var line int
+		if rows.Scan(&repo, &fn, &ev, &file, &line) != nil {
+			return
+		}
+		if _, ok := byRepo[repo]; !ok {
+			repos = append(repos, repo)
+		}
+		mod := strings.TrimSuffix(strings.TrimPrefix(fn, repo+":"), ".handle_event/3")
+		byRepo[repo] = append(byRepo[repo], fmt.Sprintf("%s %q (%s:%d)", mod, ev, file.String, line))
+	}
+	if len(repos) == 0 {
+		return
+	}
+	d.L("handle_event names no send reaches")
+	for _, r := range repos {
+		list := byRepo[r]
+		more := ""
+		if len(list) > 8 {
+			more = fmt.Sprintf(" · +%d more", len(list)-8)
+			list = list[:8]
+		}
+		d.L("  %-26s %s%s", r, strings.Join(list, " · "), more)
+	}
 }
 
 // extractorNotes lists the extractors' notes per repo and kind (a template

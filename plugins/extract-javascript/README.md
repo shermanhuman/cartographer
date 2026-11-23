@@ -20,11 +20,11 @@ mise exec -- node plugins/extract-javascript/extract.mjs \
 | `--source-roots` | `assets/js` | Comma-separated directories. These files are read: `.js .mjs .cjs .jsx .ts .mts .cts .tsx` (declaration files aside). `node_modules`, dot-directories and symlinks are skipped. |
 | `--typescript` | `$CARTOGRAPHER_TYPESCRIPT` | The `mise where npm:typescript@6.0.3` directory. It may use aube's layout or npm's. Any other compiler version is refused. |
 
-Exit status 2 means bad arguments, and 1 means the compiler couldn't be loaded.
+Exit status 2 means bad arguments, and 1 any other failure (the compiler couldn't be loaded, for one).
 
 ## Reading
 
-**The fence.** The compiler sees only the snapshot (with symlinks resolved, and refused when they lead out of it) and its own lib directory. A `node_modules`, a `tsconfig.json` or any file above `--root` can't change the result, so the same commit gives the same facts on every machine.
+**The fence.** The compiler sees only the snapshot (with symlinks resolved, and refused when they lead out of it) and its own lib directory. A path that matches a file only by case (`./Foo` for `foo.js` on a case-insensitive disk) is refused, as Linux would. A `node_modules`, a `tsconfig.json` or any file above `--root` can't change the result, so the same commit gives the same facts on every machine.
 
 **Configs.**
 - Each file is read with the nearest `tsconfig.json` or `jsconfig.json` above it, inside the snapshot.
@@ -36,7 +36,8 @@ Exit status 2 means bad arguments, and 1 means the compiler couldn't be loaded.
 
 **Skipped files.**
 - A file with a line over 10,000 characters is treated as generated (a vendored SDK) and skipped, with a `minified_skipped` note.
-- A file whose expressions nest more than 1,000 deep is inventoried without resolution, with a `too_deep` note.
+- A minified, too-deep or unparsable file doesn't exist for the compiler either, so a call into it is `external`.
+- A file whose expressions nest more than 250 deep is inventoried without resolution, with a `too_deep` note.
 
 ## Output
 
@@ -52,7 +53,7 @@ Every function, arrow, method, accessor and constructor with a body.
 - **`name`** is qualified by its class or object binding (`Hooks.Chart.mounted`). Anonymous functions are `anonymous@<line>:<column>`.
 - **`kind`** is `function`, `arrow` or `method`.
 - **`arity`** counts the parameters; TypeScript's `this` parameter isn't one. `min_arity` leaves out defaults, rest parameters and optional (`?`) parameters.
-- **`(top)/0`**, kind `top`, is the file's top-level code. It exists only when that code makes a call. It is appended after every real function, so a real function named `(top)` keeps its id and the synthetic one becomes `(top)/0#2`.
+- **`(top)/0`**, kind `top`, is the file's top-level code. It exists only when that code makes a call (a JSX element like `<div/>` isn't one). It is appended after every real function, so a real function named `(top)` keeps its id and the synthetic one becomes `(top)/0#2`.
 - **`fingerprint`** is the sha256 of the function's tokens. Whitespace, comments and quote style don't change it.
 
 ### `calls`
@@ -76,21 +77,30 @@ dropped. The method comes from the init object, `GET` when there is none.
   repository.
 - **Absolute URL:** `base` names its source, the constant it came from
   (`ADMIN = process.env.ADMIN || "http://…"`) or the origin.
-- **Wrapper:** a function whose `fetch` URL or method is its parameter, like
-  `api(method, path)`. Each call to it is a request from the caller, one
-  level deep.
+- **A parameter inside a readable path** (`/users/${id}`, `"/search?q=" + term`)
+  is an interpolation: the function makes the request itself.
+- **Wrapper:** a function whose `fetch` path can't be read without its
+  parameter (`fetch(path)`, `BASE + path`), like `api(method, path)`. Each
+  call to it is a request from the caller, one level deep, with the method
+  too when it is a parameter. A wrapper no call reaches counts as
+  `not_extracted`.
 
 A fetch with no path to link (`form.action`, `BASE + compute()`) is counted
 in the `http` stats entry as `not_extracted`.
 
 ### `events`
 
-A LiveView hook's `this.pushEvent("name", …)` or `pushEventTo(selector,
-"name", …)`, inside an object literal, is a send.
+Any `x.pushEvent("name", …)` or `x.pushEventTo(selector, "name", …)` is a
+send. When it is inside a hook object (an object literal's method, or an
+arrow within one), it carries that object's registry names.
 
 - `hooks` lists every name the object is registered under in
-  `new LiveSocket(url, Socket, {hooks: {...}})`, followed through imports and
-  `const A = B` aliases.
+  `new LiveSocket(url, Socket, {hooks: …})`. The registry may be an object
+  literal (spreads followed), a variable holding one plus `Hooks.Name = {...}`
+  assignments in its file, or a namespace import. Each entry is followed
+  through imports, `export default` and `const A = B` aliases.
+- `pushEventTo` has target `dynamic` and is never linked: it goes to
+  whatever its selector matches.
 - A name built at runtime is `dynamic`.
 - The core links a send through the Elixir extractor's `hook_mounts`.
 

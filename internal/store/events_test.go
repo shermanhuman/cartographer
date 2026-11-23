@@ -58,6 +58,8 @@ func eventBundle() *bundle.Bundle {
 	js.Events = []facts.Event{
 		{From: "web:assets/js/sig.js:anonymous@6:38/1", Event: "signed", Via: "pushEvent", Hooks: []string{"DocumentSignature", "PasskeyAssertion"}, File: "assets/js/sig.js", Line: 15, Precision: facts.Heuristic},
 		{From: "web:assets/js/sig.js:anonymous@6:38/1", Dynamic: true, Via: "pushEvent", Hooks: []string{"DocumentSignature"}, File: "assets/js/sig.js", Line: 16},
+		// pushEventTo goes wherever its selector points: never linked.
+		{From: "web:assets/js/sig.js:anonymous@6:38/1", Event: "signed", Via: "pushEventTo", Target: "dynamic", Hooks: []string{"DocumentSignature"}, File: "assets/js/sig.js", Line: 17},
 	}
 
 	other := doc("other")
@@ -112,8 +114,8 @@ func TestEventLinks(t *testing.T) {
 	var sends, edges int
 	s.DB.QueryRow(`SELECT count(*) FROM event_sends`).Scan(&sends)
 	s.DB.QueryRow(`SELECT count(*) FROM edges WHERE kind = 'event'`).Scan(&edges)
-	if sends != 5 || edges != 5 {
-		t.Errorf("sends %d (want 5), event edges %d (want 5)", sends, edges)
+	if sends != 6 || edges != 5 {
+		t.Errorf("sends %d (want 6), event edges %d (want 5)", sends, edges)
 	}
 }
 

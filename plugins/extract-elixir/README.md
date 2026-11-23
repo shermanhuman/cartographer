@@ -115,7 +115,10 @@ Exit status 2 means bad arguments; nothing is written to stdout.
     module defines them.
   - `<.fun>`, `<Mod.fun>` and `<.live_component module={X}>` (a call to
     `X.render/1`) are calls of kind `component`, attributed like any other
-    call. Code in `{...}`, attribute values and `<%= %>` is walked as code.
+    call. Code in `{...}`, attribute values (event attributes included) and
+    `<%= %>` is walked as code. An event attribute whose value is a call
+    (`phx-click={show_modal("x")}`) counts as a dynamic send: what it returns
+    isn't known.
   - `use X, :kind` (and `use X`) brings in the `import` and `alias` forms of
     X's helper quote, as Phoenix's `html_helpers` does. Only one level is
     followed, through `unquote(helper())` and a nested `use`. So `<.button>`

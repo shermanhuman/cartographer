@@ -221,7 +221,7 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 
 	var out []Coverage
 	for k, r := range rowsBy {
-		if r.FilesTracked == 0 && r.FilesExtracted == 0 && r.Sends == 0 && r.HTTPRefs == 0 && r.NotExtracted == 0 {
+		if r.FilesTracked == 0 && r.FilesExtracted == 0 && r.Sends == 0 && r.Handlers == 0 && r.HTTPRefs == 0 && r.NotExtracted == 0 {
 			continue
 		}
 		switch {

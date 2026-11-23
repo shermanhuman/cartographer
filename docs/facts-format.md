@@ -21,7 +21,8 @@ validator: `internal/facts`. Check a plugin's output with
   `http_refs`, `config_urls`, `services`, `stats`, `functions[].test`), and
   a version 1 or 2 document may not carry a version 3 one (`events`,
   `event_handlers`, `hook_mounts`, `http_refs[].origin`).
-- A version 2 document needs snapshot format 2; a format 1 snapshot holding
+- A version 3 document needs snapshot format 3, and a format 2 snapshot
+  holding one is rejected. A version 2 document needs snapshot format 2; a format 1 snapshot holding
   one is rejected, and so is a format 1 manifest with format 2 fields.
 - Ids are opaque strings. Module, function and table ids are unique across
   the whole workspace (every document in a snapshot), not just within one

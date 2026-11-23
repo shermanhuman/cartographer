@@ -1,9 +1,10 @@
 defmodule Cartographer.ElixirFacts do
   @moduledoc """
-  Builds one facts v2 document for an Elixir repository from the raw output
+  Builds one facts v3 document for an Elixir repository from the raw output
   of `Cartographer.ElixirSource`: v1's sections plus Phoenix `routes`,
-  `http_refs` through Req wrappers (`Cartographer.ElixirHTTP`) and one
-  `stats` entry. See docs/facts-format.md.
+  `http_refs` through Req wrappers (`Cartographer.ElixirHTTP`), `stats`,
+  and the templates' LiveView `events`, `event_handlers` and `hook_mounts`.
+  See docs/facts-format.md.
   """
 
   alias Cartographer.{ElixirHTTP, ElixirSource}
@@ -587,7 +588,7 @@ defmodule Cartographer.ElixirFacts do
             {hd(Enum.sort_by(mods, & &1.module)), "render"}
 
           (e = embed_owner(acc.embeds, stem)) != nil ->
-            {Map.get(by_module, e), base}
+            {Map.get(by_module, e.module), base <> e.suffix}
 
           true ->
             nil
@@ -652,7 +653,9 @@ defmodule Cartographer.ElixirFacts do
 
   defp embed_owner(embeds, stem) do
     Enum.find_value(embeds, fn e ->
-      pattern = Path.join(Path.dirname(e.file), e.pattern)
+      # Matched against the path without its extensions, as the template's
+      # stem is: "page_html/*.html" is "page_html/*".
+      pattern = Path.join(Path.dirname(e.file), String.replace(e.pattern, ~r/(\.[a-z]+)+$/, ""))
 
       regex =
         pattern
@@ -660,7 +663,7 @@ defmodule Cartographer.ElixirFacts do
         |> String.replace("\\*\\*", ".*")
         |> String.replace("\\*", "[^/]*")
 
-      if Regex.match?(~r/\A#{regex}\z/, stem), do: e.module
+      if Regex.match?(~r/\A#{regex}\z/, stem), do: e
     end)
   end
 

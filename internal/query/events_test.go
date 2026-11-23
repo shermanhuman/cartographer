@@ -103,6 +103,8 @@ func TestEventAndHTTPCoverage(t *testing.T) {
 	has(t, out,
 		"web                        events     3 of 4 sends linked (75%) · dynamic 1 · unlinked 0 · 4 of 5 handle_event clauses reached (80%)",
 		"web                        http       1 of 2 requests linked to a route (50%) · no path 1",
+		"handle_event names no send reaches",
+		`web                        Page "dead" (lib/page.ex:13)`,
 		"extractor notes",
 		"web                        heex_parse_error ×1  first: lib/broken.ex")
 }

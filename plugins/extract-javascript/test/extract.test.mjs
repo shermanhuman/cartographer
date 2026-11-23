@@ -405,3 +405,71 @@ new LiveSocket("/other", Socket, {hooks});
     assert.ok(doc.events.every(e => e.precision === 'heuristic' && e.from.startsWith('x:assets/js/hooks/sig.js:')));
   } finally { fs.rmSync(root, {recursive: true}); }
 });
+
+test('a call into an unread file (syntax error, minified, too deep) is external, never a dangling id', () => {
+  const root = write({
+    'src/a.js': 'import {foo} from "./b.js";\nimport {bar} from "./min.js";\nimport {baz} from "./deep.js";\nexport function run() { return foo(1) + bar() + baz(); }\n',
+    'src/b.js': 'export function foo(x) { return x; }\nexport function broken( {\n',
+    'src/min.js': 'export function bar() {}' + ';'.repeat(10001) + '\n',
+    'src/deep.js': `export function baz() { return q${'.then(s)'.repeat(400)}; }\n`,
+  });
+  try {
+    const doc = run({repo: 't', root, sourceRoots: ['src']});
+    assert.deepEqual(doc.notes.map(n => [n.kind, n.file]), [['parse_error', 'src/b.js'], ['too_deep', 'src/deep.js'], ['minified_skipped', 'src/min.js']]);
+    assert.deepEqual(edges(doc), []);
+    const ids = new Set(doc.functions.map(f => f.id));
+    assert.ok(doc.calls.every(c => !c.to || ids.has(c.to)));
+    assert.equal(doc.stats.find(s => s.language === 'javascript').external >= 3, true);
+  } finally { fs.rmSync(root, {recursive: true}); }
+});
+
+test('fetch: a parameter inside a readable path is the function\'s own request; unreached wrappers are counted', () => {
+  const root = write({
+    'src/api.js': `
+export function loadUser(id) { return fetch(\`/api/users/\${id}\`); }
+export function search(term) { return fetch("/api/search?q=" + term, {method: "POST"}); }
+export function unused(path) { return fetch(path); }
+const BASE = "https://api.example.com";
+export function remote(path) { return fetch(BASE + path); }
+export function go() { remote("/v1/items"); }
+`,
+  });
+  try {
+    const doc = run({repo: 't', root, sourceRoots: ['src']});
+    assert.deepEqual(doc.http_refs.map(r => [short(r.from), r.method, r.path, r.origin ?? r.base]), [
+      ['src/api.js:loadUser/1', 'GET', '/api/users/:id', 'same'],
+      ['src/api.js:search/1', 'POST', '/api/search', 'same'],
+      ['src/api.js:go/0', 'GET', '/v1/items', 'BASE'],
+    ]);
+    const http = doc.stats.find(s => s.language === 'http');
+    assert.deepEqual([http.call_sites, http.refs, http.not_extracted], [4, 3, 1]);
+  } finally { fs.rmSync(root, {recursive: true}); }
+});
+
+test('hook registries: member assignments, default exports, spreads and namespace imports', () => {
+  const root = write({
+    'assets/js/hooks/a.js': 'export default { mounted() { this.pushEvent("from_default", {}); } };\n',
+    'assets/js/hooks/b.js': 'export const B = { mounted() { this.pushEvent("from_ns", {}); } };\n',
+    'assets/js/app.js': `
+import A from "./hooks/a.js";
+import * as Group from "./hooks/b.js";
+let Hooks = {};
+Hooks.Chart = { mounted() { this.pushEvent("from_member", {}); } };
+const extra = {A};
+new LiveSocket("/live", Socket, {hooks: {...Hooks, ...extra}});
+new LiveSocket("/other", Socket, {hooks: Group});
+`,
+  });
+  try {
+    const doc = run({repo: 'x', root});
+    assert.deepEqual(doc.events.map(e => [e.event, (e.hooks ?? []).join(',')]).sort(), [['from_default', 'A'], ['from_member', 'Chart'], ['from_ns', 'B']]);
+  } finally { fs.rmSync(root, {recursive: true}); }
+});
+
+test('a call through a reassignable binding is heuristic', () => {
+  const root = write({'src/a.js': 'function a() {}\nfunction b() {}\nexport function run(f, cb = a) {\n  let h = a;\n  if (f) h = b;\n  h();\n  cb();\n  const k = a;\n  k();\n  a();\n}\n'});
+  try {
+    const doc = run({repo: 't', root, sourceRoots: ['src']});
+    assert.deepEqual(edges(doc).map(e => e[2]).sort(), ['heuristic', 'heuristic', 'precise', 'precise']);
+  } finally { fs.rmSync(root, {recursive: true}); }
+});
