@@ -242,7 +242,8 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 
 // eventCoverage counts each repo's sends (linked when any event link starts
 // at the send), and the handle_event clauses that take a named event
-// (linked when an event link reaches the clause's line).
+// (reached when a send of one of the clause's names links to its function:
+// a fallback clause for the same name counts too).
 func (q *Q) eventCoverage(ctx context.Context, row func(string) *Coverage) error {
 	rows, err := q.S.DB.QueryContext(ctx, `
 	  SELECT s.repo, count(*), sum(s.dynamic),
@@ -264,10 +265,12 @@ func (q *Q) eventCoverage(ctx context.Context, row func(string) *Coverage) error
 	}
 	rows.Close()
 	rows, err = q.S.DB.QueryContext(ctx, `
-	  SELECT h.repo, count(*),
-	         sum(EXISTS (SELECT 1 FROM event_links l WHERE l.snapshot_id = h.snapshot_id AND l.to_id = h.function_id AND l.to_line = h.line))
-	    FROM (SELECT DISTINCT snapshot_id, repo, function_id, line FROM event_handlers WHERE snapshot_id = ? AND event != '') h
-	   GROUP BY h.repo`, q.Snapshot)
+	  SELECT repo, count(*), sum(linked) FROM (
+	    SELECT h.repo, h.function_id, h.line,
+	           max(EXISTS (SELECT 1 FROM event_links l WHERE l.snapshot_id = h.snapshot_id AND l.to_id = h.function_id AND l.event = h.event)) AS linked
+	      FROM event_handlers h WHERE h.snapshot_id = ? AND h.event != ''
+	     GROUP BY h.repo, h.function_id, h.line)
+	   GROUP BY repo`, q.Snapshot)
 	if err != nil {
 		return err
 	}

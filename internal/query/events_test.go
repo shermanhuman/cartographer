@@ -32,6 +32,7 @@ func newQEvents(t *testing.T) *Q {
 			{Function: "web:Page.handle_event/3", Event: "delete", Source: "head", Line: 11},
 			{Function: "web:Page.handle_event/3", Event: "signed", Source: "head", Line: 12},
 			{Function: "web:Page.handle_event/3", Event: "dead", Source: "head", Line: 13},
+			{Function: "web:Page.handle_event/3", Event: "save", Source: "head", Line: 14}, // a fallback clause
 		},
 		HookMounts: []facts.HookMount{{Hook: "Pad", From: "web:Page.render/1", Receivers: []string{"web:Page.handle_event/3"}, File: "lib/page.ex", Line: 4}},
 		Events: []facts.Event{
@@ -92,15 +93,15 @@ func TestEventAndHTTPCoverage(t *testing.T) {
 			http = &cov[i]
 		}
 	}
-	if ev == nil || ev.Sends != 4 || ev.SendsLinked != 3 || ev.SendsDynamic != 1 || ev.Handlers != 4 || ev.HandlersLinked != 3 {
-		t.Errorf("events row %+v: want 3 of 4 sends linked, 1 dynamic, 3 of 4 clauses", ev)
+	if ev == nil || ev.Sends != 4 || ev.SendsLinked != 3 || ev.SendsDynamic != 1 || ev.Handlers != 5 || ev.HandlersLinked != 4 {
+		t.Errorf("events row %+v: want 3 of 4 sends linked, 1 dynamic, 4 of 5 clauses", ev)
 	}
 	if http == nil || http.HTTPRefs != 2 || http.HTTPLinked != 1 || http.NotExtracted != 1 {
 		t.Errorf("http row %+v: want 1 of 2 linked, 1 with no path", http)
 	}
 	out := render(t)(q.Status(ctx))
 	has(t, out,
-		"web                        events     3 of 4 sends linked (75%) · dynamic 1 · unlinked 0 · 3 of 4 handle_event clauses reached (75%)",
+		"web                        events     3 of 4 sends linked (75%) · dynamic 1 · unlinked 0 · 4 of 5 handle_event clauses reached (80%)",
 		"web                        http       1 of 2 requests linked to a route (50%) · no path 1",
 		"extractor notes",
 		"web                        heex_parse_error ×1  first: lib/broken.ex")
