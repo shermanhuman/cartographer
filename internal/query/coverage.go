@@ -31,8 +31,21 @@ type Coverage struct {
 	Functions       int `json:"functions"`
 	FunctionsLinked int `json:"functions_linked"`
 
-	// Note explains a row with no call figures: "no extractor", or "not
-	// resolved by design" for an inventory-only extractor (JavaScript).
+	// Language "events": LiveView event sends (phx-* attributes, JS.push,
+	// hook pushEvent) linked to a handle_event, unlinked, and dynamic (a
+	// name built at runtime); handle_event clauses that take a named event,
+	// and those at least one send reaches.
+	Sends          int `json:"sends,omitempty"`
+	SendsLinked    int `json:"sends_linked,omitempty"`
+	SendsDynamic   int `json:"sends_dynamic,omitempty"`
+	Handlers       int `json:"handler_clauses,omitempty"`
+	HandlersLinked int `json:"handler_clauses_linked,omitempty"`
+	// Language "http": requests with a path (refs), those linked to a
+	// route, and requests with no path to link (NotExtracted).
+	HTTPRefs   int `json:"http_refs,omitempty"`
+	HTTPLinked int `json:"http_linked,omitempty"`
+
+	// Note explains a row with no call figures: "no extractor".
 	Note string `json:"note,omitempty"`
 }
 
@@ -42,7 +55,7 @@ var languageExts = map[string][]string{
 	"rust":       {".rs"},
 	"elixir":     {".ex", ".exs"},
 	"javascript": {".js", ".mjs", ".cjs", ".jsx"},
-	"typescript": {".ts", ".tsx"},
+	"typescript": {".ts", ".tsx", ".mts", ".cts"},
 	"python":     {".py"},
 }
 
@@ -56,10 +69,6 @@ const coverageFunctionsSQL = `
     UNION
     SELECT to_id FROM edges WHERE snapshot_id = ?1)
   SELECT f.repo, f.file, f.id IN linked FROM functions f WHERE f.snapshot_id = ?1`
-
-// inventoryOnly languages have an extractor that lists files and functions
-// but resolves no calls.
-var inventoryOnly = map[string]bool{"javascript": true}
 
 // Coverage computes one row per (repo, language) that the repo tracks files
 // in, for the current snapshot. Snapshots without an inventory (format 1)
@@ -135,6 +144,15 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 			rows.Close()
 			return nil, err
 		}
+		switch lang {
+		case "heex":
+			// Template sends: counted from the event tables below, with the
+			// hooks' pushEvent sends and the linker's links.
+			continue
+		case "http":
+			row(repo, "http").NotExtracted += s.NotExtracted
+			continue
+		}
 		r := row(repo, lang)
 		r.CallSites, r.InRepo, r.Dispatch, r.External, r.Unresolved, r.Refs, r.NotExtracted = s.CallSites, s.InRepo, s.Dispatch, s.External, s.Unresolved, s.Refs, s.NotExtracted
 		withStats[key{repo, lang}] = true
@@ -183,7 +201,7 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 			return nil, err
 		}
 		lang, ok := extLang[strings.ToLower(path.Ext(file))]
-		if !ok || withStats[key{repo, lang}] || inventoryOnly[lang] {
+		if !ok || withStats[key{repo, lang}] {
 			continue
 		}
 		r := row(repo, lang)
@@ -194,17 +212,22 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 	}
 	rows.Close()
 
+	if err := q.eventCoverage(ctx, func(repo string) *Coverage { return row(repo, "events") }); err != nil {
+		return nil, err
+	}
+	if err := q.httpCoverage(ctx, func(repo string) *Coverage { return row(repo, "http") }); err != nil {
+		return nil, err
+	}
+
 	var out []Coverage
 	for k, r := range rowsBy {
-		if r.FilesTracked == 0 && r.FilesExtracted == 0 {
+		if r.FilesTracked == 0 && r.FilesExtracted == 0 && r.Sends == 0 && r.HTTPRefs == 0 && r.NotExtracted == 0 {
 			continue
 		}
 		switch {
-		case withStats[k], counted[k]:
+		case withStats[k], counted[k], k.lang == "events", k.lang == "http":
 		case r.FilesExtracted == 0:
 			r.Note = "no extractor"
-		case inventoryOnly[k.lang]:
-			r.Note = "not resolved by design"
 		}
 		out = append(out, *r)
 	}
@@ -217,9 +240,89 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 	return out, nil
 }
 
+// eventCoverage counts each repo's sends (linked when any event link starts
+// at the send), and the handle_event clauses that take a named event
+// (linked when an event link reaches the clause's line).
+func (q *Q) eventCoverage(ctx context.Context, row func(string) *Coverage) error {
+	rows, err := q.S.DB.QueryContext(ctx, `
+	  SELECT s.repo, count(*), sum(s.dynamic),
+	         sum(EXISTS (SELECT 1 FROM event_links l WHERE l.snapshot_id = s.snapshot_id AND l.from_id = s.from_id
+	                     AND l.file = s.file AND l.line = s.line AND l.event = s.event))
+	    FROM event_sends s WHERE s.snapshot_id = ? GROUP BY s.repo`, q.Snapshot)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var repo string
+		var n, dyn, linked int
+		if err := rows.Scan(&repo, &n, &dyn, &linked); err != nil {
+			rows.Close()
+			return err
+		}
+		r := row(repo)
+		r.Sends, r.SendsDynamic, r.SendsLinked = n, dyn, linked
+	}
+	rows.Close()
+	rows, err = q.S.DB.QueryContext(ctx, `
+	  SELECT h.repo, count(*),
+	         sum(EXISTS (SELECT 1 FROM event_links l WHERE l.snapshot_id = h.snapshot_id AND l.to_id = h.function_id AND l.to_line = h.line))
+	    FROM (SELECT DISTINCT snapshot_id, repo, function_id, line FROM event_handlers WHERE snapshot_id = ? AND event != '') h
+	   GROUP BY h.repo`, q.Snapshot)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var repo string
+		var n, linked int
+		if err := rows.Scan(&repo, &n, &linked); err != nil {
+			return err
+		}
+		r := row(repo)
+		r.Handlers, r.HandlersLinked = n, linked
+	}
+	return rows.Err()
+}
+
+// httpCoverage counts each repo's HTTP refs, and those linked to a route.
+func (q *Q) httpCoverage(ctx context.Context, row func(string) *Coverage) error {
+	rows, err := q.S.DB.QueryContext(ctx, `
+	  SELECT r.repo, count(*),
+	         sum(EXISTS (SELECT 1 FROM http_links l WHERE l.snapshot_id = r.snapshot_id AND l.from_id = r.from_id
+	                     AND l.file = r.file AND l.line = r.line))
+	    FROM http_refs r WHERE r.snapshot_id = ? GROUP BY r.repo`, q.Snapshot)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var repo string
+		var n, linked int
+		if err := rows.Scan(&repo, &n, &linked); err != nil {
+			return err
+		}
+		r := row(repo)
+		r.HTTPRefs, r.HTTPLinked = n, linked
+	}
+	return rows.Err()
+}
+
 // Line renders a coverage row for status: files, call sites in the repo,
-// functions linked.
+// functions linked; for "events", sends and handler clauses linked; for
+// "http", requests linked to a route.
 func (c Coverage) Line() string {
+	switch c.Language {
+	case "events":
+		return fmt.Sprintf("%-26s %-10s %d of %d sends linked (%s) · dynamic %d · unlinked %d · %d of %d handle_event clauses reached (%s)",
+			c.Repo, c.Language, c.SendsLinked, c.Sends, pct(c.SendsLinked, c.Sends), c.SendsDynamic, c.Sends-c.SendsLinked-c.SendsDynamic,
+			c.HandlersLinked, c.Handlers, pct(c.HandlersLinked, c.Handlers))
+	case "http":
+		s := fmt.Sprintf("%-26s %-10s %d of %d requests linked to a route (%s)", c.Repo, c.Language, c.HTTPLinked, c.HTTPRefs, pct(c.HTTPLinked, c.HTTPRefs))
+		if c.NotExtracted > 0 {
+			s += fmt.Sprintf(" · no path %d", c.NotExtracted)
+		}
+		return s
+	}
 	files := fmt.Sprintf("%d/%d files", c.FilesExtracted, c.FilesTracked)
 	if c.Note != "" {
 		return fmt.Sprintf("%-26s %-10s %-14s %s", c.Repo, c.Language, files, c.Note)

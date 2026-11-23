@@ -384,6 +384,9 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
   // fetch: refs, wrappers (functions whose fetch URL is a parameter) and
   // the resolved calls that might reach a wrapper.
   const http = {refs: [], wrappers: new Map(), calls: [], sites: 0, unbuilt: 0};
+  // LiveView hooks: the names each hook object is registered under, and
+  // the pushEvent calls inside hook objects.
+  const hooks = {registry: new Map(), pushes: []};
   const stat = (lang) => { if (!stats.has(lang)) stats.set(lang, {language: lang, call_sites: 0, in_repo: 0, dispatch: 0, external: 0, unresolved: 0, refs: 0, not_extracted: 0}); return stats.get(lang); };
   const extracted = new Set(files);
 
@@ -417,12 +420,12 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
         notes.push({kind: 'parse_error', file, message: where + (d ? ts.flattenDiagnosticMessageText(d.messageText, ' ') : 'not read')});
         continue;
       }
-      walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat, http});
+      walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat, http, hooks});
     }
   }
 
   for (const {file, sf} of deep) {
-    walkFile({ts, K, N, sf, file, lang: languageOf(file), repo, checker: null, relOf: null, extracted, modules, functions, calls, stat, http});
+    walkFile({ts, K, N, sf, file, lang: languageOf(file), repo, checker: null, relOf: null, extracted, modules, functions, calls, stat, http, hooks});
   }
 
   // One level of wrapper: a call to api("GET", "/dial/me") is a request
@@ -448,6 +451,14 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
   // top-level code made the call.
   const known = new Set(functions.map(f => f.id));
   http.refs = http.refs.filter(r => known.has(r.from));
+  const events = hooks.pushes.filter(p => known.has(p.from)).map(p => ({
+    from: p.from,
+    ...(p.event === null ? {dynamic: true} : {event: p.event}),
+    via: p.via,
+    ...(p.via === 'pushEventTo' ? {target: 'dynamic'} : {}),
+    ...(p.owner && hooks.registry.get(p.owner)?.size ? {hooks: [...hooks.registry.get(p.owner)].sort()} : {}),
+    file: p.file, line: p.line, precision: 'heuristic',
+  }));
 
   const cmp = (...keys) => (a, b) => {
     for (const k of keys) { const x = k(a), y = k(b); if (x < y) return -1; if (x > y) return 1; }
@@ -464,6 +475,7 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
     functions: functions.sort(cmp(f => f.id)),
     calls: uniqueCalls.sort(cmp(c => c.file, c => c.line, c => c.from, c => c.to ?? '', c => c.target?.module ?? '', c => c.target?.name ?? '', c => c.target?.arity ?? 0, c => c.kind)),
     notes: notes.sort(cmp(n => n.file ?? '', n => n.kind, n => n.message)),
+    ...(events.length ? {events: events.sort(cmp(e => e.file, e => e.line, e => e.from, e => e.event ?? ''))} : {}),
     http_refs: [...new Map(http.refs.map(r => [JSON.stringify(r), r])).values()].sort(cmp(r => r.file, r => r.line, r => r.from, r => r.method, r => r.path)),
     stats: [...stats.values()].filter(s => s.call_sites > 0).sort(cmp(s => s.language)),
   };
@@ -524,7 +536,7 @@ function fnIndex(ts, N, sf, moduleId) {
   return out;
 }
 
-function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat, http}) {
+function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat, http, hooks}) {
   const moduleId = `${repo}:${file}`;
   modules.push({id: moduleId, name: file, namespace: file.replace(/\.[^./]+$/, '').split('/'), file, line: 1, language: lang});
   const idx = fnIndex(ts, N, sf, moduleId);
@@ -585,6 +597,20 @@ function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, mo
     const arity = jsx ? 1 : Math.min(node.arguments?.length ?? 0, MAX_ARITY);
     s.call_sites++;
     const r = resolve({ts, K, N, node, callee, jsx, checker, relOf, extracted, repo});
+    if (checker && node.kind === K.NewExpression && calleeName(K, N, callee) === 'LiveSocket') {
+      const opts = node.arguments?.[2] && N.skip(node.arguments[2]);
+      const reg = opts?.kind === K.ObjectLiteralExpression && opts.properties.find(p => p.name && N.keyName(p.name) === 'hooks');
+      if (reg?.kind === K.ShorthandPropertyAssignment) {
+        // {hooks}: the variable it names.
+        let sym;
+        try { sym = checker.getShorthandAssignmentValueSymbol(reg); } catch { sym = undefined; }
+        const obj = declObject(ts, K, N, checker, sym, 0);
+        if (obj) registerHooks(ts, K, N, checker, obj, hooks);
+      } else if (reg?.kind === K.PropertyAssignment) {
+        registerHooks(ts, K, N, checker, reg.initializer, hooks);
+      }
+    }
+    if (checker && !jsx && node.kind === K.CallExpression) hookCall({ts, K, N, checker, node, callee, encl, from, file, line, hooks, methodOwner});
     if (checker && !jsx && node.kind === K.CallExpression && isFetch(K, callee)) {
       if (fetchRef({ts, K, N, checker, node, encl, from, file, line, http})) topUsed ||= !encl;
     }
@@ -617,6 +643,67 @@ function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, mo
     functions.push({id: top.id, module: moduleId, name: TOP, arity: 0, min_arity: 0, kind: 'top', file, line: 1, clauses: [1],
       fingerprint: fingerprint(ts, tokens, starts, 0, sf.end)});
   }
+}
+
+// ---- LiveView hooks ---------------------------------------------------------
+
+// hookCall records `new LiveSocket(url, Socket, {hooks: {...}})` registries
+// and `this.pushEvent("name")` sends inside a hook object.
+function hookCall({ts, K, N, checker, node, callee, encl, from, file, line, hooks, methodOwner}) {
+  if (callee.kind === K.PropertyAccessExpression && ['pushEvent', 'pushEventTo'].includes(callee.name.text)) {
+    const via = callee.name.text;
+    const arg = node.arguments[via === 'pushEventTo' ? 1 : 0];
+    if (!arg) return;
+    const parts = valueParts(ts, K, N, checker, arg, encl, 0);
+    const event = parts.length && parts.every(p => p.lit !== undefined && !p.base) ? parts.map(p => p.lit).join('') : null;
+    hooks.pushes.push({from, owner: encl ? methodOwner(encl) : null, event, via, file, line});
+  }
+}
+
+// The hook objects a `hooks` registry names: {Name: obj} and {obj} entries,
+// followed through imports and `const A = B` aliases to an object literal.
+function registerHooks(ts, K, N, checker, registry, hooks) {
+  const reg = N.skip(registry);
+  let props = [];
+  if (reg.kind === K.ObjectLiteralExpression) props = reg.properties;
+  else if (reg.kind === K.Identifier) {
+    const obj = objectOf(ts, K, N, checker, reg, 0);
+    if (obj) props = obj.properties;
+  }
+  for (const p of props) {
+    let name, value;
+    if (p.kind === K.ShorthandPropertyAssignment) {
+      name = p.name.text;
+      let sym;
+      try { sym = checker.getShorthandAssignmentValueSymbol(p); } catch { sym = undefined; }
+      value = declObject(ts, K, N, checker, sym, 0);
+    } else if (p.kind === K.PropertyAssignment) {
+      name = N.keyName(p.name);
+      value = objectOf(ts, K, N, checker, p.initializer, 0);
+    }
+    if (!name || !value) continue;
+    if (!hooks.registry.has(value)) hooks.registry.set(value, new Set());
+    hooks.registry.get(value).add(name);
+  }
+}
+
+function objectOf(ts, K, N, checker, expr, depth) {
+  expr = N.skip(expr);
+  if (expr.kind === K.ObjectLiteralExpression) return expr;
+  if (expr.kind !== K.Identifier || depth > 5) return null;
+  let sym;
+  try { sym = checker.getSymbolAtLocation(expr); } catch { sym = undefined; }
+  return declObject(ts, K, N, checker, sym, depth);
+}
+
+function declObject(ts, K, N, checker, sym, depth) {
+  if (!sym) return null;
+  if (sym.flags & ts.SymbolFlags.Alias) {
+    try { sym = checker.getAliasedSymbol(sym); } catch { return null; }
+  }
+  const d = sym?.valueDeclaration ?? sym?.declarations?.[0];
+  if (d && d.kind === K.VariableDeclaration && d.initializer) return objectOf(ts, K, N, checker, d.initializer, depth + 1);
+  return null;
 }
 
 // ---- fetch -----------------------------------------------------------------

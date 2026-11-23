@@ -964,8 +964,38 @@ func (q *Q) Status(ctx context.Context) (*output.Doc, error) {
 			d.L("annotations: %s", strings.Join(st, ", "))
 		}
 	}
+	q.extractorNotes(ctx, d)
 	for _, n := range q.Notes {
 		d.L("%s", n)
 	}
 	return d, nil
+}
+
+// extractorNotes lists the extractors' notes per repo and kind (a template
+// that didn't parse, a config that fell back, a skipped minified file), with
+// the first file of each.
+func (q *Q) extractorNotes(ctx context.Context, d *output.Doc) {
+	rows, err := q.S.DB.QueryContext(ctx, `SELECT repo, kind, count(*), COALESCE(min(NULLIF(file, '')), '') FROM notes WHERE snapshot_id = ?
+	  GROUP BY repo, kind ORDER BY repo, kind`, q.Snapshot)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	first := true
+	for rows.Next() {
+		var repo, kind, file string
+		var n int
+		if rows.Scan(&repo, &kind, &n, &file) != nil {
+			return
+		}
+		if first {
+			d.L("extractor notes")
+			first = false
+		}
+		line := fmt.Sprintf("  %-26s %s ×%d", repo, kind, n)
+		if file != "" {
+			line += "  first: " + file
+		}
+		d.L("%s", line)
+	}
 }

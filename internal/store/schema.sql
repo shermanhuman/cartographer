@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS http_refs (
   method TEXT NOT NULL DEFAULT '',
   path TEXT NOT NULL,
   base TEXT NOT NULL DEFAULT '',
+  origin TEXT NOT NULL DEFAULT '', -- 'same': a browser request to its own repo
   file TEXT NOT NULL DEFAULT '',
   line INTEGER NOT NULL DEFAULT 0
 );
@@ -247,8 +248,65 @@ CREATE TABLE IF NOT EXISTS inventory (
   PRIMARY KEY (snapshot_id, repo, ext)
 );
 
+-- Facts version 3: LiveView events. A send is one place that sends an event
+-- (a phx-* attribute, JS.push or a hook's pushEvent); a handler is one name
+-- a handle_event clause takes; a mount is one phx-hook in a template.
+CREATE TABLE IF NOT EXISTS event_sends (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  from_id TEXT NOT NULL,
+  event TEXT NOT NULL DEFAULT '',  -- '' when dynamic
+  dynamic INTEGER NOT NULL DEFAULT 0,
+  via TEXT NOT NULL,
+  target TEXT NOT NULL DEFAULT '',
+  hooks TEXT NOT NULL DEFAULT '[]',
+  file TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS event_handlers (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  function_id TEXT NOT NULL,
+  event TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL,            -- head | guard | attribute | delegate
+  delegate_id TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS event_handlers_function ON event_handlers(snapshot_id, function_id);
+
+CREATE TABLE IF NOT EXISTS hook_mounts (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  hook TEXT NOT NULL,
+  from_id TEXT NOT NULL,
+  receivers TEXT NOT NULL DEFAULT '[]',
+  file TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0
+);
+
+-- send -> handle_event edges: resolved by the extractor for templates, by the
+-- linker for a hook's pushEvent (through the hook's mounts). to_line is the
+-- clause that takes the event.
+CREATE TABLE IF NOT EXISTS event_links (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  from_id TEXT NOT NULL,
+  to_id TEXT NOT NULL,
+  event TEXT NOT NULL,
+  via TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  precision TEXT NOT NULL,
+  provenance TEXT NOT NULL DEFAULT '',
+  file TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0,
+  to_line INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS event_links_from ON event_links(snapshot_id, from_id);
+CREATE INDEX IF NOT EXISTS event_links_to ON event_links(snapshot_id, to_id);
+
 -- Every resolved edge, one shape: calls (call, dispatch, ...), route -> handler
--- ('route') and function -> route ('http'). Readers that follow edges use this.
+-- ('route'), function -> route ('http') and send -> handle_event ('event').
+-- Readers that follow edges use this.
 -- +to_id keeps the planner on calls_from for a from_id lookup (to_id IS NOT
 -- NULL would otherwise pick calls_to and scan the snapshot's calls).
 CREATE VIEW IF NOT EXISTS edges AS
@@ -256,7 +314,9 @@ CREATE VIEW IF NOT EXISTS edges AS
   UNION ALL
   SELECT snapshot_id, id, handler_id, 'route', precision, repo, file, line FROM routes WHERE handler_id != ''
   UNION ALL
-  SELECT snapshot_id, from_id, route_id, 'http', precision, repo, file, line FROM http_links;
+  SELECT snapshot_id, from_id, route_id, 'http', precision, repo, file, line FROM http_links
+  UNION ALL
+  SELECT snapshot_id, from_id, to_id, 'event', precision, repo, file, line FROM event_links;
 
 -- Every edge endpoint: functions and routes.
 CREATE VIEW IF NOT EXISTS nodes AS

@@ -371,3 +371,37 @@ await fetch("https://api.example.com/v2/items?x=1", {method: "delete"});
     assert.deepEqual([http.call_sites, http.refs, http.not_extracted], [11, 8, 3]);
   } finally { fs.rmSync(root, {recursive: true}); }
 });
+
+test('hook pushEvent: the registry names a hook object is bound to', () => {
+  const root = write({
+    'assets/js/hooks/sig.js': `
+export const DocumentSignature = {
+  mounted() {
+    this.handleEvent("document:sign", () => { this.pushEvent("passkey-signed", {}); });
+    this.pushEventTo("#x", "aimed", {});
+    this.pushEvent(this.el.dataset.event, {});
+  },
+};
+export const PasskeyAssertion = DocumentSignature;
+export const Unregistered = { mounted() { this.pushEvent("lost", {}); } };
+`,
+    'assets/js/app.js': `
+import {LiveSocket} from "phoenix_live_view";
+import {DocumentSignature, PasskeyAssertion} from "./hooks/sig";
+const hooks = {DocumentSignature, PasskeyAssertion};
+new LiveSocket("/live", Socket, {hooks: {...colocated, Sig: DocumentSignature, PasskeyAssertion}});
+new LiveSocket("/other", Socket, {hooks});
+`,
+  });
+  try {
+    const doc = run({repo: 'x', root});
+    const ev = doc.events.map(e => [e.event ?? 'DYN', e.via, (e.hooks ?? []).join(','), e.target ?? '', e.line]);
+    assert.deepEqual(ev, [
+      ['passkey-signed', 'pushEvent', 'DocumentSignature,PasskeyAssertion,Sig', '', 4],
+      ['aimed', 'pushEventTo', 'DocumentSignature,PasskeyAssertion,Sig', 'dynamic', 5],
+      ['DYN', 'pushEvent', 'DocumentSignature,PasskeyAssertion,Sig', '', 6],
+      ['lost', 'pushEvent', '', '', 10],
+    ]);
+    assert.ok(doc.events.every(e => e.precision === 'heuristic' && e.from.startsWith('x:assets/js/hooks/sig.js:')));
+  } finally { fs.rmSync(root, {recursive: true}); }
+});
