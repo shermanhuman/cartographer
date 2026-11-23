@@ -30,6 +30,10 @@ var (
 	// the repo's code, so its version is cartographer's, not the repo's
 	// (repos using it often pin no Node at all).
 	Node = Tool{Name: "node", Version: "26.12.1"}
+	// TypeScript is the compiler the JavaScript plugin parses and resolves
+	// with. The package has no dependencies, so the pin is all that runs;
+	// 6 because TypeScript 7 ships no compiler API.
+	TypeScript = Tool{Name: "npm:typescript", Version: "6.0.3"}
 	// Postgres is the throwaway cluster of a `postgres = "managed"` schema
 	// step (mise's postgres, the conda:postgresql backend); one version
 	// gives one schema whatever the machine.
@@ -52,6 +56,8 @@ func (t Tool) Bin() string {
 		return "cargo"
 	case "erlang":
 		return "erl"
+	case "npm:typescript":
+		return "tsc"
 	}
 	if i := strings.LastIndexAny(t.Name, ":/"); i >= 0 {
 		return t.Name[i+1:]
@@ -146,7 +152,7 @@ func ExtractorTools(extractor string, pins map[string]string) ([]Tool, error) {
 	case "elixir", "schema":
 		return need("erlang", "elixir") // elixir installs on erlang
 	case "javascript":
-		return []Tool{Node}, nil
+		return []Tool{Node, TypeScript}, nil
 	}
 	return nil, nil // in-process
 }
@@ -240,7 +246,7 @@ func miseFree(env []string) []string {
 // PATH an install's check runs with, so putting Erlang's bin dir ahead of
 // PATH doesn't help; mise sees a dependency only when it is named in the
 // same `mise install`.
-var installDeps = map[string][]string{"elixir": {"erlang"}}
+var installDeps = map[string][]string{"elixir": {"erlang"}, "npm:typescript": {"node"}}
 
 // ensure installs t when mise doesn't have it and returns its bin paths.
 // prior holds the tools already ensured in the same set, at the versions
@@ -437,6 +443,19 @@ func (m *Mise) ResolveInstalled(ctx context.Context, tools []Tool) ([]Tool, erro
 		out[i] = Tool{Name: t.Name, Version: got[t.Spec()]}
 	}
 	return out, nil
+}
+
+// Where is t's install directory (`mise where`), installing it first when
+// mise doesn't have it.
+func (m *Mise) Where(ctx context.Context, t Tool) (string, error) {
+	if _, err := m.ensure(ctx, t, nil); err != nil {
+		return "", err
+	}
+	out, err := m.mise(ctx, "where", t.Spec())
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // BinPaths installs t when mise doesn't have it and returns its bin paths,

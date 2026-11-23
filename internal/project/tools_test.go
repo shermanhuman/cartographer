@@ -183,3 +183,53 @@ func TestPinsReadTablesArraysAndToolVersions(t *testing.T) {
 		}
 	}
 }
+
+// The JavaScript extractor's tools, through the real mise: node and the
+// pinned TypeScript resolve inside their installs, Where finds the
+// compiler's install, and the plugin runs with only what cartographer
+// passes (no ambient TypeScript, no CARTOGRAPHER_TYPESCRIPT). Nothing is
+// installed: it skips when the pins aren't installed, and CI's indexer step
+// installs them and requires it.
+func TestJavaScriptToolsRunThePlugin(t *testing.T) {
+	mise, err := exec.LookPath("mise")
+	if err != nil {
+		t.Skip("mise not on PATH")
+	}
+	for _, tl := range []project.Tool{project.Node, project.TypeScript} {
+		cmd := exec.Command(mise, "where", tl.Spec())
+		cmd.Env = append(os.Environ(), "MISE_NO_CONFIG=1")
+		if err := cmd.Run(); err != nil {
+			if os.Getenv("CARTOGRAPHER_REQUIRE_INDEXERS") != "" {
+				t.Fatalf("%s is not installed", tl.Spec())
+			}
+			t.Skipf("%s not installed in mise", tl.Spec())
+		}
+	}
+	t.Setenv("CARTOGRAPHER_TYPESCRIPT", "")
+	t.Setenv("PATH", strings.Join([]string{filepath.Dir(mise), "/usr/bin", "/bin"}, string(os.PathListSeparator)))
+	m := &project.Mise{Bin: mise, Dir: t.TempDir()}
+	tools, err := project.ExtractorTools("javascript", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := m.Env(context.Background(), tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Installs) != 0 {
+		t.Errorf("installed %v", m.Installs)
+	}
+	where, err := m.Where(context.Background(), project.TypeScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _ := filepath.Abs("../../plugins/extract-javascript")
+	out, err := runIn(t, env, t.TempDir(), "node", filepath.Join(root, "extract.mjs"), "--repo", "shop", "--root", filepath.Join(root, "test", "fixture"), "--typescript", where)
+	if err != nil || !strings.Contains(out, `"stats":[{"language":"javascript"`) {
+		t.Fatalf("plugin: %v\n%s", err, out)
+	}
+	// Without --typescript the plugin refuses, rather than guessing.
+	if out, err := runIn(t, env, t.TempDir(), "node", filepath.Join(root, "extract.mjs"), "--repo", "shop", "--root", filepath.Join(root, "test", "fixture")); err == nil || !strings.Contains(out, "no TypeScript") {
+		t.Fatalf("plugin without --typescript: %v\n%s", err, out)
+	}
+}

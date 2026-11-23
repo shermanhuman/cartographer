@@ -1,0 +1,370 @@
+[
+ {
+  "id": "corpus:assets/js/names.js:(top)/0",
+  "name": "(top)",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 47
+ },
+ {
+  "id": "corpus:assets/js/names.js:Anon.m/0",
+  "name": "Anon.m",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 34
+ },
+ {
+  "id": "corpus:assets/js/names.js:Hooks.Chart.42/0",
+  "name": "Hooks.Chart.42",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 20
+ },
+ {
+  "id": "corpus:assets/js/names.js:Hooks.Chart.arrowed/1",
+  "name": "Hooks.Chart.arrowed",
+  "arity": 1,
+  "min_arity": 1,
+  "kind": "arrow",
+  "line": 18
+ },
+ {
+  "id": "corpus:assets/js/names.js:Hooks.Chart.mounted/0",
+  "name": "Hooks.Chart.mounted",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 14
+ },
+ {
+  "id": "corpus:assets/js/names.js:Hooks.Chart.plain/0",
+  "name": "Hooks.Chart.plain",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 17
+ },
+ {
+  "id": "corpus:assets/js/names.js:Hooks.Chart.quoted key/0",
+  "name": "Hooks.Chart.quoted key",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 19
+ },
+ {
+  "id": "corpus:assets/js/names.js:Hooks.Chart.size/0",
+  "name": "Hooks.Chart.size",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 15
+ },
+ {
+  "id": "corpus:assets/js/names.js:Hooks.Chart.size/1",
+  "name": "Hooks.Chart.size",
+  "arity": 1,
+  "min_arity": 1,
+  "kind": "method",
+  "line": 16
+ },
+ {
+  "id": "corpus:assets/js/names.js:Named.m/0",
+  "name": "Named.m",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 33
+ },
+ {
+  "id": "corpus:assets/js/names.js:Widget.constructor/1",
+  "name": "Widget.constructor",
+  "arity": 1,
+  "min_arity": 1,
+  "kind": "method",
+  "line": 25
+ },
+ {
+  "id": "corpus:assets/js/names.js:Widget.field/0",
+  "name": "Widget.field",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "arrow",
+  "line": 28
+ },
+ {
+  "id": "corpus:assets/js/names.js:Widget.make/0",
+  "name": "Widget.make",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 27
+ },
+ {
+  "id": "corpus:assets/js/names.js:Widget.secret/0",
+  "name": "Widget.secret",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 29
+ },
+ {
+  "id": "corpus:assets/js/names.js:Widget.update/2",
+  "name": "Widget.update",
+  "arity": 2,
+  "min_arity": 1,
+  "kind": "method",
+  "line": 26
+ },
+ {
+  "id": "corpus:assets/js/names.js:Widget.value/0",
+  "name": "Widget.value",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 30
+ },
+ {
+  "id": "corpus:assets/js/names.js:a/0",
+  "name": "a",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "arrow",
+  "line": 35
+ },
+ {
+  "id": "corpus:assets/js/names.js:anonymous@21:14/0",
+  "name": "anonymous@21:14",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 21
+ },
+ {
+  "id": "corpus:assets/js/names.js:anonymous@31:11/0",
+  "name": "anonymous@31:11",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 31
+ },
+ {
+  "id": "corpus:assets/js/names.js:anonymous@39:11/1",
+  "name": "anonymous@39:11",
+  "arity": 1,
+  "min_arity": 1,
+  "kind": "function",
+  "line": 39
+ },
+ {
+  "id": "corpus:assets/js/names.js:anonymous@40:11/1",
+  "name": "anonymous@40:11",
+  "arity": 1,
+  "min_arity": 1,
+  "kind": "arrow",
+  "line": 40
+ },
+ {
+  "id": "corpus:assets/js/names.js:anonymous@41:20/0",
+  "name": "anonymous@41:20",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "arrow",
+  "line": 41
+ },
+ {
+  "id": "corpus:assets/js/names.js:anonymous@42:1/0",
+  "name": "anonymous@42:1",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "arrow",
+  "line": 42
+ },
+ {
+  "id": "corpus:assets/js/names.js:anonymous@46:11/0",
+  "name": "anonymous@46:11",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "arrow",
+  "line": 46
+ },
+ {
+  "id": "corpus:assets/js/names.js:arrow/1",
+  "name": "arrow",
+  "arity": 1,
+  "min_arity": 1,
+  "kind": "arrow",
+  "line": 5
+ },
+ {
+  "id": "corpus:assets/js/names.js:assigned/0",
+  "name": "assigned",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 8
+ },
+ {
+  "id": "corpus:assets/js/names.js:asyncDecl/0",
+  "name": "asyncDecl",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 43
+ },
+ {
+  "id": "corpus:assets/js/names.js:b/0",
+  "name": "b",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 35
+ },
+ {
+  "id": "corpus:assets/js/names.js:declared/3",
+  "name": "declared",
+  "arity": 3,
+  "min_arity": 1,
+  "kind": "function",
+  "line": 3
+ },
+ {
+  "id": "corpus:assets/js/names.js:default/0",
+  "name": "default",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 4
+ },
+ {
+  "id": "corpus:assets/js/names.js:defaults/2",
+  "name": "defaults",
+  "arity": 2,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 35
+ },
+ {
+  "id": "corpus:assets/js/names.js:gen/0",
+  "name": "gen",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 44
+ },
+ {
+  "id": "corpus:assets/js/names.js:iife/0",
+  "name": "iife",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 41
+ },
+ {
+  "id": "corpus:assets/js/names.js:inner/0",
+  "name": "inner",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 6
+ },
+ {
+  "id": "corpus:assets/js/names.js:nest.a.b.c/0",
+  "name": "nest.a.b.c",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 38
+ },
+ {
+  "id": "corpus:assets/js/names.js:o.(top)/0",
+  "name": "o.(top)",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 45
+ },
+ {
+  "id": "corpus:assets/js/names.js:o.am/0",
+  "name": "o.am",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 45
+ },
+ {
+  "id": "corpus:assets/js/names.js:o.gm/0",
+  "name": "o.gm",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "method",
+  "line": 45
+ },
+ {
+  "id": "corpus:assets/js/names.js:outerA/0",
+  "name": "outerA",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 36
+ },
+ {
+  "id": "corpus:assets/js/names.js:outerB/0",
+  "name": "outerB",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 37
+ },
+ {
+  "id": "corpus:assets/js/names.js:tail/0",
+  "name": "tail",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "arrow",
+  "line": 11
+ },
+ {
+  "id": "corpus:assets/js/names.js:this.local/0",
+  "name": "this.local",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "arrow",
+  "line": 14
+ },
+ {
+  "id": "corpus:assets/js/names.js:this.self/0",
+  "name": "this.self",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 10
+ },
+ {
+  "id": "corpus:assets/js/names.js:twice/0",
+  "name": "twice",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 36
+ },
+ {
+  "id": "corpus:assets/js/names.js:twice/0#2",
+  "name": "twice",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "function",
+  "line": 37
+ },
+ {
+  "id": "corpus:assets/js/names.js:window.app.handler/0",
+  "name": "window.app.handler",
+  "arity": 0,
+  "min_arity": 0,
+  "kind": "arrow",
+  "line": 9
+ }
+]
