@@ -798,6 +798,8 @@ defmodule Cartographer.ElixirSource do
 
   # LiveView's own events (lv:clear-flash) aren't the app's to handle.
   defp add_event(acc, _env, _via, "lv:" <> _, _target, _l), do: acc
+  # An empty name is no name.
+  defp add_event(acc, env, via, "", target, l), do: add_event(acc, env, via, :dynamic, target, l)
 
   defp add_event(acc, env, via, name, target, l) do
     e = %{
@@ -993,13 +995,16 @@ defmodule Cartographer.ElixirSource do
 
     entries =
       case first do
-        s when is_binary(s) ->
+        s when is_binary(s) and s != "" ->
           [%{function: fid, event: s, source: "head", line: l}]
 
         {var, _, ctx} when ident?(var) and is_atom(ctx) ->
           guarded = Enum.flat_map(guards, &guard_names(&1, var, env))
 
           # A clause may name its events in a guard and hand them on too.
+          # An empty name is no name.
+          guarded = Enum.reject(guarded, &(&1 == ""))
+
           Enum.map(guarded, fn
             {:attr, name} ->
               %{function: fid, attr: name, module: env.module, source: "attribute", line: l}

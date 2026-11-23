@@ -29,14 +29,14 @@ Exit status 2 means bad arguments, and 1 any other failure (the compiler couldn'
 **Configs.**
 - Each file is read with the nearest `tsconfig.json` or `jsconfig.json` above it, inside the snapshot.
 - Only module and JSX options are taken from it (`paths`, `baseUrl`, `jsx`, `module`, `moduleResolution`, `target`, `lib` and similar). Its `include`, `exclude` and `references` are ignored.
-- A config that can't be read whole falls back to the defaults, with a `config_fallback` note. The usual cause is an `extends` naming a package that isn't installed.
+- A config that can't be read whole keeps the options it could read, on top of the defaults, with a `config_fallback` note. The usual cause is an `extends` naming a package that isn't installed. A config's `include` patterns are never followed, so no directory is listed for the compiler.
 - The defaults are: `allowJs`, bundler resolution, ESNext, JSX preserved, and no ambient `@types`.
 
 **Dependencies.** No dependencies are installed. A call into a package import that doesn't resolve counts as `external`.
 
 **Skipped files.**
 - A file with a line over 10,000 characters is treated as generated (a vendored SDK) and skipped, with a `minified_skipped` note.
-- A minified, too-deep or unparsable file doesn't exist for the compiler either, so a call into it is counted `not_extracted` (a package that isn't installed is `external`).
+- A minified, too-deep or unparsable file doesn't exist for the compiler either, so a call into it is counted `not_extracted`, as is a call through a relative import that doesn't resolve (a missing file). A package that isn't installed is `external`.
 - A file whose expressions nest more than 250 deep is inventoried without resolution, with a `too_deep` note.
 
 ## Output
@@ -77,14 +77,12 @@ dropped. The method comes from the init object, `GET` when there is none.
   repository.
 - **Absolute URL:** `base` names its source, the constant it came from
   (`ADMIN = process.env.ADMIN || "http://…"`) or the origin.
-- **A parameter that fills a whole segment after a literal `/`**
-  (`/users/${id}`) **or sits in the query** (`"/search?q=" + term`) is an
-  interpolation: the function makes the request itself.
-- **Wrapper:** a function whose `fetch` path is carried by its parameter
-  (`fetch(path)`, `"/api" + path`, `BASE + path`), like `api(method, path)`. Each
-  call to it is a request from the caller, one level deep, with the method
-  too when it is a parameter. A wrapper no call reaches counts as
-  `not_extracted`.
+- **A URL that uses a parameter** (`/users/${id}`, `"/api" + path`,
+  `BASE + path`) is decided by the callers, not by its shape. Each in-repo
+  call that reaches the function, like `api("GET", "/dial/me")`, is a request
+  from the caller, with its arguments in place (the method too, when it is a
+  parameter); one level deep. With no such call, it is the function's own
+  request, the parameter written `:name`. No request is lost.
 
 A fetch with no path to link (`form.action`, `BASE + compute()`) is counted
 in the `http` stats entry as `not_extracted`.

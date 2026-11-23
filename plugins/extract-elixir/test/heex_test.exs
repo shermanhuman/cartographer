@@ -88,6 +88,8 @@ defmodule Cartographer.HEExTest do
           <div phx-click={"filter_#{@n}"} phx-blur={JS.push("blurred") |> JS.hide()}></div>
           <p>{format(@n)}</p>
           <button phx-click={show_modal("confirm")}>?</button>
+          <.button click={@event}>Any</.button>
+          <b phx-click={if @x, do: "save", else: ""}></b>
         </div>
         """
       end
@@ -102,6 +104,7 @@ defmodule Cartographer.HEExTest do
       def handle_event("go", _, s), do: {:noreply, s}
       def handle_event("blurred", _, s), do: {:noreply, s}
       def handle_event("dead", _, s), do: {:noreply, s}
+      def handle_event("", _, s), do: {:noreply, s}
     end
     ''',
     "lib/shop_web/live/row_component.ex" => ~S'''
@@ -155,7 +158,9 @@ defmodule Cartographer.HEExTest do
     "lib/shop_web/live/founders.html.heex" => ~S'''
     <div id="sig" phx-hook=".Sig">
       <script :type={Phoenix.LiveView.ColocatedHook} name=".Sig">
-        export default { mounted() { this.pushEvent("signed", {}); this.pushEventTo("#x", "aimed", {}) } }
+        // this.pushEvent("ghost", {});
+        const note = "this.pushEvent(\"inside\")";
+        export default { mounted() { this.pushEvent("signed", {}); this.pushEventTo("#x", "aimed", {}); this.pushEvent(this.el.dataset.event, {}) } }
       </script>
     </div>
     ''',
@@ -266,7 +271,7 @@ defmodule Cartographer.HEExTest do
     # JS.push in a chain.
     assert {"ShopWeb.PageLive.render/1", "blurred", "JS.push", "", [page], "precise"} in s
     # Interpolated names and unfilled assigns are dynamic; lv: events are LiveView's.
-    assert Enum.count(s, &match?({"ShopWeb.PageLive.render/1", :dynamic, _, _, [], nil}, &1)) == 3
+    assert Enum.count(s, &match?({"ShopWeb.PageLive.render/1", :dynamic, _, _, [], nil}, &1)) == 5
     assert {"ShopWeb.CoreComponents.unfilled/1", :dynamic, "phx-submit", "", [], nil} in s
     refute Enum.any?(doc.events, &String.starts_with?(&1[:event] || "", "lv:"))
   end
@@ -340,7 +345,7 @@ defmodule Cartographer.HEExTest do
     heex = Enum.find(doc.stats, &(&1.language == "heex"))
     assert heex.call_sites == length(doc.events)
     assert heex.call_sites == heex.in_repo + heex.unresolved + heex.not_extracted
-    assert heex.not_extracted == 4
+    assert heex.not_extracted == 7
     assert doc.facts_version == 3
   end
 
@@ -384,5 +389,26 @@ defmodule Cartographer.HEExTest do
              &(&1.kind == "heex_parse_error" and &1.file == "lib/shop_web/live/broken2.ex" and
                  String.starts_with?(&1.message, "line "))
            )
+  end
+
+  test "review round 3: script comments and strings, per-call pass-through, empty names, schema v3",
+       %{doc: doc} do
+    s = sends(doc)
+    founders = for {"ShopWeb.FoundersLive.render/1", ev, _, _, _, _} <- s, do: ev
+
+    assert Enum.sort(founders, &(inspect(&1) <= inspect(&2))) ==
+             Enum.sort([:dynamic, "aimed", "signed"], &(inspect(&1) <= inspect(&2)))
+
+    refute Enum.any?(doc.events, &(&1[:event] in ["ghost", "inside", ""]))
+    # <.button click="delete"> and <.button click={@event}>: one named, one dynamic.
+    assert {"ShopWeb.PageLive.render/1", "delete", "phx-click", "",
+            ["ShopWeb.PageLive.handle_event/3"], "heuristic"} in s
+
+    refute Enum.any?(doc.event_handlers, &(&1[:event] == ""))
+
+    r = root()
+    schema = Path.join(r, "schema.json")
+    File.write!(schema, ~s({"facts_version":3,"producer":{"name":"capture"},"tables":[]}))
+    assert %{facts_version: 3} = ElixirFacts.build(repo: "x", root: r, schema_facts: schema)
   end
 end

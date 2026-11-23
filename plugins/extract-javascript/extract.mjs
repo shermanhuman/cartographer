@@ -126,7 +126,10 @@ function fence(ts, rootReal, libDir, hidden = new Set()) {
       return fs.readdirSync(r, {withFileTypes: true}).filter(e => e.isDirectory() || e.isSymbolicLink()).map(e => e.name).filter(n => { const x = allowed(path.join(p, n)); return x !== null && fs.statSync(x).isDirectory(); });
     },
     realpath: (p) => allowed(p) ?? p,
-    readDirectory: (p, exts, excl, incl, depth) => ts.sys.readDirectory(p, exts, excl, incl, depth).filter(f => allowed(f) !== null),
+    // Input files come from the source roots, never from a config's
+    // include patterns, so no directory is ever listed for the compiler
+    // (a pattern reaching outside the snapshot would walk the host first).
+    readDirectory: () => [],
     useCaseSensitiveFileNames: true,
   };
 }
@@ -145,7 +148,8 @@ function defaults(ts) {
 
 // configFor reads the nearest tsconfig.json or jsconfig.json above file, inside
 // the snapshot, for its compiler options only. A config that can't be read
-// whole (an `extends` outside the fence) falls back to the defaults.
+// whole (an `extends` outside the fence) keeps the options it could read,
+// on top of the defaults, with a config_fallback note.
 function configFor(ts, host, root, file, cache, notes) {
   for (let dir = path.posix.dirname(file); ; dir = path.posix.dirname(dir)) {
     for (const name of ['tsconfig.json', 'jsconfig.json']) {
@@ -464,9 +468,13 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
     if (ref) http.refs.push({from: c.from, ...ref, file: c.file, line: c.line});
     else http.unbuilt++;
   }
-  // A wrapper no resolved call reaches: a request with no path to link.
-  for (const ws of http.wrappers.values()) for (const w of ws) {
-    if (!reached.has(w)) { http.sites++; http.unbuilt++; }
+  // A wrapper no resolved call reaches is its own request (or, with no
+  // readable path, one with no path to link).
+  for (const [from, ws] of http.wrappers) for (const w of ws) {
+    if (reached.has(w)) continue;
+    http.sites++;
+    if (w.own) http.refs.push({from, ...w.own, file: w.file, line: w.line});
+    else http.unbuilt++;
   }
   // Every ref's from is a listed function: (top) is listed when its file's
   // top-level code made the call.
@@ -678,7 +686,9 @@ function hookCall({ts, K, N, checker, node, callee, encl, from, file, line, hook
     const arg = node.arguments[via === 'pushEventTo' ? 1 : 0];
     if (!arg) return;
     const parts = valueParts(ts, K, N, checker, arg, encl, 0);
-    const event = parts.length && parts.every(p => p.lit !== undefined && !p.base) ? parts.map(p => p.lit).join('') : null;
+    // An empty name is no name: counted as dynamic.
+    const text = parts.length && parts.every(p => p.lit !== undefined && !p.base) ? parts.map(p => p.lit).join('') : '';
+    const event = text === '' ? null : text;
     const owner = encl ? methodOwner(encl) : null;
     hooks.pushes.push({from, owner: owner ? nodeKey(owner) : null, event, via, file, line});
   }
@@ -876,29 +886,6 @@ function buildRef(parts, method, base0) {
   return {method, path: text, ...(origin ? {origin} : {}), ...(base ? {base} : {})};
 }
 
-// paramsInPlace: every parameter in the URL fills a whole path segment
-// after a literal "/" (`/users/${id}`) or sits in the query or fragment.
-// Otherwise ("/api" + path, BASE + path) the parameter carries the path and
-// the function is a wrapper.
-function paramsInPlace(parts) {
-  let before = '';
-  for (let i = 0; i < parts.length; i++) {
-    const p = parts[i];
-    if (p.lit !== undefined) { before += p.lit; continue; }
-    if (p.param !== undefined) {
-      const inQuery = /[?#]/.test(before);
-      // What follows, past empty template text: the end, or a separator.
-      let j = i + 1;
-      while (parts[j]?.lit === '') j++;
-      const after = parts[j];
-      const segment = before.endsWith('/') && (after === undefined || (after.lit !== undefined && /^[/?#]/.test(after.lit)));
-      if (!inQuery && !segment) return false;
-    }
-    before += '\u0000';
-  }
-  return true;
-}
-
 // fetchRef records one fetch(url, init): a ref, or, when the URL comes from
 // the enclosing function's parameter, that function as a wrapper.
 function fetchRef({ts, K, N, checker, node, encl, from, file, line, http}) {
@@ -910,8 +897,11 @@ function fetchRef({ts, K, N, checker, node, encl, from, file, line, http}) {
   if (obj) {
     method = '';
     if (obj.kind === K.ObjectLiteralExpression) {
+      // In order: a spread or a computed key may set the method, so it
+      // makes the method unknown until a later explicit one.
       method = 'GET';
       for (const p of obj.properties) {
+        if (p.kind === K.SpreadAssignment || (p.name && p.name.kind === K.ComputedPropertyName)) { method = ''; continue; }
         const key = p.name && N.keyName(p.name);
         if (key !== 'method') continue;
         const v = p.kind === K.ShorthandPropertyAssignment ? shorthandParts(ts, K, N, checker, p, encl)
@@ -920,17 +910,15 @@ function fetchRef({ts, K, N, checker, node, encl, from, file, line, http}) {
       }
     }
   }
-  // A parameter inside a readable path (`/users/${id}`, `?q=` + term) is
-  // just an interpolation: the function makes the request itself. Only a
-  // path that can't be read without the parameter (fetch(path),
-  // BASE + path) makes the function a wrapper whose callers make it.
-  const own = paramsInPlace(parts)
-    ? buildRef(parts.map(p => (p.param !== undefined ? {dyn: p.name} : p)), typeof method === 'object' ? '' : method)
-    : null;
-  if (!own && parts.some(p => p.param !== undefined) && encl) {
+  // A URL that uses a parameter is decided by the callers, not by its
+  // shape: each in-repo call that reaches the function is a request from
+  // the caller with its argument in place; with no such call, it is the
+  // function's own request, the parameter written :name. No request is lost.
+  const own = buildRef(parts.map(p => (p.param !== undefined ? {dyn: p.name} : p)), typeof method === 'object' ? '' : method);
+  if (parts.some(p => p.param !== undefined) && encl) {
     const base = parts.find(p => p.base)?.base;
     if (!http.wrappers.has(from)) http.wrappers.set(from, []);
-    http.wrappers.get(from).push({parts, method, file, line, ...(base ? {base} : {})});
+    http.wrappers.get(from).push({parts, method, file, line, own, ...(base ? {base} : {})});
     return false;
   }
   http.sites++;
@@ -973,6 +961,9 @@ function resolve({ts, K, N, node, callee, jsx, checker, relOf, extracted, repo})
   if (!decl) {
     // An import from a package that isn't installed: a call into a dependency.
     if (aliasFailed || importedFromPackage(ts, K, callee, checker)) return {outcome: 'external'};
+    // ns.f() through `import * as ns from "./unread"`: an in-repo file the
+    // plugin doesn't read.
+    if (callee.kind === K.PropertyAccessExpression && importedFromPath(ts, K, callee, checker)) return {outcome: 'not_extracted'};
     return {outcome: 'unresolved'};
   }
   // A variable or property holding a function: that function.
@@ -1022,6 +1013,23 @@ function isNamespaceMember(ts, K, callee, checker) {
   // ns.f() through `import * as ns`: the module's own function.
   const s = checker.getSymbolAtLocation(callee.expression);
   return !!s && (s.flags & ts.SymbolFlags.Alias) !== 0 && (s.declarations ?? []).some(d => d.kind === K.NamespaceImport);
+}
+
+// importedFromPath: the callee's root identifier is a namespace import of a
+// relative path whose module didn't resolve (missing, or hidden).
+function importedFromPath(ts, K, callee, checker) {
+  let n = callee;
+  while (n.kind === K.PropertyAccessExpression) n = n.expression;
+  if (n.kind !== K.Identifier) return false;
+  let s;
+  try { s = checker.getSymbolAtLocation(n); } catch { return false; }
+  const d = s?.declarations?.[0];
+  if (!d || d.kind !== K.NamespaceImport) return false;
+  const spec = d.parent.parent.moduleSpecifier.text;
+  if (!spec.startsWith('.') && !spec.startsWith('/')) return false;
+  let target;
+  try { target = checker.getAliasedSymbol(s); } catch { return true; }
+  return !target || !target.declarations?.length;
 }
 
 // importedFromPackage: the callee's root identifier is imported from a bare

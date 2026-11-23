@@ -124,10 +124,10 @@ defmodule Cartographer.HEEx do
           end
 
         :local_component ->
-          [{:component, :local, name, literal_attrs(attrs), meta.line}]
+          [{:component, :local, name, component_attrs(attrs), meta.line}]
 
         :remote_component ->
-          [{:component, :remote, name, literal_attrs(attrs), meta.line}]
+          [{:component, :remote, name, component_attrs(attrs), meta.line}]
 
         _ ->
           []
@@ -167,8 +167,16 @@ defmodule Cartographer.HEEx do
   defp line_of(%{line: l}, _), do: l
   defp line_of(_, meta), do: meta.line
 
-  defp literal_attrs(attrs),
-    do: for({n, {:string, s, _}, _} when is_binary(n) <- attrs, do: {n, s})
+  # A component call's attributes: the literal text, or :dynamic for code.
+  defp component_attrs(attrs) do
+    for {n, value, _} when is_binary(n) <- attrs,
+        v = attr_value(value),
+        do: {n, v}
+  end
+
+  defp attr_value({:string, s, _}), do: s
+  defp attr_value({:expr, _, _}), do: :dynamic
+  defp attr_value(_), do: nil
 
   defp string({:string, s, _}), do: s
   defp string(_), do: nil
@@ -181,15 +189,102 @@ defmodule Cartographer.HEEx do
   end
 
   @doc """
-  Literal names a colocated hook's script sends: `{name, "pushEvent"}` for
-  `this.pushEvent("name")`, `{name, "pushEventTo"}` for
-  `pushEventTo(selector, "name")`.
+  The sends in a colocated hook's script: `{name | :dynamic, via}` for each
+  `x.pushEvent(name, ...)` and `x.pushEventTo(selector, name, ...)` in code,
+  never in a comment or a string. The name is a string literal with no
+  interpolation, else `:dynamic`.
   """
   def script_pushes(text) do
-    to = ~r/\bpushEventTo\s*\(\s*[^,()]+,\s*(["'])([^"'\\]+)\1/
-    plain = ~r/\bpushEvent\s*\(\s*(["'])([^"'\\]+)\1/
+    {code, strings} = mask(text)
 
-    Enum.map(Regex.scan(plain, text), fn [_, _, name] -> {name, "pushEvent"} end) ++
-      Enum.map(Regex.scan(to, text), fn [_, _, name] -> {name, "pushEventTo"} end)
+    Regex.scan(~r/\b(pushEventTo|pushEvent)\s*\(/, code, return: :index)
+    |> Enum.map(fn [{start, len}, {vs, vl}] ->
+      via = binary_part(code, vs, vl)
+      pos = start + len
+      pos = if via == "pushEventTo", do: after_first_arg(code, pos), else: pos
+      pos = skip_space(code, pos)
+
+      name =
+        case pos && Map.get(strings, pos) do
+          {content, false} when content != "" -> content
+          _ -> :dynamic
+        end
+
+      {name, via}
+    end)
+  end
+
+  # The script with comments and string contents blanked (same length), and
+  # each string literal by its opening quote's offset: {content, interpolated?}.
+  defp mask(text), do: mask(text, 0, [], %{})
+
+  defp mask(<<>>, _i, out, strings), do: {IO.iodata_to_binary(Enum.reverse(out)), strings}
+
+  defp mask(<<"//", rest::binary>>, i, out, strings) do
+    {comment, rest} = take_until(rest, "\n")
+    n = 2 + byte_size(comment)
+    mask(rest, i + n, [String.duplicate(" ", n) | out], strings)
+  end
+
+  defp mask(<<"/*", rest::binary>>, i, out, strings) do
+    {comment, rest} = take_until(rest, "*/")
+    rest = String.replace_prefix(rest, "*/", "")
+    n = 2 + byte_size(comment) + 2
+    mask(rest, i + n, [String.duplicate(" ", n) | out], strings)
+  end
+
+  defp mask(<<q, rest::binary>>, i, out, strings) when q in [?", ?', ?`] do
+    {content, interp, rest} = string_body(rest, q, [], false)
+    closed = rest != :eof
+    rest = if closed, do: rest, else: ""
+    # The quotes stay, so a call's argument is found at its opening quote.
+    blank = <<q>> <> String.duplicate(" ", byte_size(content)) <> if(closed, do: <<q>>, else: "")
+
+    mask(rest, i + byte_size(blank), [blank | out], Map.put(strings, i, {content, interp}))
+  end
+
+  defp mask(<<c, rest::binary>>, i, out, strings), do: mask(rest, i + 1, [<<c>> | out], strings)
+
+  defp take_until(text, stop) do
+    case :binary.match(text, stop) do
+      {at, _} -> {binary_part(text, 0, at), binary_part(text, at, byte_size(text) - at)}
+      :nomatch -> {text, ""}
+    end
+  end
+
+  defp string_body(<<>>, _q, acc, interp),
+    do: {IO.iodata_to_binary(Enum.reverse(acc)), interp, :eof}
+
+  defp string_body(<<?\\, c, rest::binary>>, q, acc, interp),
+    do: string_body(rest, q, [<<?\\, c>> | acc], interp)
+
+  defp string_body(<<q, rest::binary>>, q, acc, interp),
+    do: {IO.iodata_to_binary(Enum.reverse(acc)), interp, rest}
+
+  defp string_body(<<"${", rest::binary>>, ?`, acc, _interp),
+    do: string_body(rest, ?`, ["${" | acc], true)
+
+  defp string_body(<<c, rest::binary>>, q, acc, interp),
+    do: string_body(rest, q, [<<c>> | acc], interp)
+
+  defp skip_space(code, pos) when pos < byte_size(code) do
+    if :binary.at(code, pos) in ~c" \t\r\n", do: skip_space(code, pos + 1), else: pos
+  end
+
+  defp skip_space(_code, _pos), do: nil
+
+  # Past the first argument's top-level comma, or nil.
+  defp after_first_arg(code, pos), do: after_first_arg(code, pos, 0)
+
+  defp after_first_arg(code, pos, _depth) when pos >= byte_size(code), do: nil
+
+  defp after_first_arg(code, pos, depth) do
+    case :binary.at(code, pos) do
+      c when c in ~c"([{" -> after_first_arg(code, pos + 1, depth + 1)
+      c when c in ~c")]}" and depth == 0 -> nil
+      c when c in ~c")]}" -> after_first_arg(code, pos + 1, depth - 1)
+      ?, when depth == 0 -> pos + 1
+      _ -> after_first_arg(code, pos + 1, depth)
+    end
   end
 end

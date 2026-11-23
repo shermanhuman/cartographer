@@ -479,3 +479,44 @@ test('a call through a reassignable binding is heuristic', () => {
     assert.deepEqual(edges(doc).map(e => e[2]).sort(), ['heuristic', 'heuristic', 'precise', 'precise']);
   } finally { fs.rmSync(root, {recursive: true}); }
 });
+
+test('review round 3: no directory listed for a config, spread fetch options, empty event names', () => {
+  const outer = tmp();
+  try {
+    write({
+      'repo/src/a.js': 'export function go(opts) { fetch("/orders", {...opts}); fetch("/items", {...opts, method: "PUT"}); }\nexport const Hook = { mounted() { this.pushEvent("", {}); } };\n',
+      'repo/src/tsconfig.json': '{"include": ["../../**/*"], "compilerOptions": {"allowJs": true}}\n',
+      'elsewhere/x.js': 'export function x() {}\n',
+    }, outer);
+    // Every directory listed during extraction is inside the snapshot.
+    const listed = [];
+    const real = fs.readdirSync;
+    fs.readdirSync = function (p, ...rest) { listed.push(String(p)); return real.call(this, p, ...rest); };
+    let doc;
+    try { doc = run({repo: 't', root: path.join(outer, 'repo'), sourceRoots: ['src']}); } finally { fs.readdirSync = real; }
+    const rootReal = fs.realpathSync(path.join(outer, 'repo'));
+    assert.deepEqual(listed.filter(p => !fs.realpathSync(p).startsWith(rootReal)), []);
+    assert.deepEqual(doc.http_refs.map(r => [r.path, r.method]), [['/orders', ''], ['/items', 'PUT']]);
+    assert.deepEqual(doc.events.map(e => [e.event ?? 'DYN', !!e.dynamic]), [['DYN', true]]);
+  } finally { fs.rmSync(outer, {recursive: true}); }
+});
+
+test('fetch wrappers are decided by their callers, never by the URL shape', () => {
+  const root = write({
+    'src/w.js': `
+const BASE = "https://api.example.com";
+function joined(path) { return fetch(\`\${BASE}/\${path}\`); }
+function slash(path) { return fetch("/" + path); }
+function json(id) { return fetch("/users/" + id + ".json"); }
+export function go() { joined("orders"); slash("api/x"); }
+`,
+  });
+  try {
+    const doc = run({repo: 't', root, sourceRoots: ['src']});
+    assert.deepEqual(doc.http_refs.map(r => [short(r.from), r.path, r.origin ?? r.base]).sort(), [
+      ['src/w.js:go/0', '/api/x', 'same'],
+      ['src/w.js:go/0', '/orders', 'BASE'],
+      ['src/w.js:json/1', '/users/:id.json', 'same'],
+    ]);
+  } finally { fs.rmSync(root, {recursive: true}); }
+});

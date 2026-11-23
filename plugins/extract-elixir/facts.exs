@@ -835,7 +835,11 @@ defmodule Cartographer.ElixirFacts do
       end)
     end
 
-    passthrough =
+    # A component sending whatever its caller passes (phx-click={@click}):
+    # each call site that passes the attribute is a send from the caller,
+    # by name for a literal, dynamic for code. A component no call passes
+    # it to is a dynamic send of its own.
+    passed =
       for p <- parsed.passthrough,
           c <- classified,
           Map.get(c, :component),
@@ -843,27 +847,27 @@ defmodule Cartographer.ElixirFacts do
           resolve.(c.target_module, c.name, c.arity) == p.component,
           {name, value} <- Map.get(c, :attrs, []),
           name == p.assign,
-          not String.starts_with?(value, "lv:"),
-          do: %{
-            from: c.from,
-            module: module_of[c.from],
-            via: p.via,
-            target: p.target,
-            file: c.file,
-            line: c.line,
-            event: value,
-            dynamic: false,
-            passed: true,
-            passed_from: {p.component, p.assign}
-          }
+          not (is_binary(value) and String.starts_with?(value, "lv:")),
+          do:
+            {p,
+             %{
+               from: c.from,
+               module: module_of[c.from],
+               via: p.via,
+               target: p.target,
+               file: c.file,
+               line: c.line,
+               event: if(is_binary(value) and value != "", do: value),
+               dynamic: not (is_binary(value) and value != ""),
+               passed: true
+             }}
 
-    # An assign no caller fills with a literal (or one used in a LiveView's
-    # own template) is a send whose name isn't known: dynamic.
-    filled = MapSet.new(passthrough, & &1.passed_from)
+    reached = MapSet.new(passed, fn {p, _} -> {p.component, p.assign} end)
+    passthrough = Enum.map(passed, &elem(&1, 1))
 
     unfilled =
       for p <- parsed.passthrough,
-          not MapSet.member?(filled, {p.component, p.assign}),
+          not MapSet.member?(reached, {p.component, p.assign}),
           do: %{
             from: p.component,
             module: module_of[p.component],
@@ -876,7 +880,7 @@ defmodule Cartographer.ElixirFacts do
           }
 
     sends =
-      (parsed.events ++ Enum.map(passthrough, &Map.delete(&1, :passed_from)) ++ unfilled)
+      (parsed.events ++ passthrough ++ unfilled)
       |> Enum.filter(&MapSet.member?(fids, &1.from))
       |> Enum.map(fn e ->
         if e.dynamic do
@@ -948,8 +952,9 @@ defmodule Cartographer.ElixirFacts do
   defp table_refs(root, ref_roots, schema_path, schemas, clauses) do
     schema = schema_path |> File.read!() |> JSON.decode!()
 
-    if schema["facts_version"] not in [1, 2],
-      do: raise(ArgumentError, "--schema-facts #{schema_path} is not a facts v1 or v2 document")
+    if schema["facts_version"] not in [1, 2, 3],
+      do:
+        raise(ArgumentError, "--schema-facts #{schema_path} is not a facts v1, v2 or v3 document")
 
     by_name =
       (schema["tables"] || [])
