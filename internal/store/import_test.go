@@ -436,3 +436,39 @@ func TestKnownOtherReportsErrors(t *testing.T) {
 		t.Error("a failed lookup must be an error, not a missing cite")
 	}
 }
+
+// A call its producer marks unresolved stays unresolved, even when a function
+// of the same name and arity sits in the caller's module (A-M1): it is not a
+// precise edge, and nothing traverses it.
+func TestUnresolvedCallStaysUnresolved(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	b, err := bundle.Read(mini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var app *facts.Doc
+	for i := range b.Facts {
+		if b.Facts[i].Repo == "shop-app" {
+			app = b.Facts[i]
+		}
+	}
+	from := "shop-app:Shop.Orders.create/2"
+	app.Calls = append(app.Calls, facts.Call{From: from, Target: &facts.Target{Name: "validate", Arity: 1}, Kind: "unresolved", File: "lib/shop/orders.ex", Line: 99})
+	if err := s.ImportBundle(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	var to, precision string
+	if err := s.DB.QueryRow(`SELECT coalesce(to_id,''), precision FROM calls WHERE from_id = ? AND kind = 'unresolved'`, from).Scan(&to, &precision); err != nil {
+		t.Fatal(err)
+	}
+	if to != "" || precision != "" {
+		t.Errorf("unresolved call = (%q,%q), want no target", to, precision)
+	}
+	if n := count(t, s, `SELECT count(*) FROM edges WHERE from_id = ? AND line = 99`, from); n != 0 {
+		t.Errorf("edges from the unresolved call = %d, want 0", n)
+	}
+}

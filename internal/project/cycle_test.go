@@ -1,0 +1,497 @@
+package project_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/shermanhuman/cartographer/internal/project"
+	"github.com/shermanhuman/cartographer/internal/rebuild"
+	"github.com/shermanhuman/cartographer/internal/session"
+	"github.com/shermanhuman/cartographer/internal/store"
+)
+
+// A pushed commit is mapped by the first command once the last fetch is
+// 15 minutes old, not before; refresh maps one at once.
+func TestPushedCommitMappedAfterCadenceAndRefreshAtOnce(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	if r := x.command(sales); r.cycles != 1 {
+		t.Fatalf("first command: %+v", r)
+	}
+	revs, _ := x.mapped()
+	first := revs["sales"]
+	if first == "" {
+		t.Fatal("nothing mapped")
+	}
+	c2 := x.push("sales", map[string]string{"lib/n.ex": "defmodule N do end\n"})
+	x.advance(14 * time.Minute)
+	if r := x.command(sales); r.err != nil || r.cycles != 0 {
+		t.Fatalf("before the cadence: %+v", r)
+	}
+	if revs, _ := x.mapped(); revs["sales"] != first {
+		t.Fatalf("mapped %s before the cadence", revs["sales"])
+	}
+	x.advance(time.Minute)
+	if r := x.command(sales); r.err != nil || r.cycles != 1 {
+		t.Fatalf("at the cadence: %+v", r)
+	}
+	if revs, _ := x.mapped(); revs["sales"] != c2 {
+		t.Fatalf("mapped %s, want %s", revs["sales"], c2)
+	}
+	c3 := x.push("sales", map[string]string{"lib/o.ex": "defmodule O do end\n"})
+	if res, err := x.runner().Cycle(context.Background(), "shop", true); err != nil || !res.Imported {
+		t.Fatalf("refresh: %+v %v", res, err)
+	}
+	if revs, _ := x.mapped(); revs["sales"] != c3 {
+		t.Fatalf("refresh mapped %s, want %s", revs["sales"], c3)
+	}
+}
+
+// A cycle with nothing new imports nothing and adds no snapshot.
+func TestNoChangeCycleImportsNothing(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	r := x.runner()
+	if res, err := r.Cycle(context.Background(), "shop", true); err != nil || !res.Imported {
+		t.Fatal(res, err)
+	}
+	n, runs := x.snapshots(), x.runs()
+	x.advance(time.Hour)
+	res, err := r.Cycle(context.Background(), "shop", false)
+	if err != nil || res.Imported || res.Skipped != "unchanged" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if x.snapshots() != n || x.runs() != runs {
+		t.Errorf("snapshots %d -> %d, extractor runs %d -> %d", n, x.snapshots(), runs, x.runs())
+	}
+}
+
+// A successful fetch then a failing extractor: nothing imported, the
+// header and status name it, the digest waits 6 hours, a new commit goes
+// at once, refresh retries.
+func TestFailingPluginHeldSixHours(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	r := x.runner()
+	if _, err := r.Cycle(context.Background(), "shop", true); err != nil {
+		t.Fatal(err)
+	}
+	good, _ := x.mapped()
+	bad := x.push("sales", map[string]string{"FAIL": "x"})
+	x.advance(15 * time.Minute)
+	n := x.snapshots()
+	if _, err := r.Cycle(context.Background(), "shop", false); err == nil || !strings.Contains(err.Error(), "sales at "+bad[:7]+": extract elixir") {
+		t.Fatalf("want the extractor failure, got %v", err)
+	}
+	if x.snapshots() != n {
+		t.Fatal("a failed build imported")
+	}
+	res := x.command(sales)
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	for _, want := range []string{"behind the fetched commits: sales failed at extract elixir at " + bad[:7], "boom in sales", "retry in 6 h or `cartographer refresh`", "(log: "} {
+		if !strings.Contains(res.header, want) {
+			t.Errorf("header lacks %q:\n%s", want, res.header)
+		}
+	}
+	if !strings.Contains(strings.Join(res.status, "\n"), "sales failed at extract elixir") {
+		t.Errorf("status:\n%s", strings.Join(res.status, "\n"))
+	}
+	if revs, _ := x.mapped(); revs["sales"] != good["sales"] {
+		t.Error("the previous map should keep answering")
+	}
+	runs := x.runs()
+	for _, step := range []time.Duration{15 * time.Minute, 5 * time.Hour} {
+		x.advance(step)
+		if res, err := r.Cycle(context.Background(), "shop", false); err != nil || res.Imported || x.runs() != runs {
+			t.Fatalf("retried the failed digest early: %+v %v (runs %d)", res, err, x.runs())
+		}
+	}
+	x.advance(46 * time.Minute) // 6 h 1 min after the failure
+	if _, err := r.Cycle(context.Background(), "shop", false); err == nil || x.runs() == runs {
+		t.Fatalf("not retried after 6 h: %v", err)
+	}
+	runs = x.runs()
+	x.advance(15 * time.Minute)
+	if _, err := r.Cycle(context.Background(), "shop", true); err == nil || x.runs() == runs {
+		t.Fatal("refresh should retry at once")
+	}
+	fixed := x.push("sales", map[string]string{"FAIL": ""})
+	x.advance(15 * time.Minute)
+	if res, err := r.Cycle(context.Background(), "shop", false); err != nil || !res.Imported {
+		t.Fatalf("a new commit should build at once: %+v %v", res, err)
+	}
+	if revs, _ := x.mapped(); revs["sales"] != fixed {
+		t.Error("fixed commit not mapped")
+	}
+	if st := x.state0(); st.Failed != nil {
+		t.Errorf("failure kept after an import: %+v", st.Failed)
+	}
+}
+
+// The first-ever attempt failing (a fetch, then separately an extractor)
+// isn't re-attempted by consecutive commands before 15 minutes.
+func TestFirstAttemptFailureWaitsForCadence(t *testing.T) {
+	t.Run("fetch", func(t *testing.T) {
+		x := newH(t)
+		_, sales, _ := x.world()
+		x.register(sales)
+		// The anchor's origin vanishes before its first cycle, and the
+		// fetch registration made is gone.
+		os.RemoveAll(filepath.Join(x.dir, "origins", "admin.git"))
+		git(t, filepath.Join(x.root, "admin"), "update-ref", "-d", "refs/cartographer/main")
+		if r := x.command(sales); r.cycles != 1 || r.err == nil || !strings.Contains(r.err.Error(), "admin failed at fetch") {
+			t.Fatalf("%+v", r)
+		}
+		x.advance(5 * time.Minute)
+		for range 3 {
+			if r := x.command(sales); r.cycles != 0 {
+				t.Fatalf("re-attempted before 15 minutes: %+v", r)
+			}
+		}
+		x.advance(10 * time.Minute)
+		if r := x.command(sales); r.cycles != 1 {
+			t.Fatalf("not re-attempted at 15 minutes: %+v", r)
+		}
+	})
+	t.Run("plugin", func(t *testing.T) {
+		x := newH(t)
+		_, sales, _ := x.world()
+		x.push("sales", map[string]string{"FAIL": "x"})
+		x.register(sales)
+		if r := x.command(sales); r.cycles != 1 || r.err == nil || !strings.Contains(r.err.Error(), "sales failed at extract elixir") {
+			t.Fatalf("%+v", r)
+		}
+		runs := x.runs()
+		x.advance(14 * time.Minute)
+		if r := x.command(sales); r.cycles != 0 || x.runs() != runs {
+			t.Fatalf("re-attempted: %+v", r)
+		}
+	})
+}
+
+// Two callers racing with no lock yet build once.
+func TestRacingCallersBuildOnce(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	// Both callers saw "never attempted"; the first holds its cycle open
+	// until the second has tried.
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	defer project.SetHookLocked(func() {
+		entered <- struct{}{}
+		<-release
+	})()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = x.runner().Cycle(context.Background(), "shop", false)
+		}()
+		if i == 0 {
+			<-entered
+		}
+	}
+	// The second either is refused by the lock or (without one) enters too.
+	select {
+	case <-entered:
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(release)
+	wg.Wait()
+	if !errors.Is(errs[0], rebuild.ErrRunning) && !errors.Is(errs[1], rebuild.ErrRunning) {
+		t.Errorf("neither caller was refused by the lock: %v", errs)
+	}
+	// Two elixir members: one build runs the extractor twice.
+	if x.runs() != 2 || x.snapshots() != 1 {
+		t.Fatalf("runs %d, snapshots %d", x.runs(), x.snapshots())
+	}
+}
+
+// An empty store with a registered project: the first command starts a
+// build.
+func TestEmptyStoreFirstCommandStartsBuild(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	if x.snapshots() != 0 {
+		t.Fatal("store not empty")
+	}
+	r := x.command(t.TempDir()) // not even in a checkout
+	if r.cycles != 1 || x.snapshots() != 1 {
+		t.Fatalf("%+v, %d snapshots", r, x.snapshots())
+	}
+}
+
+// A missing checkout fails closed with the clone command; nothing is
+// cloned.
+func TestMissingCheckoutFailsClosedWithCloneCommand(t *testing.T) {
+	x := newH(t)
+	_, sales, infra := x.world()
+	x.register(sales)
+	os.RemoveAll(infra)
+	_, err := x.runner().Cycle(context.Background(), "shop", true)
+	want := "git clone https://github.com/acme/infra " + filepath.Join(x.root, "infra")
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("want %q, got %v", want, err)
+	}
+	if _, err := os.Stat(infra); err == nil {
+		t.Fatal("something cloned infra")
+	}
+	if x.snapshots() != 0 {
+		t.Fatal("imported")
+	}
+	if st := x.state0(); st.Failed == nil || st.Failed.Step != "checkout" || st.Failed.Repo != "acme/infra" {
+		t.Errorf("failure: %+v", st.Failed)
+	}
+}
+
+// The anchor's list gains a repo: the same build maps it, or fails closed
+// with its clone command when there's no checkout.
+func TestAnchorListGainsRepo(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	r := x.runner()
+	if _, err := r.Cycle(context.Background(), "shop", true); err != nil {
+		t.Fatal(err)
+	}
+	x.repo("extra", map[string]string{".cartographer/repo.toml": settings("shop", "acme/admin", `extract = ["elixir"]`), ".tool-versions": elixirPins})
+	x.push("admin", map[string]string{".cartographer/repo.toml": settings("shop", "", `members = [{repo = "acme/admin"}, {repo = "acme/sales"}, {repo = "acme/infra"}, {repo = "acme/extra"}]`, `extract = ["elixir"]`)})
+	if res, err := r.Cycle(context.Background(), "shop", true); err != nil || !res.Imported {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if revs, _ := x.mapped(); revs["extra"] == "" {
+		t.Fatalf("extra not mapped: %v", revs)
+	}
+	reg, _ := project.Load(x.state, "shop")
+	if m, ok := reg.Member("acme/extra"); !ok || m.Path != filepath.Join(x.root, "extra") {
+		t.Errorf("extra not recorded: %+v", reg.Members)
+	}
+
+	x.repo("ghost", map[string]string{".cartographer/repo.toml": settings("shop", "acme/admin")})
+	os.RemoveAll(filepath.Join(x.root, "ghost"))
+	x.push("admin", map[string]string{".cartographer/repo.toml": settings("shop", "", `members = [{repo = "acme/admin"}, {repo = "acme/sales"}, {repo = "acme/infra"}, {repo = "acme/extra"}, {repo = "acme/ghost"}]`, `extract = ["elixir"]`)})
+	if _, err := r.Cycle(context.Background(), "shop", true); err == nil || !strings.Contains(err.Error(), "git clone https://github.com/acme/ghost") {
+		t.Fatalf("want the clone command, got %v", err)
+	}
+}
+
+// A recorded checkout that moved is found again at the next build; among
+// several matches a main working tree beats a linked worktree, then the
+// shortest path.
+func TestMovedCheckoutIsFoundAgain(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	// A linked worktree of sales one level down, shorter than the moved
+	// main checkout's path: the main working tree still wins.
+	wt := filepath.Join(x.root, "wt")
+	git(t, sales, "worktree", "add", "-q", "-b", "wt", wt)
+	moved := filepath.Join(x.root, "work", "sales-moved-here")
+	os.MkdirAll(filepath.Dir(moved), 0o755)
+	if err := os.Rename(sales, moved); err != nil {
+		t.Fatal(err)
+	}
+	git(t, moved, "worktree", "repair", wt)
+	if _, err := x.runner().Cycle(context.Background(), "shop", true); err != nil {
+		t.Fatal(err)
+	}
+	reg, _ := project.Load(x.state, "shop")
+	if m, _ := reg.Member("acme/sales"); m.Path != moved {
+		t.Errorf("recorded %s, want the moved main checkout %s", m.Path, moved)
+	}
+	os.RemoveAll(moved)
+	os.RemoveAll(wt)
+	if _, err := x.runner().Cycle(context.Background(), "shop", true); err == nil || !strings.Contains(err.Error(), "git clone https://github.com/acme/sales") {
+		t.Errorf("a vanished checkout should fail closed with its clone command: %v", err)
+	}
+}
+
+// A cycle stopped by its caller (the agent session ends, Ctrl-C) is not a
+// failure: its inputs aren't held for 6 hours, and the next automatic
+// cycle after the cadence builds the same inputs.
+func TestCancelledCycleIsNotHeld(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	hang := filepath.Join(x.dir, "hang") // outside the archives: same digest
+	os.WriteFile(hang, nil, 0o644)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := x.runner().Cycle(ctx, "shop", false)
+		done <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(x.dir, "hanging")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the extractor never started")
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a cancelled cycle reported success")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the cycle didn't stop on cancel")
+	}
+	if st := x.state0(); st.Failed != nil {
+		t.Errorf("a cancel was recorded as a failure: %+v", st.Failed)
+	}
+	os.Remove(hang)
+	x.advance(15 * time.Minute)
+	r := x.command(sales)
+	if r.cycles != 1 || x.snapshots() != 1 {
+		t.Fatalf("the cancelled inputs weren't built after the cadence: %+v, %d snapshots", r, x.snapshots())
+	}
+	if strings.Contains(r.header, "retry in") {
+		t.Errorf("header: %s", r.header)
+	}
+}
+
+// A Rust member indexes with a cargo target directory of its own under the
+// cache, the same one at every build, so build script and proc-macro
+// output is kept between builds.
+func TestRustMemberKeepsItsCargoTargetDir(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.fakeTool("rust@1.99.1", "cargo", "#!/bin/sh\nexit 0\n")
+	x.fakeTool("rust@1.99.1", "rustup", "#!/bin/sh\nexit 0\n")
+	x.fakeTool(project.RustAnalyzer.Spec(), "rust-analyzer", "#!/bin/sh\nexit 0\n")
+	argv := filepath.Join(x.dir, "self.argv")
+	self := filepath.Join(x.dir, "cartographer")
+	os.WriteFile(self, []byte(`#!/bin/sh
+echo "$*" >> '`+argv+`'
+while [ $# -gt 0 ]; do case $1 in --repo) repo=$2; shift 2 ;; --revision) rev=$2; shift 2 ;; *) shift ;; esac; done
+printf '{"facts_version":2,"producer":{"name":"fake-scip","version":"1"},"repo":"%s","revision":"%s"}\n' "$repo" "$rev"
+`), 0o755)
+	x.repo("rs", map[string]string{".cartographer/repo.toml": settings("shop", "acme/admin", `extract = ["rust"]`), "mise.toml": "[tools]\nrust = \"1.99.1\"\n", "Cargo.toml": "[package]\nname = \"rs\"\n"})
+	x.push("admin", map[string]string{".cartographer/repo.toml": settings("shop", "", `members = [{repo = "acme/admin"}, {repo = "acme/sales"}, {repo = "acme/infra"}, {repo = "acme/rs"}]`, `extract = ["elixir"]`)})
+	x.register(sales)
+	r := x.runner()
+	r.Self = self
+	for range 2 {
+		if res, err := r.Cycle(context.Background(), "shop", true); err != nil || !res.Imported {
+			t.Fatalf("%+v %v", res, err)
+		}
+		x.push("rs", map[string]string{"src/lib.rs": "pub fn f() {}\n" + time.Now().String()})
+	}
+	want := "--cargo-target-dir " + filepath.Join(x.cache, "cargo-target", "acme", "rs")
+	runs := strings.Split(strings.TrimSpace(func() string { b, _ := os.ReadFile(argv); return string(b) }()), "\n")
+	if len(runs) != 2 {
+		t.Fatalf("extract scip ran %d times: %q", len(runs), runs)
+	}
+	for _, l := range runs {
+		if !strings.Contains(l, want) {
+			t.Errorf("extract scip %q lacks %q", l, want)
+		}
+	}
+}
+
+// With no map yet, the error says what will build it: the build this
+// command just started, or nothing at all when automatic builds are off.
+func TestFirstBuildMessageSaysWhatBuildsIt(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	query := func(rebuild func(string)) error {
+		sess := &session.Session{Store: x.s, DB: x.db, Cwd: sales, StateDir: x.state, Now: x.clock, ProjectRebuild: rebuild}
+		_, _, err := sess.Query(context.Background())
+		return err
+	}
+	if err := query(nil); err == nil || !strings.Contains(err.Error(), "automatic builds are off here") {
+		t.Errorf("rebuilds off: %v", err)
+	}
+	started := 0
+	if err := query(func(string) { started++ }); started != 1 || err == nil || !strings.Contains(err.Error(), "its first build has started in the background") {
+		t.Errorf("rebuild started (%d): %v", started, err)
+	}
+}
+
+// A corrupt state file is logged once and shown in the header, instead of
+// silently stopping the project's automatic builds.
+func TestCorruptStateIsReported(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	if _, err := x.runner().Cycle(context.Background(), "shop", true); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(project.Dir(x.state, "shop"), "state.json"), []byte("{not json"), 0o644)
+	x.advance(time.Hour)
+	var log strings.Builder
+	sess := &session.Session{Store: x.s, DB: x.db, Cwd: sales, StateDir: x.state, Now: x.clock, Log: &log, ProjectRebuild: func(string) {}}
+	for range 2 {
+		q, _, err := sess.Query(session.WithoutCache(context.Background()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h := header(t, q); !strings.Contains(h, "its state is unreadable") || !strings.Contains(h, "state.json") {
+			t.Errorf("header: %s", h)
+		}
+	}
+	if n := strings.Count(log.String(), "isn't rebuilt"); n != 1 {
+		t.Errorf("logged %d times:\n%s", n, log.String())
+	}
+}
+
+// A prune that fails after the import doesn't turn the import into a
+// failed build.
+func TestPruneFailureAfterImportIsNotABuildFailure(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.register(sales)
+	defer project.SetPrune(func(context.Context, *store.Store) error { return errors.New("disk I/O error") })()
+	res, err := x.runner().Cycle(context.Background(), "shop", true)
+	if err != nil || !res.Imported {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if st := x.state0(); st.Failed != nil || st.Imported == "" {
+		t.Errorf("state after a failed prune: %+v (failed %+v)", st, st.Failed)
+	}
+}
+
+// A prefix pin (elixir 1.19) is recorded as the version mise ran
+// (1.19.5-otp-28) in the manifest, and a newer installed patch changes the
+// inputs digest, so it rebuilds.
+func TestPrefixPinsResolveToTheInstalledVersion(t *testing.T) {
+	x := newH(t)
+	_, sales, _ := x.world()
+	x.push("sales", map[string]string{".tool-versions": "erlang 28.3.1\nelixir 1.19\n"})
+	x.register(sales)
+	r := x.runner()
+	res, err := r.Cycle(context.Background(), "shop", true)
+	if err != nil || !res.Imported {
+		t.Fatalf("%+v %v", res, err)
+	}
+	m, _ := x.s.Manifest(context.Background(), res.Snapshot)
+	if v := m.Tools["sales/elixir"]; v != "1.19.5-otp-28" {
+		t.Errorf("manifest sales/elixir = %q, want 1.19.5-otp-28", v)
+	}
+	x.fakeTool("elixir@1.19.6", "elixir", x.fakeElixir())
+	res, err = r.Cycle(context.Background(), "shop", true)
+	if err != nil || !res.Imported {
+		t.Fatalf("a newer patch of a prefix pin didn't rebuild: %+v %v", res, err)
+	}
+	if m, _ := x.s.Manifest(context.Background(), res.Snapshot); m.Tools["sales/elixir"] != "1.19.6" {
+		t.Errorf("manifest sales/elixir = %q, want 1.19.6", m.Tools["sales/elixir"])
+	}
+}

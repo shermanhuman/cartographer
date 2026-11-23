@@ -28,6 +28,9 @@ type Q struct {
 	// Staleness is a one-line summary prepended to every header, e.g.
 	// "shop-app 3 commits behind". Empty means current or unknown.
 	Staleness string
+	// Title, when set, replaces the header's "map <snapshot> · repo@rev …"
+	// (a registered project's map: "map <map id>").
+	Title string
 	// Notes are advice lines that status appends (e.g. how to keep the map
 	// fresh); other queries ignore them.
 	Notes []string
@@ -48,7 +51,7 @@ func New(ctx context.Context, s *store.Store, snapshot string) (*Q, error) {
 // Entity is a resolved node of any kind.
 type Entity struct {
 	ID    string `json:"id"`
-	Kind  string `json:"kind"` // function, module, table, context, file, doc, annotation
+	Kind  string `json:"kind"` // function, route, module, table, context, file, doc, annotation
 	Label string `json:"label"`
 	Repo  string `json:"repo,omitempty"`
 	File  string `json:"file,omitempty"`
@@ -104,12 +107,25 @@ func (e *ErrNotFound) Error() string {
 	return msg
 }
 
+// ErrNoFunctions is a reference to an entity with no functions or routes
+// to trace from (a doc, an annotation): the caller's input, not a fault.
+type ErrNoFunctions struct{ Kind, ID string }
+
+func (e *ErrNoFunctions) Error() string {
+	return fmt.Sprintf("%s %s has no functions to trace", e.Kind, e.ID)
+}
+
+// routeLabel is a route's label in SQL: "METHOD /path", or the path alone
+// when the route takes any method (as in the nodes view).
+const routeLabel = `CASE method WHEN '' THEN path ELSE method || ' ' || path END`
+
 func (q *Q) get(ctx context.Context, id string) (*Entity, error) {
 	sid := q.Snapshot
 	row := q.S.DB.QueryRowContext(ctx, `
 	  SELECT f.id, 'function', coalesce(m.name || '.', '') || f.name || '/' || f.arity, f.repo, f.file, f.line
 	    FROM functions f LEFT JOIN modules m ON m.snapshot_id = f.snapshot_id AND m.id = f.module
 	   WHERE f.snapshot_id = ?1 AND f.id = ?2
+	  UNION ALL SELECT id, 'route', `+routeLabel+`, repo, file, line FROM routes WHERE snapshot_id = ?1 AND id = ?2
 	  UNION ALL SELECT id, 'module', name, repo, file, line FROM modules WHERE snapshot_id = ?1 AND id = ?2
 	  UNION ALL SELECT id, 'table', id, '', '', 0 FROM db_tables WHERE snapshot_id = ?1 AND id = ?2
 	  UNION ALL SELECT id, 'context', name, repo, '', 0 FROM contexts WHERE snapshot_id = ?1 AND id = ?2
@@ -142,13 +158,16 @@ func (q *Q) Resolve(ctx context.Context, ref string) (*Entity, error) {
 			}
 		}
 	}
-	// Label matches: functions by Module.name[/arity] suffix, modules by name
-	// suffix, tables by name, contexts by name.
+	// Label matches: functions by Module.name[/arity] suffix, routes by
+	// "METHOD /path" or path, modules by name suffix, tables by name,
+	// contexts by name.
 	rows, err := q.S.DB.QueryContext(ctx, `
 	  SELECT f.id, 'function', coalesce(m.name || '.', '') || f.name || '/' || f.arity AS label, f.repo, f.file, f.line
 	    FROM functions f LEFT JOIN modules m ON m.snapshot_id = f.snapshot_id AND m.id = f.module
 	   WHERE f.snapshot_id = ?1
 	     AND (label = ?2 OR label GLOB '*.' || ?3 OR label GLOB ?3 || '/*' OR label GLOB '*.' || ?3 || '/*')
+	  UNION ALL SELECT id, 'route', `+routeLabel+`, repo, file, line FROM routes
+	   WHERE snapshot_id = ?1 AND (`+routeLabel+` = ?2 OR path = ?2)
 	  UNION ALL SELECT id, 'module', name, repo, file, line FROM modules
 	   WHERE snapshot_id = ?1 AND (name = ?2 OR name GLOB '*.' || ?3)
 	  UNION ALL SELECT id, 'table', id, '', '', 0 FROM db_tables WHERE snapshot_id = ?1 AND (name = ?2)
@@ -397,6 +416,9 @@ func (q *Q) header(ctx context.Context, d *output.Doc) {
 	if len(repos) > 0 {
 		line += " · " + strings.Join(repos, " ")
 	}
+	if q.Title != "" {
+		line = q.Title
+	}
 	if q.Staleness != "" {
 		line += " · " + q.Staleness
 	}
@@ -407,6 +429,8 @@ func abbrev(kind string) string {
 	switch kind {
 	case "function":
 		return "FN"
+	case "route":
+		return "ROUTE"
 	case "module":
 		return "MOD"
 	case "table":
@@ -432,7 +456,7 @@ func (q *Q) entityLine(e Entity) string {
 	if loc != "" {
 		s += "  " + loc
 	}
-	if e.Kind == "doc" || e.Kind == "annotation" {
+	if e.Kind == "doc" || e.Kind == "annotation" || e.Kind == "route" {
 		s += "  \"" + e.Label + "\""
 	}
 	return s

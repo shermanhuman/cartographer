@@ -1,0 +1,25 @@
+{
+  "facts_version": 2,
+  "producer": {"name": "extract-elixir", "version": "0.2.0", "call_precision": "precise"},
+  "repo": "admin",
+  "revision": "cccccccccccccccccccccccccccccccccccccccc",
+  "files": [
+    {"path": "lib/admin_web/router.ex", "language": "elixir", "category": "source"},
+    {"path": "lib/admin_web/controllers/sales_cold_controller.ex", "language": "elixir", "category": "source"},
+    {"path": "deploy/admin.yaml", "language": "yaml", "category": "config"}
+  ],
+  "modules": [
+    {"id": "admin:AdminWeb.Router", "name": "AdminWeb.Router", "file": "lib/admin_web/router.ex", "line": 1, "language": "elixir"},
+    {"id": "admin:AdminWeb.SalesColdController", "name": "AdminWeb.SalesColdController", "file": "lib/admin_web/controllers/sales_cold_controller.ex", "line": 1, "language": "elixir"}
+  ],
+  "functions": [
+    {"id": "admin:AdminWeb.SalesColdController.check/2", "module": "admin:AdminWeb.SalesColdController", "name": "check", "arity": 2, "min_arity": 2, "kind": "def", "file": "lib/admin_web/controllers/sales_cold_controller.ex", "line": 4, "fingerprint": "check-v1"}
+  ],
+  "routes": [
+    {"id": "admin:route:AdminWeb.Router:POST /api/v1/sales/cold/check", "method": "POST", "path": "/api/v1/sales/cold/check", "handler": "admin:AdminWeb.SalesColdController.check/2", "file": "lib/admin_web/router.ex", "line": 12, "precision": "precise"}
+  ],
+  "services": [
+    {"kind": "deployment", "name": "admin", "namespace": "default", "image": "ghcr.io/example/admin:1.0", "labels": {"app": "admin"}, "file": "deploy/admin.yaml", "line": 1},
+    {"kind": "service", "name": "admin", "namespace": "default", "selector": {"app": "admin"}, "file": "deploy/admin.yaml", "line": 30}
+  ]
+}

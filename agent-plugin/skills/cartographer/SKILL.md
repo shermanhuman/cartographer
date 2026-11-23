@@ -14,8 +14,9 @@ Answer from the map first; read source only where the map points.
 1. Structural question → call a `map_*` tool (or `cartographer <cmd>` in a
    shell). Don't grep first, don't read whole files.
 2. Read only the `file:line` ranges the result cites.
-3. A line marked **⚠** is in a file changed since the snapshot: read that file
-   before trusting the line. The header names how far behind each repo is.
+3. A line marked **⚠** is in a file your checkout has changed relative to the
+   map: read that file before trusting the line. The header says what is
+   mapped and how your checkout differs.
 4. On a miss, `map_find` returns the map's own vocabulary. Retry with those
    words; never invent synonyms.
 
@@ -42,12 +43,15 @@ lists with `limit`/`offset`.
 
 ## Trust
 
-- `[precise]`: resolved from the AST. `[heuristic]`: name-matched (e.g. a
-  cross-repo call). Table mentions are `[candidate]` text matches, not proven
-  reads/writes.
-- Unresolved, dynamic and external calls are not traced: an empty caller
-  list is not proof that nothing calls X through `apply`, behaviours or HTTP.
-  Say so when it matters. Details: `references/precision.md`.
+- `[precise]`: statically resolved. `[heuristic]`: name-matched, an
+  interface or trait call linked to every implementation, or an HTTP link
+  with config evidence. `[candidate]`: text or path matches (table
+  mentions, path-only HTTP links), not proven reads, writes or calls.
+- Not traced: unresolved and external calls, Elixir dynamic calls (`apply`,
+  `var.fun()`), JavaScript calls (functions are listed, calls aren't
+  resolved) and HTTP requests whose path the extractors couldn't read. An
+  empty caller list is not proof that nothing calls X; say so when it
+  matters. Details: `references/precision.md`.
 
 ## Delegating
 
@@ -66,3 +70,10 @@ most 40 nodes, source links pinned to the snapshot). Post it with
 No snapshot, not a mapped repo, or the tools are missing:
 `references/troubleshooting.md`. Fall back to grep and say the map was
 unavailable.
+
+Registering a project trusts its code to run on this machine, so it's the
+user's: outside the cartographer-setup skill, don't run `cartographer
+project add`. When the project's `.cartographer/` settings are already
+merged, give them the command (any member checkout or `owner/name`);
+when they aren't, tell them they can start the cartographer-setup skill
+(only they can).

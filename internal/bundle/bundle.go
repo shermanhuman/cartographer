@@ -1,9 +1,10 @@
 // Package bundle reads and writes the on-disk layout of a snapshot:
 //
 //	manifest.json
-//	facts/*.json              facts v1 documents listed in the manifest
+//	facts/*.json              facts documents listed in the manifest
 //	docs/<repo>/<path>.md     tracked Markdown, copied at build time
 //	annotations/*.json        human-reviewed journeys and notes
+//	annotations/<repo>/*.json a project's, kept per repo
 package bundle
 
 import (
@@ -22,7 +23,13 @@ import (
 	"github.com/shermanhuman/cartographer/internal/facts"
 )
 
-const Format = 1
+// Format is the snapshot format this package writes; MinFormat is the oldest
+// it reads. Format 2 adds the manifest's source, inventory, tools and
+// inputs digest, and allows facts version 2.
+const (
+	Format    = 2
+	MinFormat = 1
+)
 
 // SnapshotID names a snapshot of workspace built at t:
 // snapshot-<UTC second>-<WorkspaceTag>. Lexical order is chronological
@@ -56,6 +63,26 @@ type Manifest struct {
 	Repos          []Repo     `json:"repos"`
 	Facts          []string   `json:"facts"`
 	Contexts       ContextCfg `json:"contexts"`
+
+	// Format 2.
+	// Source says what the build mapped: "main" (each repo's fetched default
+	// branch), "head" (the checkouts as they are), or "" (a published or
+	// explicit build).
+	Source       string            `json:"source,omitempty"`
+	Inventory    []Inventory       `json:"inventory,omitempty"`
+	Tools        map[string]string `json:"tools,omitempty"` // tool -> resolved version
+	InputsDigest string            `json:"inputs_digest,omitempty"`
+	// Images maps a container image name (the last path segment, no tag)
+	// to the repo that builds it, where they differ.
+	Images map[string]string `json:"images,omitempty"`
+}
+
+// Inventory counts a repository's tracked files by extension at the mapped
+// revision, so coverage can be computed without the checkout.
+type Inventory struct {
+	Repo  string `json:"repo"`
+	Ext   string `json:"ext"` // ".go", ".rs"; "" for files without one
+	Files int    `json:"files"`
 }
 
 type Repo struct {
@@ -100,6 +127,7 @@ type Step struct {
 }
 
 type Bundle struct {
+	Dir         string // where Read found it; "" for a bundle built in memory
 	Manifest    Manifest
 	Facts       []*facts.Doc
 	Docs        []Doc
@@ -108,7 +136,7 @@ type Bundle struct {
 
 // Read loads and validates a snapshot directory.
 func Read(dir string) (*Bundle, error) {
-	b := &Bundle{}
+	b := &Bundle{Dir: dir}
 	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
 		return nil, err
@@ -117,8 +145,11 @@ func Read(dir string) (*Bundle, error) {
 		return nil, fmt.Errorf("bundle: manifest: %w", err)
 	}
 	m := &b.Manifest
-	if m.SnapshotFormat != Format {
-		return nil, fmt.Errorf("bundle: snapshot_format %d not supported (want %d)", m.SnapshotFormat, Format)
+	if m.SnapshotFormat < MinFormat || m.SnapshotFormat > Format {
+		return nil, fmt.Errorf("bundle: snapshot_format %d not supported (want %d to %d; a newer snapshot needs a newer cartographer)", m.SnapshotFormat, MinFormat, Format)
+	}
+	if m.SnapshotFormat == 1 && (m.Source != "" || len(m.Inventory) > 0 || len(m.Tools) > 0 || m.InputsDigest != "" || len(m.Images) > 0) {
+		return nil, fmt.Errorf("bundle: snapshot_format 1 manifest carries format 2 fields")
 	}
 	if m.ID == "" || m.CreatedAt == "" {
 		return nil, fmt.Errorf("bundle: manifest needs id and created_at")
@@ -139,6 +170,8 @@ func Read(dir string) (*Bundle, error) {
 	}
 	// Ids are unique across the workspace: kind -> id -> facts file.
 	seen := map[string]map[string]string{"module": {}, "function": {}, "table": {}}
+	// Routes and functions are both edge endpoints, so they share one namespace.
+	seen["route"] = seen["function"]
 	claim := func(kind, id, rel string) error {
 		if prev, ok := seen[kind][id]; ok {
 			return fmt.Errorf("bundle: duplicate %s id %q in %s and %s", kind, id, prev, rel)
@@ -170,6 +203,9 @@ func Read(dir string) (*Bundle, error) {
 		if err := d.Validate(); err != nil {
 			return nil, fmt.Errorf("bundle: %s: %w", rel, err)
 		}
+		if d.FactsVersion > 1 && m.SnapshotFormat == 1 {
+			return nil, fmt.Errorf("bundle: %s: facts_version %d in a snapshot_format 1 snapshot", rel, d.FactsVersion)
+		}
 		if d.Repo != "" && !repos[d.Repo] {
 			return nil, fmt.Errorf("bundle: %s: repo %q is not in the manifest", rel, d.Repo)
 		}
@@ -185,6 +221,11 @@ func Read(dir string) (*Bundle, error) {
 		}
 		for _, t := range d.Tables {
 			if err := claim("table", t.ID, rel); err != nil {
+				return nil, err
+			}
+		}
+		for _, r := range d.Routes {
+			if err := claim("route", r.ID, rel); err != nil {
 				return nil, err
 			}
 		}
@@ -224,10 +265,16 @@ func Read(dir string) (*Bundle, error) {
 		return b.Docs[i].Path < b.Docs[j].Path
 	})
 
+	// annotations/<file>.json, and a project's annotations/<repo>/<file>.json
+	// (files of the same name from two repos are distinct).
 	files, _ := filepath.Glob(filepath.Join(dir, "annotations", "*.json"))
+	nested, _ := filepath.Glob(filepath.Join(dir, "annotations", "*", "*.json"))
+	files = append(files, nested...)
 	sort.Strings(files)
 	annFile := map[string]string{}
 	for _, p := range files {
+		name, _ := filepath.Rel(filepath.Join(dir, "annotations"), p)
+		name = filepath.ToSlash(name)
 		raw, err := os.ReadFile(p)
 		if err != nil {
 			return nil, err
@@ -236,23 +283,77 @@ func Read(dir string) (*Bundle, error) {
 			Annotations []json.RawMessage `json:"annotations"`
 		}
 		if err := json.Unmarshal(raw, &doc); err != nil {
-			return nil, fmt.Errorf("bundle: %s: %w", filepath.Base(p), err)
+			return nil, fmt.Errorf("bundle: %s: %w", name, err)
 		}
 		for i, r := range doc.Annotations {
 			var a Annotation
 			if err := json.Unmarshal(r, &a); err != nil {
-				return nil, fmt.Errorf("bundle: %s: annotations[%d]: %w", filepath.Base(p), i, err)
+				return nil, fmt.Errorf("bundle: %s: annotations[%d]: %w", name, i, err)
 			}
 			if a.ID == "" || a.Kind == "" {
-				return nil, fmt.Errorf("bundle: %s: annotations[%d] needs id and kind", filepath.Base(p), i)
+				return nil, fmt.Errorf("bundle: %s: annotations[%d] needs id and kind", name, i)
 			}
 			if prev, ok := annFile[a.ID]; ok {
-				return nil, fmt.Errorf("bundle: duplicate annotation id %q in %s and %s", a.ID, prev, filepath.Base(p))
+				return nil, fmt.Errorf("bundle: duplicate annotation id %q in %s and %s", a.ID, prev, name)
 			}
-			annFile[a.ID] = filepath.Base(p)
+			annFile[a.ID] = name
 			a.Raw = r
 			b.Annotations = append(b.Annotations, a)
 		}
 	}
 	return b, nil
+}
+
+// MapID is the identity of a built snapshot's content: the sha256 of every
+// file under dir in sorted relative-path order, each framed as path length,
+// path, content length and content, with the manifest's id and created_at
+// left out, plus the version of the binary that built it. Two snapshots with
+// the same MapID answer every query the same way.
+func MapID(dir, version string) (string, error) {
+	var paths []string
+	err := filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if e.Type().IsRegular() {
+			rel, err := filepath.Rel(dir, p)
+			if err != nil {
+				return err
+			}
+			paths = append(paths, filepath.ToSlash(rel))
+		} else if !e.IsDir() {
+			return fmt.Errorf("bundle: %s is not a regular file", p)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(paths)
+	h := sha256.New()
+	frame := func(b []byte) {
+		fmt.Fprintf(h, "%d:", len(b))
+		h.Write(b)
+	}
+	frame([]byte("cartographer " + version))
+	for _, rel := range paths {
+		content, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return "", err
+		}
+		if rel == "manifest.json" {
+			var m map[string]any
+			if err := json.Unmarshal(content, &m); err != nil {
+				return "", fmt.Errorf("bundle: manifest: %w", err)
+			}
+			delete(m, "id")
+			delete(m, "created_at")
+			if content, err = json.Marshal(m); err != nil { // map keys sort
+				return "", err
+			}
+		}
+		frame([]byte(rel))
+		frame(content)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

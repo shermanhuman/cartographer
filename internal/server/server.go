@@ -109,6 +109,9 @@ func New(o Options) http.Handler {
 		depth, _ := strconv.Atoi(r.URL.Query().Get("depth"))
 		return graph(r.Context(), q, r.URL.Query().Get("id"), depth)
 	}))
+	mux.HandleFunc("GET /api/path", a.with(func(r *http.Request, q *query.Q) (any, error) {
+		return pathView(r.Context(), q, r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+	}))
 	mux.HandleFunc("GET /api/embed", a.text(func(r *http.Request, q *query.Q) (string, error) {
 		return render.Embed(r.Context(), q, r.URL.Query().Get("id"))
 	}))
@@ -264,7 +267,8 @@ func errCode(err error) int {
 	var amb *query.ErrAmbiguous
 	var nf *query.ErrNotFound
 	var enf errNotFound
-	if errors.As(err, &amb) || errors.As(err, &nf) || errors.As(err, &enf) {
+	var nofn *query.ErrNoFunctions
+	if errors.As(err, &amb) || errors.As(err, &nf) || errors.As(err, &enf) || errors.As(err, &nofn) {
 		return http.StatusNotFound
 	}
 	return http.StatusInternalServerError
@@ -333,6 +337,10 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 		return nil, fmt.Errorf("status: counting resolved calls: %w", err)
 	}
 	counts["resolved_call_sites"] = resolved
+	coverage, err := q.Coverage(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("status: coverage: %w", err)
+	}
 	review := obj{}
 	rows, err := db.QueryContext(ctx, `SELECT status, count(*) FROM annotations WHERE snapshot_id = ? GROUP BY 1`, q.Snapshot)
 	if err != nil {
@@ -367,7 +375,7 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 	}
 	return obj{
 		"snapshot": q.Snapshot, "default_snapshot": def, "workspace": ws, "created_at": created, "imported_at": imported,
-		"repos": nonNil(repos), "counts": counts, "annotations": review, "freshness": fresh,
+		"repos": nonNil(repos), "counts": counts, "coverage": nonNil(coverage), "annotations": review, "freshness": fresh,
 		"provenance": q.Provenance(ctx), "version": a.o.Version,
 		"generated_at": a.o.Now().UTC().Format(time.RFC3339),
 	}, nil

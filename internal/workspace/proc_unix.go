@@ -57,6 +57,11 @@ func (g *procGroup) done() {
 	groups.Delete(pgid)
 }
 
+func trackGroup(pgid int) func() {
+	groups.Store(pgid, struct{}{})
+	return func() { groups.Delete(pgid) }
+}
+
 // KillGroups SIGKILLs the process group of every running plugin and
 // prepare command: a second interrupt exits without waiting for them, and
 // they no longer get the terminal's signals themselves.

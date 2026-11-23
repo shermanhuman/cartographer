@@ -1,0 +1,38 @@
+{
+  "facts_version": 2,
+  "producer": {"name": "cartographer-scip", "version": "0.2.0", "call_precision": "precise"},
+  "repo": "sales",
+  "revision": "dddddddddddddddddddddddddddddddddddddddd",
+  "files": [
+    {"path": "internal/dialer/campaign.go", "language": "go", "category": "source"},
+    {"path": "internal/dialer/cold_admin.go", "language": "go", "category": "source"},
+    {"path": "internal/dialer/cold_admin_test.go", "language": "go", "category": "test"},
+    {"path": "config.yaml", "language": "yaml", "category": "config"}
+  ],
+  "modules": [
+    {"id": "sales:internal/dialer", "name": "internal/dialer", "file": "internal/dialer/campaign.go", "line": 1, "language": "go"}
+  ],
+  "functions": [
+    {"id": "sales:internal/dialer.Server.campaignEnrollSave/2", "module": "sales:internal/dialer", "name": "campaignEnrollSave", "arity": 2, "min_arity": 2, "kind": "method", "file": "internal/dialer/campaign.go", "line": 10},
+    {"id": "sales:internal/dialer.Server.coldVerdicts/1", "module": "sales:internal/dialer", "name": "coldVerdicts", "arity": 1, "min_arity": 1, "kind": "method", "file": "internal/dialer/campaign.go", "line": 40},
+    {"id": "sales:internal/dialer.ColdAdmin.Check/1", "module": "sales:internal/dialer", "name": "Check", "arity": 1, "min_arity": 1, "kind": "interface_method", "file": "internal/dialer/cold_admin.go", "line": 12},
+    {"id": "sales:internal/dialer.adminClient.Check/1", "module": "sales:internal/dialer", "name": "Check", "arity": 1, "min_arity": 1, "kind": "method", "file": "internal/dialer/cold_admin.go", "line": 90},
+    {"id": "sales:internal/dialer.checkSelfTest/0", "module": "sales:internal/dialer", "name": "checkSelfTest", "arity": 0, "min_arity": 0, "kind": "function", "file": "internal/dialer/cold_admin.go", "line": 140, "test": true},
+    {"id": "sales:internal/dialer.TestAdminClientCheck/1", "module": "sales:internal/dialer", "name": "TestAdminClientCheck", "arity": 1, "min_arity": 1, "kind": "function", "file": "internal/dialer/cold_admin_test.go", "line": 8}
+  ],
+  "calls": [
+    {"from": "sales:internal/dialer.Server.campaignEnrollSave/2", "to": "sales:internal/dialer.Server.coldVerdicts/1", "kind": "call", "file": "internal/dialer/campaign.go", "line": 22, "precision": "precise"},
+    {"from": "sales:internal/dialer.Server.coldVerdicts/1", "to": "sales:internal/dialer.adminClient.Check/1", "kind": "dispatch", "file": "internal/dialer/campaign.go", "line": 51, "precision": "heuristic"},
+    {"from": "sales:internal/dialer.checkSelfTest/0", "to": "sales:internal/dialer.adminClient.Check/1", "kind": "call", "file": "internal/dialer/cold_admin.go", "line": 142, "precision": "precise"},
+    {"from": "sales:internal/dialer.TestAdminClientCheck/1", "to": "sales:internal/dialer.adminClient.Check/1", "kind": "call", "file": "internal/dialer/cold_admin_test.go", "line": 12, "precision": "precise"}
+  ],
+  "http_refs": [
+    {"from": "sales:internal/dialer.adminClient.Check/1", "method": "POST", "path": "/api/v1/sales/cold/check", "file": "internal/dialer/cold_admin.go", "line": 95}
+  ],
+  "config_urls": [
+    {"key": "cold.admin_url", "value": "http://admin.default.svc.cluster.local", "file": "config.yaml", "line": 63}
+  ],
+  "stats": [
+    {"language": "go", "call_sites": 4, "in_repo": 3, "dispatch": 1, "external": 0, "unresolved": 0, "refs": 0, "not_extracted": 0}
+  ]
+}

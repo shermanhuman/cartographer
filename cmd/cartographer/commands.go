@@ -1,15 +1,9 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -38,6 +32,8 @@ var commandFlags = map[string]string{
 	"mapped": "db no-pull", "hook": "db no-pull", "mcp": "db snapshot no-pull no-rebuild",
 	"init": "", "build": "db workspace out plugins import local background fetch fetch-only ref", "publish": "workspace", "review": "db snapshot workspace",
 	"validate-facts": "", "plugins-dir": "", "version": "",
+	"extract": "lang repo root revision rust-build-scripts cargo-target-dir",
+	"project": "db plugins yes project anchor", "refresh": "db plugins head from background",
 }
 
 // jsonCommands are the queries that --format json applies to.
@@ -91,29 +87,8 @@ func commandHelp(w io.Writer, fs *flag.FlagSet, cmd string) {
 	})
 }
 
-var pluginRef = regexp.MustCompile(`\{plugins\}[/\\]([^/\\]+)`)
-
 // schemaPluginsDigest identifies the bundled plugin code a schema command
-// runs (the {plugins}/<dir> it names), so editing another plugin does not
-// invalidate the schema cache.
+// runs (see workspace.SchemaPluginsDigest).
 func schemaPluginsDigest(command []string, pluginsDir string) (string, error) {
-	var dirs []string
-	for _, arg := range command {
-		for _, m := range pluginRef.FindAllStringSubmatch(arg, -1) {
-			if !slices.Contains(dirs, m[1]) {
-				dirs = append(dirs, m[1])
-			}
-		}
-	}
-	slices.Sort(dirs)
-	h := sha256.New()
-	fmt.Fprintf(h, "schema-plugins:%q\n", dirs)
-	for _, d := range dirs {
-		sum, err := workspace.DirDigest(filepath.Join(pluginsDir, d))
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("build: schema plugin digest: %w", err)
-		}
-		fmt.Fprintf(h, "%s=%s\n", d, sum)
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return workspace.SchemaPluginsDigest(command, pluginsDir)
 }

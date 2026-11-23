@@ -34,7 +34,8 @@ test('all entity IDs and shard references resolve; labels stay meaningful', {ski
 
 test('call links survive sharding in both directions without dropping sites', {skip}, async () => {
   const {shards} = await load();
-  const functions = new Map([...shards.values()].flatMap(d => Object.entries(d.functions || {})));
+  // Routes are edge endpoints with the function shape (in, out).
+  const functions = new Map([...shards.values()].flatMap(d => d.kind === 'route' ? [[d.id, d]] : Object.entries(d.functions || {})));
   assert.ok(functions.size > 0);
   for (const [id, f] of functions) for (const edge of f.out) {
     assert.ok(functions.has(edge.id), edge.id);

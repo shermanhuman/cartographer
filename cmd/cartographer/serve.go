@@ -41,6 +41,11 @@ func serve(ctx context.Context, w io.Writer, s *store.Store, c *common) error {
 		sess.Rebuild = start
 		defer func() { stop(); wait() }()
 	}
+	if sess.ProjectRebuild != nil {
+		start, wait := backgroundProject(ctx, c, sess, s)
+		sess.ProjectRebuild = start
+		defer func() { stop(); wait() }()
+	}
 	if sess.AutoPull {
 		sess.PullDue(ctx)
 	}
@@ -59,7 +64,7 @@ func serveStatus(sess *session.Session) func(ctx context.Context, snapshot strin
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"summary": rep.Summary(), "stale": rep.Summary() != "", "repos": rep.Lines()}, nil
+		return map[string]any{"summary": rep.Summary(), "stale": rep.Stale(), "repos": rep.Lines()}, nil
 	}
 }
 

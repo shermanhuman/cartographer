@@ -1,0 +1,86 @@
+{
+  "facts_version": 2,
+  "producer": {
+    "name": "scip-go",
+    "version": "0.2.9",
+    "call_precision": "precise"
+  },
+  "repo": "fixture",
+  "revision": "r1",
+  "files": [
+    {
+      "path": "stats.go",
+      "language": "go",
+      "category": "source"
+    }
+  ],
+  "modules": [
+    {
+      "id": "fixture:./",
+      "name": "./",
+      "namespace": [
+        "."
+      ],
+      "file": "stats.go",
+      "line": 8,
+      "language": "go"
+    }
+  ],
+  "functions": [
+    {
+      "id": "fixture:./T.M/0",
+      "module": "fixture:./",
+      "name": "M",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "method",
+      "file": "stats.go",
+      "line": 12,
+      "fingerprint": "9b8f7f531d836d30"
+    },
+    {
+      "id": "fixture:./Use/0",
+      "module": "fixture:./",
+      "name": "Use",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "stats.go",
+      "line": 14,
+      "fingerprint": "d7687f387ec64dd8"
+    },
+    {
+      "id": "fixture:./helper/0",
+      "module": "fixture:./",
+      "name": "helper",
+      "arity": 0,
+      "min_arity": 0,
+      "kind": "function",
+      "file": "stats.go",
+      "line": 8,
+      "fingerprint": "7ef3a1c6fdc1a1be"
+    }
+  ],
+  "calls": [
+    {
+      "from": "fixture:./Use/0",
+      "to": "fixture:./helper/0",
+      "kind": "call",
+      "file": "stats.go",
+      "line": 15,
+      "precision": "precise"
+    }
+  ],
+  "stats": [
+    {
+      "language": "go",
+      "call_sites": 2,
+      "in_repo": 1,
+      "dispatch": 0,
+      "external": 1,
+      "unresolved": 0,
+      "refs": 2,
+      "not_extracted": 0
+    }
+  ]
+}

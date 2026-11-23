@@ -48,6 +48,26 @@ func newServer(t *testing.T, imported bool) *httptest.Server {
 	return srv
 }
 
+// fixtureV2 is the facts-v2 snapshot: sales reaches admin's route
+// POST /api/v1/sales/cold/check through an interface dispatch and an HTTP link.
+const fixtureV2 = "../../testdata/workspace-v2/snapshot"
+
+// serverOver serves a store holding the snapshot in dir.
+func serverOver(t *testing.T, dir string) *httptest.Server {
+	t.Helper()
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if _, err := s.Import(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(Options{Store: s, Version: "test"}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func get(t *testing.T, srv *httptest.Server, path string, want int) (string, http.Header) {
 	t.Helper()
 	res, err := http.Get(srv.URL + path)
@@ -280,6 +300,9 @@ func TestAnnotationsStatusSnapshots(t *testing.T) {
 	if st["snapshot"] != snap || st["generated_at"] != "2026-10-15T13:00:00Z" || asObj(st["freshness"])["summary"] != "shop-app 2 commits behind" {
 		t.Errorf("status: %v", st)
 	}
+	if cov, _ := st["coverage"].([]any); len(cov) != 2 || asObj(cov[0])["repo"] != "shop-app" || asObj(cov[0])["call_sites"].(float64) != 8 || asObj(cov[0])["in_repo"].(float64) != 6 {
+		t.Errorf("status coverage: %v", st["coverage"])
+	}
 	if asObj(st["counts"])["functions"].(float64) != 7 || !strings.HasPrefix(st["provenance"].(string), "map "+snap) {
 		t.Errorf("status counts: %v", st)
 	}
@@ -415,12 +438,13 @@ func TestJSContracts(t *testing.T) {
 		t.Skip("node not on PATH; run `mise exec -- go test ./...` to include the UI tests")
 	}
 	srv := newServer(t, true)
+	v2 := serverOver(t, fixtureV2)
 	tests, _ := filepath.Glob("../../web/scripts/*.test.js")
 	if len(tests) == 0 {
 		t.Fatal("no UI tests found")
 	}
 	cmd := exec.Command(node, append([]string{"--test"}, tests...)...)
-	cmd.Env = append(os.Environ(), "CARTOGRAPHER_URL="+srv.URL+"/", "CARTOGRAPHER_FIXTURE="+fixture)
+	cmd.Env = append(os.Environ(), "CARTOGRAPHER_URL="+srv.URL+"/", "CARTOGRAPHER_FIXTURE="+fixture, "CARTOGRAPHER_V2_URL="+v2.URL+"/")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("node --test failed: %v\n%s", err, out)
@@ -637,5 +661,85 @@ func TestTableKindInPayloads(t *testing.T) {
 	shard := getJSON[obj](t, srv, "/api/entity/public.customers")
 	if shard["table_kind"] != "view" || shard["kind"] != "table" {
 		t.Errorf("shard: %v", shard)
+	}
+}
+
+// The overview draws edges from the shared edge query, so an HTTP link from
+// one repository to another's route counts like a call.
+func TestOverviewShowsCrossRepoHTTPEdge(t *testing.T) {
+	srv := serverOver(t, fixtureV2)
+	ov := getJSON[obj](t, srv, "/api/overview")
+	edges := list(asObj(asObj(ov["views"])["home"])["edges"])
+	if len(edges) != 1 {
+		t.Fatalf("home edges: %v", edges)
+	}
+	e := asObj(edges[0])
+	if e["from"] != "s:sales" || e["to"] != "s:admin" || e["label"] != "1 HTTP link" || e["precision"] != "heuristic" {
+		t.Errorf("cross-repo edge: %v", e)
+	}
+	cat := byID(getJSON[[]obj](t, srv, "/api/catalog"))
+	if r := cat["admin:route:AdminWeb.Router:POST /api/v1/sales/cold/check"]; r["kind"] != "route" || r["label"] != "POST /api/v1/sales/cold/check" {
+		t.Errorf("route catalog entry: %v", r)
+	}
+	if s := cat["s:admin"]; s["summary"] != "2 modules · 1 route at ccccccc" {
+		t.Errorf("admin repository: %v", s)
+	}
+}
+
+// A path or graph request with a reference that matches nothing is a 404;
+// a database failure underneath is a 500, not "not found".
+func TestPathAndGraphErrorCodes(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if _, err := s.Import(ctx, fixture); err != nil {
+		t.Fatal(err)
+	}
+	q, err := query.New(ctx, s, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pathView(ctx, q, "NoSuchThing.at_all/9", "Shop.Billing.charge/2"); errCode(err) != http.StatusNotFound {
+		t.Errorf("path to nothing: %d %v", errCode(err), err)
+	}
+	// A reference to something with no functions (a doc) is the caller's
+	// input: 404, as before F1-P20 (F2-P1).
+	doc := "doc:shop-app:docs/orders.md"
+	if _, err := pathView(ctx, q, doc, "Shop.Billing.charge/2"); err == nil || errCode(err) != http.StatusNotFound {
+		t.Errorf("path from a doc: %d %v", errCode(err), err)
+	}
+	if _, err := graph(ctx, q, doc, 1); err == nil || errCode(err) != http.StatusNotFound {
+		t.Errorf("graph of a doc: %d %v", errCode(err), err)
+	}
+	if _, err := s.DB.Exec(`DROP TABLE calls`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pathView(ctx, q, "Shop.Billing.charge/2", "Shop.Orders.create/2"); err == nil || errCode(err) != http.StatusInternalServerError {
+		t.Errorf("path over a broken store: %d %v", errCode(err), err)
+	}
+	if _, err := s.DB.Exec(`DROP TABLE functions`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := graph(ctx, q, "Shop.Billing", 1); err == nil || errCode(err) != http.StatusInternalServerError {
+		t.Errorf("graph over a broken store: %d %v", errCode(err), err)
+	}
+}
+
+// A root package or crate's module (./, ./[test], ./::a) keeps its ./, not
+// "/" (F3-P3).
+func TestModuleLabel(t *testing.T) {
+	for name, want := range map[string]string{
+		"./": "./", "./[test]": "./[test]", "./::a": "./::a", "./.Shape": "Shape", "./::a.A[impl Service]": "A[impl Service]",
+		"Shop.Orders": "Orders", "internal/app": "internal/app", "app[test]": "app[test]", "crates/shapes::geo.Circle": "Circle",
+	} {
+		if got := moduleLabel(name, "x.go"); got != want {
+			t.Errorf("moduleLabel(%q) = %q, want %q", name, got, want)
+		}
+	}
+	if got := moduleLabel("", "lib/a.ex"); got != "a.ex" {
+		t.Errorf("unnamed module: %q", got)
 	}
 }

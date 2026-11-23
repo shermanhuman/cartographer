@@ -64,7 +64,7 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 }
 
 func TestVersionAndPrecisionChecked(t *testing.T) {
-	d := &Doc{FactsVersion: 2, Producer: Producer{Name: "x", CallPrecision: "maybe"}}
+	d := &Doc{FactsVersion: 3, Producer: Producer{Name: "x", CallPrecision: "maybe"}}
 	err := d.Validate()
 	if err == nil || !strings.Contains(err.Error(), "$.facts_version") || !strings.Contains(err.Error(), "call_precision") {
 		t.Fatalf("got %v", err)
@@ -88,5 +88,59 @@ func TestMinArityRangeAndTableRefLine(t *testing.T) {
 	d.TableRefs[0].Line = 0
 	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "$.table_refs[0].line: must be > 0") {
 		t.Errorf("got %v", err)
+	}
+}
+
+func TestVersion1RejectsVersion2Sections(t *testing.T) {
+	d := load(t, "shop-app.json")
+	d.FactsVersion = 1
+	d.Routes = []Route{{ID: "r", Path: "/x", File: d.Files[0].Path}}
+	d.Functions[0].Test = true
+	err := d.Validate()
+	if err == nil || !strings.Contains(err.Error(), "$.routes: needs facts_version 2") || !strings.Contains(err.Error(), "$.functions[0].test: needs facts_version 2") {
+		t.Fatalf("got %v", err)
+	}
+	d.FactsVersion = 2
+	if err := d.Validate(); err != nil {
+		t.Fatalf("version 2 with routes: %v", err)
+	}
+}
+
+func TestVersion2Sections(t *testing.T) {
+	d := load(t, "shop-app.json")
+	d.FactsVersion = 2
+	f := d.Functions[0]
+	d.Routes = []Route{
+		{ID: "r1", Method: "POST", Path: "/a", Handler: f.ID, File: f.File, Precision: Precise},
+		{ID: "r1", Method: "post", Path: "a", Handler: "nope", File: f.File, Precision: "maybe"},
+	}
+	d.HTTPRefs = []HTTPRef{{From: "nope", Method: "get", Path: "x", File: f.File}}
+	d.ConfigURLs = []ConfigURL{{Key: "", Value: "http://x", File: f.File}}
+	d.Services = []Service{{Kind: "pod", Name: "", File: f.File}}
+	d.Stats = []Stats{{Language: "go", Refs: -1}, {Language: "go"}}
+	err := d.Validate()
+	if err == nil {
+		t.Fatal("want errors")
+	}
+	for _, want := range []string{
+		`$.routes[1].id: duplicate "r1"`, "$.routes[1].path: must start with /", "$.routes[1].method: must be upper case",
+		`$.routes[1].handler: unknown function "nope"`, `$.routes[1].precision: unknown precision "maybe"`,
+		`$.http_refs[0].from: unknown function "nope"`, "$.http_refs[0].path: must start with /", "$.http_refs[0].method: must be upper case",
+		"$.config_urls[0]: key and value are required", `$.services[0].kind: want deployment or service, got "pod"`, "$.services[0].name: required",
+		"$.stats[0]: counts must be >= 0", `$.stats[1].language: duplicate "go"`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "$.routes[0]") {
+		t.Errorf("valid route flagged: %v", err)
+	}
+}
+
+func TestDecodeRejectsUnknownFieldsInVersion2(t *testing.T) {
+	_, err := Decode(strings.NewReader(`{"facts_version":2,"producer":{"name":"x"},"routes":[{"id":"r","path":"/","file":"a","verb":"GET"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "verb") {
+		t.Fatalf("want unknown-field error, got %v", err)
 	}
 }

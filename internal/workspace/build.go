@@ -45,6 +45,11 @@ type BuildOptions struct {
 	Now time.Time
 	// Log receives progress lines; nil discards them.
 	Log io.Writer
+	// SchemaDB is the throwaway database a `postgres = "managed"` schema
+	// step runs against, and SchemaEnv is added to that step's environment
+	// (e.g. PATH with the database's client programs first).
+	SchemaDB  SchemaDB
+	SchemaEnv []string
 	// Fetch clones missing checkouts from their URL and fetches existing
 	// ones (and any Refs revisions) before building; a configured ref then
 	// resolves against origin (origin/HEAD, origin/<branch>), since a fetch
@@ -241,32 +246,32 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 				return nil, fmt.Errorf("build: plugins digest: %w", err)
 			}
 		}
-		key, err := schemaKey(ctx, c, prep.revision, prep.repo, prep.src, pdigest)
+		var db SchemaDB
+		if c.Schema.Postgres == "managed" {
+			if db = o.SchemaDB; db == nil {
+				return nil, errors.New("build: schema: postgres = \"managed\" needs a database runner")
+			}
+		}
+		key, err := schemaKey(ctx, c, prep.revision, prep.repo, prep.src, pdigest, db)
 		if err != nil {
 			return nil, err
 		}
-		cached := filepath.Join(o.CacheDir, "schema", key+".json")
-		if err := validFacts(cached); err == nil {
-			logf("schema: cached %s", key[:12])
-		} else {
-			if !errors.Is(err, os.ErrNotExist) {
-				logf("schema: cached %s is unusable (%v); rebuilding", key[:12], err)
-			}
-			logf("schema: building (cache key %s)", key[:12])
-			env := mapEnv(c.Schema.Env)
-			if c.Schema.Prepare != "" {
-				stderr, err := runCmd(ctx, prep.root, env, []string{"sh", "-c", c.Schema.Prepare}, nil)
-				if err != nil {
-					return nil, fmt.Errorf("build: schema prepare: %w", err)
-				}
-				logStderr("schema prepare", stderr)
-			}
-			v := map[string]string{"plugins": o.PluginsDir, "workspace": c.dir, "root": prep.root, "repo": prep.repo.Name, "revision": prep.revision}
-			stderr, err := runPlugin(ctx, c.dir, env, expand(c.Schema.Command, v), cached, "")
-			if err != nil {
-				return nil, fmt.Errorf("build: schema: %w", err)
-			}
-			logStderr("schema", stderr)
+		cached, err := RunSchema(ctx, SchemaStep{
+			Root:     prep.root,
+			Dir:      c.dir,
+			Prepare:  c.Schema.Prepare,
+			Command:  c.Schema.Command,
+			Vars:     map[string]string{"plugins": o.PluginsDir, "workspace": c.dir, "root": prep.root, "repo": prep.repo.Name, "revision": prep.revision},
+			Env:      c.Schema.Env,
+			ExtraEnv: o.SchemaEnv,
+			Key:      key,
+			CacheDir: o.CacheDir,
+			DB:       db,
+			Scratch:  work,
+			Log:      o.Log,
+		})
+		if err != nil {
+			return nil, err
 		}
 		if err := copyFile(cached, filepath.Join(out, "facts", "schema.json")); err != nil {
 			return nil, err
@@ -453,10 +458,19 @@ func archive(ctx context.Context, src, rev, dst string) ([]string, error) {
 }
 
 // schemaKey is the schema cache key; src is r's checkout (the one archived).
-func schemaKey(ctx context.Context, c *Config, rev string, r Repo, src, pluginsDigest string) (string, error) {
+// A managed database adds its setting and identity (keys without one are
+// unchanged from 0.1).
+func schemaKey(ctx context.Context, c *Config, rev string, r Repo, src, pluginsDigest string, db SchemaDB) (string, error) {
 	h := sha256.New()
 	fmt.Fprintf(h, "schema-version=%s\ncommand=%q\nprepare=%q\nprepare-repo=%q\nenv=%q\nplugins=%s\n",
 		c.Schema.Version, c.Schema.Command, c.Schema.Prepare, c.Schema.PrepareRepo, mapEnv(c.Schema.Env), pluginsDigest)
+	if c.Schema.Postgres != "" {
+		id := ""
+		if k, ok := db.(KeyedSchemaDB); ok {
+			id = k.Key()
+		}
+		fmt.Fprintf(h, "postgres=%s %s\n", c.Schema.Postgres, id)
+	}
 	if r.Name != "" && len(c.Schema.CacheKey) == 0 {
 		// Nothing narrower configured: any change to the repo misses.
 		fmt.Fprintf(h, "revision=%s\n", rev)
@@ -515,13 +529,20 @@ func mapEnv(m map[string]string) []string {
 	return env
 }
 
+// runCmd runs argv with the process environment (less credentials) and env
+// after it (later entries win).
 func runCmd(ctx context.Context, dir string, env, argv []string, stdout io.Writer) (string, error) {
+	return runCmdIn(ctx, dir, append(childEnv(os.Environ()), env...), argv, stdout)
+}
+
+// runCmdIn runs argv with exactly the environment env.
+func runCmdIn(ctx context.Context, dir string, env, argv []string, stdout io.Writer) (string, error) {
 	if len(argv) == 0 {
 		return "", errors.New("empty command")
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(childEnv(os.Environ()), env...)
+	cmd.Env = env
 	// Cancelling ends the command's whole process group (ownGroup); after
 	// WaitDelay the command is killed and its output pipes closed.
 	cmd.WaitDelay = 5 * time.Second
@@ -554,8 +575,13 @@ func tail(s string) string {
 // runPlugin runs an extractor, validates its facts output and writes it. It
 // returns the extractor's stderr (warnings) for the caller to log.
 func runPlugin(ctx context.Context, dir string, env, argv []string, out, repo string) (string, error) {
+	return runPluginIn(ctx, dir, append(childEnv(os.Environ()), env...), argv, out, repo)
+}
+
+// runPluginIn is runPlugin with exactly the environment env.
+func runPluginIn(ctx context.Context, dir string, env, argv []string, out, repo string) (string, error) {
 	var buf bytes.Buffer
-	stderr, err := runCmd(ctx, dir, env, argv, &buf)
+	stderr, err := runCmdIn(ctx, dir, env, argv, &buf)
 	if err != nil {
 		return "", err
 	}

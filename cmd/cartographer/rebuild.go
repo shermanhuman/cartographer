@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/shermanhuman/cartographer/internal/bundle"
+	"github.com/shermanhuman/cartographer/internal/project"
 	"github.com/shermanhuman/cartographer/internal/rebuild"
 	"github.com/shermanhuman/cartographer/internal/session"
 	"github.com/shermanhuman/cartographer/internal/store"
@@ -300,6 +301,18 @@ func buildImport(ctx context.Context, w io.Writer, c *common, cfg *workspace.Con
 	if cfg.Schema != nil {
 		if o.PluginsDigest, err = schemaPluginsDigest(cfg.Schema.Command, o.PluginsDir); err != nil {
 			return nil, err
+		}
+		if cfg.Schema.Postgres == "managed" {
+			// The release's PostgreSQL from mise, with its psql first on
+			// the step's PATH (the step's other tools stay ambient here).
+			pg := &project.ManagedPostgres{Mise: &project.Mise{Dir: project.StateDir(), Log: o.Log}, Log: o.Log}
+			if err := os.MkdirAll(pg.Mise.Dir, 0o755); err != nil {
+				return nil, err
+			}
+			if o.SchemaEnv, err = pg.Env(ctx); err != nil {
+				return nil, fmt.Errorf("build: schema: %w", err)
+			}
+			o.SchemaDB = pg
 		}
 	}
 	if o.Out == "" {

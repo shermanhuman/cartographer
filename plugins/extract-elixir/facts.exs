@@ -1,12 +1,14 @@
 defmodule Cartographer.ElixirFacts do
   @moduledoc """
-  Builds one facts v1 document for an Elixir repository from the raw output
-  of `Cartographer.ElixirSource`. See docs/facts-format.md.
+  Builds one facts v2 document for an Elixir repository from the raw output
+  of `Cartographer.ElixirSource`: v1's sections plus Phoenix `routes`,
+  `http_refs` through Req wrappers (`Cartographer.ElixirHTTP`) and one
+  `stats` entry. See docs/facts-format.md.
   """
 
-  alias Cartographer.ElixirSource
+  alias Cartographer.{ElixirHTTP, ElixirSource}
 
-  @version "0.1.0"
+  @version "0.2.0"
   @public ~w(def defmacro defdelegate defguard)
   # defguard defines a macro; defdelegate a function.
   @macro_kinds ~w(defmacro defmacrop defguard defguardp)
@@ -23,7 +25,13 @@ defmodule Cartographer.ElixirFacts do
   scripts) and `:schema_facts` (path of a schema facts document; enables
   `table_refs`).
   """
-  def build(opts) do
+  def build(opts), do: opts |> build_with_skips() |> elem(0)
+
+  @doc """
+  `build/1`, plus the routes and HTTP references counted as not extracted:
+  `{doc, [%{file, line, reason}]}`, sorted.
+  """
+  def build_with_skips(opts) do
     repo = Keyword.fetch!(opts, :repo)
     root = opts |> Keyword.fetch!(:root) |> Path.expand()
     source_roots = Keyword.get(opts, :source_roots) || ["lib"]
@@ -65,7 +73,19 @@ defmodule Cartographer.ElixirFacts do
 
     {modules, module_notes} = modules(parsed.modules, repo)
     {functions, clauses, function_notes} = functions(parsed.clauses, repo)
-    calls = calls(parsed.calls, functions)
+    {calls, classified, defined} = calls(parsed.calls, functions)
+    {routes, route_notes} = routes(parsed.routes, functions, repo)
+    {http_refs, http_skipped} = ElixirHTTP.refs(parsed.clauses, classified, functions)
+
+    stats =
+      calls
+      |> call_stats(defined, MapSet.new(modules, & &1.name))
+      |> Map.merge(%{
+        language: "elixir",
+        dispatch: 0,
+        refs: 0,
+        not_extracted: length(parsed.route_skips) + length(http_skipped)
+      })
 
     {ref_files, refs, ref_notes} =
       case opts[:schema_facts] do
@@ -80,12 +100,12 @@ defmodule Cartographer.ElixirFacts do
       |> Enum.map(&file_entry/1)
 
     notes =
-      (parsed.notes ++ skipped ++ module_notes ++ function_notes ++ ref_notes)
+      (parsed.notes ++ skipped ++ module_notes ++ function_notes ++ ref_notes ++ route_notes)
       |> Enum.uniq()
       |> Enum.sort_by(&{&1[:file] || "", &1.kind, &1.message})
 
     %{
-      facts_version: 1,
+      facts_version: 2,
       producer: %{name: "extract-elixir", version: @version, call_precision: "precise"},
       repo: repo,
       revision: opts[:revision],
@@ -94,16 +114,27 @@ defmodule Cartographer.ElixirFacts do
       functions: functions,
       calls: calls,
       table_refs: refs,
-      notes: notes
+      notes: notes,
+      routes: if(routes != [], do: routes),
+      http_refs: if(http_refs != [], do: http_refs),
+      stats: [stats]
     }
     |> Enum.reject(fn {_, v} -> is_nil(v) end)
     |> Map.new()
+    |> then(fn doc ->
+      skips =
+        for(s <- parsed.route_skips, do: %{file: s.file, line: s.line, reason: s.kind}) ++
+          Enum.map(http_skipped, &Map.take(&1, [:file, :line, :reason]))
+
+      {doc, Enum.sort(skips)}
+    end)
   end
 
   # Keys in this order first, then alphabetically, so output is stable and
   # reads like docs/facts-format.md regardless of atom table order.
   @key_order ~w(facts_version producer repo revision files modules functions calls table_refs
-                notes id path from target table name version call_precision module arity kind)
+                notes routes http_refs stats id path from target table name version call_precision
+                module arity kind)
 
   @doc "Encodes `term` as JSON with deterministic key order."
   def encode(term), do: term |> encode_iodata() |> IO.iodata_to_binary()
@@ -329,6 +360,8 @@ defmodule Cartographer.ElixirFacts do
 
   # --- calls -----------------------------------------------------------------
 
+  # Returns the output calls, the raw calls with `:target_module` and `:kind`
+  # classified (for the HTTP analysis), and the definitions index.
   defp calls(raw, functions) do
     defined =
       Enum.reduce(functions, %{}, fn f, acc ->
@@ -338,22 +371,88 @@ defmodule Cartographer.ElixirFacts do
         Map.update(acc, {module, f.name}, [entry], &[entry | &1])
       end)
 
-    raw
-    |> Enum.map(fn c ->
-      {module, kind} = classify(c, defined)
+    classified =
+      Enum.map(raw, fn c ->
+        {module, kind} = classify(c, defined)
+        %{c | kind: kind} |> Map.put(:target_module, module)
+      end)
 
-      target =
-        if module,
-          do: %{module: module, name: c.name, arity: c.arity},
-          else: %{name: c.name, arity: c.arity}
+    calls =
+      classified
+      |> Enum.map(fn c ->
+        target =
+          if c.target_module,
+            do: %{module: c.target_module, name: c.name, arity: c.arity},
+            else: %{name: c.name, arity: c.arity}
 
-      %{from: c.from, target: target, kind: kind, file: c.file, line: c.line}
+        %{from: c.from, target: target, kind: c.kind, file: c.file, line: c.line}
+      end)
+      |> Enum.uniq()
+      |> Enum.sort_by(
+        &{&1.file, &1.line, &1.from, &1.target[:module] || "", &1.target.name, &1.target.arity,
+         &1.kind}
+      )
+
+    {calls, classified, defined}
+  end
+
+  # Call sites by outcome: in-repo when the target names a function in this
+  # document, external when it names a module outside it, else unresolved.
+  defp call_stats(calls, defined, modules) do
+    Enum.reduce(calls, %{call_sites: 0, in_repo: 0, external: 0, unresolved: 0}, fn c, acc ->
+      module = c.target[:module]
+
+      outcome =
+        cond do
+          module && defined?(defined, module, c.target.name, c.target.arity, false) -> :in_repo
+          module && not MapSet.member?(modules, module) -> :external
+          true -> :unresolved
+        end
+
+      acc |> Map.update!(:call_sites, &(&1 + 1)) |> Map.update!(outcome, &(&1 + 1))
     end)
-    |> Enum.uniq()
-    |> Enum.sort_by(
-      &{&1.file, &1.line, &1.from, &1.target[:module] || "", &1.target.name, &1.target.arity,
-       &1.kind}
-    )
+  end
+
+  # --- routes ----------------------------------------------------------------
+
+  # A route's handler is Controller.action/2 when this document defines it.
+  # Ids carry the router module, so two apps in one repo can serve the same
+  # path. The same router, method and path a second time (a later scope that
+  # Phoenix never reaches) is noted and left out.
+  defp routes(raw, functions, repo) do
+    ids = MapSet.new(functions, & &1.id)
+
+    raw
+    |> Enum.sort_by(&{&1.file, &1.line})
+    |> Enum.reduce({[], %{}, []}, fn r, {routes, seen, notes} ->
+      id = "#{repo}:route:#{r.router}:#{r.method} #{r.path}"
+
+      case seen do
+        %{^id => first} ->
+          note = %{
+            kind: "duplicate_route",
+            file: r.file,
+            message:
+              "line #{r.line}: #{r.method} #{r.path} is also defined in #{first.file}:#{first.line}"
+          }
+
+          {routes, seen, [note | notes]}
+
+        _ ->
+          handler = r.controller && r.action && "#{repo}:#{r.controller}.#{r.action}/2"
+
+          route =
+            %{id: id, method: r.method, path: r.path, file: r.file, line: r.line}
+            |> then(fn route ->
+              if handler in ids,
+                do: Map.merge(route, %{handler: handler, precision: "precise"}),
+                else: route
+            end)
+
+          {[route | routes], Map.put(seen, id, r), notes}
+      end
+    end)
+    |> then(fn {routes, _, notes} -> {Enum.sort_by(routes, & &1.id), notes} end)
   end
 
   # An unqualified call goes to a local definition, else to the one module
@@ -428,8 +527,8 @@ defmodule Cartographer.ElixirFacts do
   defp table_refs(root, ref_roots, schema_path, schemas, clauses) do
     schema = schema_path |> File.read!() |> JSON.decode!()
 
-    if schema["facts_version"] != 1,
-      do: raise(ArgumentError, "--schema-facts #{schema_path} is not a facts v1 document")
+    if schema["facts_version"] not in [1, 2],
+      do: raise(ArgumentError, "--schema-facts #{schema_path} is not a facts v1 or v2 document")
 
     by_name =
       (schema["tables"] || [])

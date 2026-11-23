@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -137,5 +138,93 @@ func TestReadRejectsNegativeContextDepth(t *testing.T) {
 	edit(t, filepath.Join(dir, "manifest.json"), `"depth": 2`, `"depth": -1`)
 	if _, err := Read(dir); err == nil || !strings.Contains(err.Error(), "contexts.depth") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestMapIDIgnoresIDAndTimeButNotContent(t *testing.T) {
+	dir := copyMini(t)
+	base, err := MapID(dir, "0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := MapID(dir, "0.2.0"); again != base {
+		t.Fatal("not stable")
+	}
+	if other, _ := MapID(dir, "0.2.1"); other == base {
+		t.Error("binary version not covered")
+	}
+	m := filepath.Join(dir, "manifest.json")
+	raw, _ := os.ReadFile(m)
+	var man Manifest
+	json.Unmarshal(raw, &man)
+	edit(t, m, man.CreatedAt, "2030-01-01T00:00:00Z")
+	edit(t, m, `"`+man.ID+`"`, `"snapshot-20300101T000000Z-`+WorkspaceTag(man.Workspace)+`"`)
+	if got, _ := MapID(dir, "0.2.0"); got != base {
+		t.Error("id or created_at changed the map id")
+	}
+	// A changed fact, a changed doc and a renamed doc each change it.
+	for name, change := range map[string]func(d string){
+		"fact": func(d string) {
+			edit(t, filepath.Join(d, "facts", "shop-worker.json"), "shop-worker:Worker.Nightly.run/0", "shop-worker:Worker.Nightly.go/0")
+		},
+		"doc": func(d string) { appendTo(t, firstDoc(t, d), "\nmore\n") },
+		"rename": func(d string) {
+			p := firstDoc(t, d)
+			if err := os.Rename(p, strings.TrimSuffix(p, ".md")+"-renamed.md"); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		d := copyMini(t)
+		change(d)
+		if got, _ := MapID(d, "0.2.0"); got == base {
+			t.Errorf("%s change kept the map id", name)
+		}
+	}
+}
+
+func firstDoc(t *testing.T, dir string) string {
+	t.Helper()
+	var found string
+	filepath.WalkDir(filepath.Join(dir, "docs"), func(p string, e fs.DirEntry, err error) error {
+		if err == nil && found == "" && !e.IsDir() && strings.HasSuffix(p, ".md") {
+			found = p
+		}
+		return nil
+	})
+	if found == "" {
+		t.Fatal("fixture has no doc")
+	}
+	return found
+}
+
+func appendTo(t *testing.T, p, s string) {
+	t.Helper()
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(s)
+	f.Close()
+}
+
+func TestFormat1RejectsFormat2Content(t *testing.T) {
+	dir := copyMini(t)
+	edit(t, filepath.Join(dir, "manifest.json"), `"snapshot_format": 1`, `"snapshot_format": 1, "source": "main"`)
+	if _, err := Read(dir); err == nil || !strings.Contains(err.Error(), "format 2 fields") {
+		t.Errorf("got %v", err)
+	}
+	dir = copyMini(t)
+	edit(t, filepath.Join(dir, "facts", "shop-worker.json"), `"facts_version": 1`, `"facts_version": 2`)
+	if _, err := Read(dir); err == nil || !strings.Contains(err.Error(), "facts_version 2 in a snapshot_format 1") {
+		t.Errorf("got %v", err)
+	}
+	edit(t, filepath.Join(dir, "manifest.json"), `"snapshot_format": 1`, `"snapshot_format": 2`)
+	if _, err := Read(dir); err != nil {
+		t.Errorf("format 2 with facts 2: %v", err)
+	}
+	edit(t, filepath.Join(dir, "manifest.json"), `"snapshot_format": 2`, `"snapshot_format": 3`)
+	if _, err := Read(dir); err == nil || !strings.Contains(err.Error(), "newer cartographer") {
+		t.Errorf("got %v", err)
 	}
 }
