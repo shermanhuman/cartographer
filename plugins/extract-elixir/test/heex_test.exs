@@ -165,6 +165,9 @@ defmodule Cartographer.HEExTest do
         const label = `${this.pushEvent("templated", {})}`;
         const r = /"/; this.pushEvent("\u0073igned", {});
         this.pushEvent("row_" + id, {});
+        x++ / this.pushEvent("divided") / 2; obj.return / this.pushEvent("divided") / 2;
+        if (ok) /"/.test(s); this.pushEvent("divided");
+        const smile = "\uD83D\uDE00"; const lone = "\uD83D";
         export default { mounted() { this.pushEvent("signed", {}); this.pushEventTo("#x", "aimed", {}); this.pushEvent(this.el.dataset.event, {}) } }
       </script>
     </div>
@@ -403,7 +406,10 @@ defmodule Cartographer.HEExTest do
     founders = for {"ShopWeb.FoundersLive.render/1", ev, _, _, _, _} <- s, do: ev
 
     assert Enum.sort(founders, &(inspect(&1) <= inspect(&2))) ==
-             Enum.sort([:dynamic, "aimed", "signed", "templated"], &(inspect(&1) <= inspect(&2)))
+             Enum.sort(
+               [:dynamic, "aimed", "divided", "signed", "templated"],
+               &(inspect(&1) <= inspect(&2))
+             )
 
     refute Enum.any?(doc.events, &(&1[:event] in ["ghost", "inside", "", "row_"]))
     # <.button click="delete"> and <.button click={@event}>: one named, one dynamic.

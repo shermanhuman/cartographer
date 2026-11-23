@@ -226,11 +226,17 @@ defmodule Cartographer.HEEx do
   # offset just past it}.
   # Code inside a template's ${...} is kept, so a send there is found.
   defp mask(text) do
-    {_rest, _i, acc} = code(text, 0, %{out: [], strings: %{}, last: :start}, :top)
+    {_rest, _i, acc} = code(text, 0, %{out: [], strings: %{}, last: :start, parens: []}, :top)
     {IO.iodata_to_binary(Enum.reverse(acc.out)), acc.strings}
   end
 
-  @regex_words ~w(return typeof instanceof in of new delete void throw case do else yield await)
+  # Regex or division: the rule JavaScript tokenizers use. A / starts a
+  # regex after punctuation, an opening bracket, the start, one of these
+  # keywords (not a property: obj.return / x is division), or the ) of an
+  # if/while/for/with head; after a value (a name, number, literal, ) or ],
+  # or a postfix ++/--) it divides.
+  @regex_words ~w(return typeof instanceof in new delete void throw case do else yield await)
+  @control_words ~w(if while for with)
 
   defp put(acc, bytes), do: %{acc | out: [bytes | acc.out]}
   defp blank(acc, n), do: put(acc, String.duplicate(" ", n))
@@ -285,14 +291,42 @@ defmodule Cartographer.HEEx do
     [word] = Regex.run(~r/\A[A-Za-z0-9_$]+/, bin)
     n = byte_size(word)
     rest = binary_part(bin, n, byte_size(bin) - n)
-    code(rest, i + n, %{put(acc, word) | last: {:word, word}}, mode)
+    code(rest, i + n, %{put(acc, word) | last: {:word, word, acc.last == :dot}}, mode)
+  end
+
+  # ++/-- after a value is postfix (the result is a value), else prefix.
+  defp code(<<op::binary-size(2), rest::binary>>, i, acc, mode) when op in ["++", "--"] do
+    last = if value?(acc.last), do: :value, else: :punct
+    code(rest, i + 2, %{put(acc, op) | last: last}, mode)
+  end
+
+  defp code(<<"(", rest::binary>>, i, acc, mode) do
+    control = match?({:word, w, false} when w in @control_words, acc.last)
+    code(rest, i + 1, %{put(acc, "(") | last: :punct, parens: [control | acc.parens]}, mode)
+  end
+
+  defp code(<<")", rest::binary>>, i, acc, mode) do
+    {control, parens} =
+      case acc.parens do
+        [c | rest] -> {c, rest}
+        [] -> {false, []}
+      end
+
+    code(
+      rest,
+      i + 1,
+      %{put(acc, ")") | last: if(control, do: :punct, else: :value), parens: parens},
+      mode
+    )
   end
 
   defp code(<<c, rest::binary>>, i, acc, mode) do
     last =
       cond do
         c in ~c" \t\r\n" -> acc.last
-        c in ?0..?9 or c in ~c")]" -> :value
+        c == ?. and acc.last != :number -> :dot
+        c in ?0..?9 -> :number
+        c == ?] -> :value
         true -> :punct
       end
 
@@ -308,8 +342,10 @@ defmodule Cartographer.HEEx do
 
   defp regex_allowed?(:start), do: true
   defp regex_allowed?(:punct), do: true
-  defp regex_allowed?({:word, w}), do: w in @regex_words
+  defp regex_allowed?({:word, w, false}), do: w in @regex_words
   defp regex_allowed?(_), do: false
+
+  defp value?(last), do: not regex_allowed?(last) and last != :dot
 
   # A regex literal's body after the opening /, through its flags.
   defp regex_body(<<>>, acc, _class), do: {IO.iodata_to_binary(Enum.reverse(acc)), <<>>}
@@ -363,22 +399,53 @@ defmodule Cartographer.HEEx do
   defp template(<<c, rest::binary>>, i, acc, text, interp),
     do: template(rest, i + 1, blank(acc, 1), [<<c>> | text], interp)
 
-  # A JavaScript string's value from its raw body.
+  # A JavaScript string's value from its raw body. A UTF-16 surrogate pair
+  # is one character; a lone surrogate or an out-of-range code point is
+  # U+FFFD. Never raises.
   defp decode(raw) do
-    Regex.replace(~r/\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|\n|.)/s, raw, fn _, e ->
-      case e do
-        "u{" <> hex -> <<String.to_integer(String.trim_trailing(hex, "}"), 16)::utf8>>
-        "u" <> hex -> <<String.to_integer(hex, 16)::utf8>>
-        "x" <> hex -> <<String.to_integer(hex, 16)::utf8>>
-        "n" -> "\n"
-        "t" -> "\t"
-        "r" -> "\r"
-        "0" -> <<0>>
-        "\n" -> ""
-        other -> other
+    Regex.replace(
+      ~r/\\(u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|\n|.)/s,
+      raw,
+      fn _, e ->
+        case e do
+          <<"u", hi::binary-size(4), "\\u", lo::binary-size(4)>> ->
+            h = String.to_integer(hi, 16)
+            l = String.to_integer(lo, 16)
+            char(0x10000 + (h - 0xD800) * 0x400 + (l - 0xDC00))
+
+          "u{" <> hex ->
+            hex |> String.trim_trailing("}") |> String.to_integer(16) |> char()
+
+          "u" <> hex ->
+            char(String.to_integer(hex, 16))
+
+          "x" <> hex ->
+            char(String.to_integer(hex, 16))
+
+          "n" ->
+            "\n"
+
+          "t" ->
+            "\t"
+
+          "r" ->
+            "\r"
+
+          "0" ->
+            <<0>>
+
+          "\n" ->
+            ""
+
+          other ->
+            other
+        end
       end
-    end)
+    )
   end
+
+  defp char(cp) when cp in 0..0xD7FF or cp in 0xE000..0x10FFFF, do: <<cp::utf8>>
+  defp char(_), do: "\uFFFD"
 
   defp take_until(text, stop) do
     case :binary.match(text, stop) do
