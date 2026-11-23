@@ -63,9 +63,9 @@ func TestElixirPluginContract(t *testing.T) {
 	if d.Producer.Name != "extract-elixir" || d.Producer.CallPrecision != Precise {
 		t.Errorf("producer = %+v", d.Producer)
 	}
-	if d.FactsVersion != 2 || len(d.Stats) != 1 || d.Stats[0].Language != "elixir" ||
+	if d.FactsVersion != 3 || len(d.Stats) != 1 || d.Stats[0].Language != "elixir" ||
 		d.Stats[0].CallSites != len(d.Calls) {
-		t.Errorf("facts_version %d, stats %+v (want version 2, one elixir entry counting %d calls)",
+		t.Errorf("facts_version %d, stats %+v (want version 3, one elixir entry counting %d calls)",
 			d.FactsVersion, d.Stats, len(d.Calls))
 	}
 	if d.Repo != "shop" || d.Revision != "0123456789abcdef" {

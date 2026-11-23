@@ -36,6 +36,7 @@ jobs:
       - name: Elixir plugin tests
         run: |
           elixir plugins/extract-elixir/test/extract_test.exs
+          elixir plugins/extract-elixir/test/heex_test.exs
           elixir plugins/extract-postgres-schema/test/capture_test.exs
       - name: JavaScript plugin tests
         run: |

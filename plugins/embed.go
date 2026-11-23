@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 )
 
-//go:embed extract-elixir/*.exs extract-elixir/README.md
+//go:embed extract-elixir/*.exs extract-elixir/README.md extract-elixir/LIVEVIEW-LICENSE.md
 //go:embed extract-javascript/*.mjs extract-javascript/package.json extract-javascript/README.md
 //go:embed extract-postgres-schema/*.exs extract-postgres-schema/schema.sql extract-postgres-schema/README.md
 var FS embed.FS

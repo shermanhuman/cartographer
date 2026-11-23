@@ -1,4 +1,6 @@
 # Run: mise exec -- elixir plugins/extract-elixir/test/extract_test.exs
+Code.require_file("../heex_tokenizer.exs", __DIR__)
+Code.require_file("../heex.exs", __DIR__)
 Code.require_file("../source.exs", __DIR__)
 Code.require_file("../http.exs", __DIR__)
 Code.require_file("../facts.exs", __DIR__)
@@ -60,7 +62,7 @@ defmodule Cartographer.ElixirExtractTest do
   describe "fixture project" do
     test "inventories files, modules and namespaces" do
       doc = fixture_doc()
-      assert doc.facts_version == 2
+      assert doc.facts_version == 3
 
       assert doc.producer == %{
                name: "extract-elixir",
@@ -250,7 +252,7 @@ defmodule Cartographer.ElixirExtractTest do
       end
       decoded = JSON.decode!(first)
       assert decoded["revision"] == "abc123"
-      assert String.starts_with?(first, ~s({"facts_version":2,"producer":))
+      assert String.starts_with?(first, ~s({"facts_version":3,"producer":))
       assert length(decoded["functions"]) == length(fixture_doc().functions)
     end
 
