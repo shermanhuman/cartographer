@@ -290,7 +290,7 @@ func TestConvertGo(t *testing.T) {
 	if s := d.Stats[0]; s.NotExtracted != 3 || s.Refs != 5 || s.Unresolved != 0 || s.CallSites != s.InRepo+s.Dispatch+s.External+s.Unresolved {
 		t.Errorf("stats %+v: want 3 not extracted (closure, computed pattern, computed path), 5 refs (s.f, four handlers), sites = sum", s)
 	}
-	if d.Producer.Name != "scip-go" || d.Producer.Version != "0.2.9" || d.FactsVersion != 2 || d.Revision != "r1" {
+	if d.Producer.Name != "scip-go" || d.Producer.Version != "0.2.9" || d.FactsVersion != facts.Version || d.Revision != "r1" {
 		t.Errorf("header: %+v", d)
 	}
 }

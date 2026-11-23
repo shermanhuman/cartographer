@@ -24,6 +24,7 @@ function write(files, root = tmp()) {
   }
   return root;
 }
+const short = (id) => id.split(':').slice(1).join(':');
 const edges = (doc) => doc.calls.filter(c => c.to).map(c => [c.from.split(':').slice(1).join(':'), c.to.split(':').slice(1).join(':'), c.precision]);
 
 test('function ids match the v0.2.0 (Acorn) extractor on every naming rule', () => {
@@ -40,7 +41,7 @@ test('function ids match the v0.2.0 (Acorn) extractor on every naming rule', () 
 test('inventories functions with arity and min_arity', () => {
   const doc = run({repo: 'shop', root: fixture});
   assert.deepEqual(doc.producer, {name: 'extract-javascript', version: '0.2.0', call_precision: 'heuristic'});
-  assert.equal(doc.facts_version, 2);
+  assert.equal(doc.facts_version, 3);
   assert.deepEqual(doc.modules.map(m => m.id), ['shop:assets/js/app.js', 'shop:assets/js/util.mjs']);
   assert.deepEqual(doc.notes, []);
   assert.equal(fn(doc, 'render').id, 'shop:assets/js/app.js:render/2');
@@ -103,7 +104,7 @@ new LiveSocket("/live", {hooks: {Pane, Alias}});
       ['assets/js/hooks.js:this._onResize/0', 'assets/js/hooks.js:this._calc/0', 'heuristic'],
     ]);
     // new LiveSocket from an uninstalled package: external, not unresolved.
-    const app = doc.stats[0];
+    const app = doc.stats.find(s => s.language === 'javascript');
     assert.equal(app.external >= 2, true); // fetch (lib.dom) and LiveSocket
   } finally { fs.rmSync(root, {recursive: true}); }
 });
@@ -318,5 +319,55 @@ test('arity is clamped to the facts format bound of 255', () => {
   try {
     const doc = run({repo: 'x', root});
     assert.deepEqual([fn(doc, 'wide').arity, fn(doc, 'wide').min_arity], [255, 255]);
+  } finally { fs.rmSync(root, {recursive: true}); }
+});
+
+test('fetch: literal, template and concatenated URLs, one level of wrapper', () => {
+  const root = write({
+    'assets/js/dial.js': `
+(function () {
+  async function api(method, path, body) {
+    const res = await fetch(path, {method, credentials: "same-origin"});
+    return res.json();
+  }
+  function track(name) { fetch("/dial/events", {method: "POST", body: name}); }
+  function getJSON(url) { return fetch(url).then(r => r.json()); }
+  async function start(id, source) {
+    await api("GET", "/dial/me");
+    await api("POST", \`/dial/calls/\${id}/end\`);
+    await api("POST", "/dial/greeting/audio?source=" + source);
+    getJSON("/greetings/voices?q=" + source);
+    fetch(document.querySelector("form").action, {method: "POST"});
+    fetch("//cdn.example.com/x.js");
+  }
+})();
+`,
+    'e2e/check.mjs': `
+const ADMIN = process.env.ADMIN || "http://localhost:7889";
+const BASE = process.env.BASE ?? "http://localhost:7871";
+function admin(path, body) { return fetch(ADMIN + path, {method: "POST", body}); }
+await admin("/api/v1/sales/cold/check", {});
+await fetch(\`\${BASE}/greetings/audio/tait.mp3\`);
+await fetch(BASE + computeLater());
+await fetch("https://api.example.com/v2/items?x=1", {method: "delete"});
+`,
+  });
+  try {
+    const doc = run({repo: 'sales', root, sourceRoots: ['assets/js', 'e2e']});
+    const refs = doc.http_refs.map(r => [short(r.from), r.method, r.path, r.origin ?? '', r.base ?? '', r.line]);
+    assert.deepEqual(refs, [
+      ['assets/js/dial.js:track/1', 'POST', '/dial/events', 'same', '', 7],
+      ['assets/js/dial.js:start/2', 'GET', '/dial/me', 'same', '', 10],
+      ['assets/js/dial.js:start/2', 'POST', '/dial/calls/:id/end', 'same', '', 11],
+      ['assets/js/dial.js:start/2', 'POST', '/dial/greeting/audio', 'same', '', 12],
+      ['assets/js/dial.js:start/2', 'GET', '/greetings/voices', 'same', '', 13],
+      ['e2e/check.mjs:(top)/0', 'POST', '/api/v1/sales/cold/check', '', 'ADMIN', 5],
+      ['e2e/check.mjs:(top)/0', 'GET', '/greetings/audio/tait.mp3', '', 'BASE', 6],
+      ['e2e/check.mjs:(top)/0', 'DELETE', '/v2/items', '', 'https://api.example.com', 8],
+    ]);
+    // form.action, a protocol-relative URL and BASE + a computed path are
+    // fetches with no path to link: counted, not invented.
+    const http = doc.stats.find(s => s.language === 'http');
+    assert.deepEqual([http.call_sites, http.refs, http.not_extracted], [11, 8, 3]);
   } finally { fs.rmSync(root, {recursive: true}); }
 });

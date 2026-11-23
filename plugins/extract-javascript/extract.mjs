@@ -381,6 +381,9 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
   const functions = [];
   const calls = [];
   const stats = new Map();
+  // fetch: refs, wrappers (functions whose fetch URL is a parameter) and
+  // the resolved calls that might reach a wrapper.
+  const http = {refs: [], wrappers: new Map(), calls: [], sites: 0, unbuilt: 0};
   const stat = (lang) => { if (!stats.has(lang)) stats.set(lang, {language: lang, call_sites: 0, in_repo: 0, dispatch: 0, external: 0, unresolved: 0, refs: 0, not_extracted: 0}); return stats.get(lang); };
   const extracted = new Set(files);
 
@@ -414,13 +417,37 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
         notes.push({kind: 'parse_error', file, message: where + (d ? ts.flattenDiagnosticMessageText(d.messageText, ' ') : 'not read')});
         continue;
       }
-      walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat});
+      walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat, http});
     }
   }
 
   for (const {file, sf} of deep) {
-    walkFile({ts, K, N, sf, file, lang: languageOf(file), repo, checker: null, relOf: null, extracted, modules, functions, calls, stat});
+    walkFile({ts, K, N, sf, file, lang: languageOf(file), repo, checker: null, relOf: null, extracted, modules, functions, calls, stat, http});
   }
+
+  // One level of wrapper: a call to api("GET", "/dial/me") is a request
+  // from the caller.
+  for (const c of http.calls) {
+    const w = http.wrappers.get(c.to);
+    if (!w) continue;
+    http.sites++;
+    const parts = w.parts.flatMap(p => p.param !== undefined ? (c.args[p.param] ?? [{dyn: p.name}]).map(a => a.param !== undefined ? {dyn: a.name} : a) : [p]);
+    let method = w.method;
+    if (typeof method === 'object') {
+      const a = c.args[method.param];
+      method = a && a.length === 1 && a[0].lit !== undefined ? a[0].lit.toUpperCase() : '';
+    }
+    const ref = buildRef(parts, method, w.base);
+    if (ref) http.refs.push({from: c.from, ...ref, file: c.file, line: c.line});
+    else http.unbuilt++;
+  }
+  if (http.sites > 0) {
+    stats.set('http', {language: 'http', call_sites: http.sites, in_repo: 0, dispatch: 0, external: 0, unresolved: 0, refs: http.refs.length, not_extracted: http.unbuilt});
+  }
+  // Every ref's from is a listed function: (top) is listed when its file's
+  // top-level code made the call.
+  const known = new Set(functions.map(f => f.id));
+  http.refs = http.refs.filter(r => known.has(r.from));
 
   const cmp = (...keys) => (a, b) => {
     for (const k of keys) { const x = k(a), y = k(b); if (x < y) return -1; if (x > y) return 1; }
@@ -428,7 +455,7 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
   };
   const uniqueCalls = [...new Map(calls.map(c => [JSON.stringify(c), c])).values()];
   return {
-    facts_version: 2,
+    facts_version: 3,
     producer: {name: 'extract-javascript', version: VERSION, call_precision: 'heuristic'},
     repo,
     ...(revision ? {revision} : {}),
@@ -437,6 +464,7 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
     functions: functions.sort(cmp(f => f.id)),
     calls: uniqueCalls.sort(cmp(c => c.file, c => c.line, c => c.from, c => c.to ?? '', c => c.target?.module ?? '', c => c.target?.name ?? '', c => c.target?.arity ?? 0, c => c.kind)),
     notes: notes.sort(cmp(n => n.file ?? '', n => n.kind, n => n.message)),
+    http_refs: [...new Map(http.refs.map(r => [JSON.stringify(r), r])).values()].sort(cmp(r => r.file, r => r.line, r => r.from, r => r.method, r => r.path)),
     stats: [...stats.values()].filter(s => s.call_sites > 0).sort(cmp(s => s.language)),
   };
 }
@@ -496,7 +524,7 @@ function fnIndex(ts, N, sf, moduleId) {
   return out;
 }
 
-function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat}) {
+function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat, http}) {
   const moduleId = `${repo}:${file}`;
   modules.push({id: moduleId, name: file, namespace: file.replace(/\.[^./]+$/, '').split('/'), file, line: 1, language: lang});
   const idx = fnIndex(ts, N, sf, moduleId);
@@ -557,7 +585,14 @@ function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, mo
     const arity = jsx ? 1 : Math.min(node.arguments?.length ?? 0, MAX_ARITY);
     s.call_sites++;
     const r = resolve({ts, K, N, node, callee, jsx, checker, relOf, extracted, repo});
+    if (checker && !jsx && node.kind === K.CallExpression && isFetch(K, callee)) {
+      if (fetchRef({ts, K, N, checker, node, encl, from, file, line, http})) topUsed ||= !encl;
+    }
     if (r.to) {
+      if (checker && node.kind === K.CallExpression && node.arguments.length) {
+        http.calls.push({from, to: r.to, file, line, args: node.arguments.map(a => valueParts(ts, K, N, checker, a, encl, 0))});
+        if (!encl) topUsed = true;
+      }
       s.in_repo++;
       calls.push({from, to: r.to, kind: jsx ? 'jsx' : 'call', file, line, precision: r.precision});
       continue;
@@ -582,6 +617,131 @@ function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, mo
     functions.push({id: top.id, module: moduleId, name: TOP, arity: 0, min_arity: 0, kind: 'top', file, line: 1, clauses: [1],
       fingerprint: fingerprint(ts, tokens, starts, 0, sf.end)});
   }
+}
+
+// ---- fetch -----------------------------------------------------------------
+
+const isFetch = (K, callee) => (callee.kind === K.Identifier && callee.text === 'fetch') ||
+  (callee.kind === K.PropertyAccessExpression && callee.name.text === 'fetch' && callee.expression.kind === K.Identifier && ['window', 'globalThis', 'self'].includes(callee.expression.text));
+
+// valueParts evaluates a string expression into parts: {lit} text, {param}
+// for a parameter of fn (a wrapper's input), {dyn} for anything else; a
+// constant's value carries {base} naming it (an absolute URL's origin).
+function valueParts(ts, K, N, checker, expr, fn, depth) {
+  expr = N.skip(expr);
+  if (depth > 3) return [{dyn: 'p'}];
+  switch (expr.kind) {
+    case K.StringLiteral: case K.NoSubstitutionTemplateLiteral:
+      return [{lit: expr.text}];
+    case K.TemplateExpression: {
+      const out = [{lit: expr.head.text}];
+      for (const span of expr.templateSpans) {
+        out.push(...valueParts(ts, K, N, checker, span.expression, fn, depth + 1).map(p => p.lit !== undefined && !p.base ? p : p.param !== undefined ? p : p.base ? p : {dyn: nameOf(K, span.expression)}));
+        out.push({lit: span.literal.text});
+      }
+      return out;
+    }
+    case K.BinaryExpression:
+      if (expr.operatorToken.kind === K.PlusToken) return [...valueParts(ts, K, N, checker, expr.left, fn, depth + 1), ...valueParts(ts, K, N, checker, expr.right, fn, depth + 1)];
+      if (expr.operatorToken.kind === K.BarBarToken || expr.operatorToken.kind === K.QuestionQuestionToken) {
+        // process.env.X || "http://localhost:7790": the default.
+        const right = valueParts(ts, K, N, checker, expr.right, fn, depth + 1);
+        if (right.every(p => p.lit !== undefined)) return right;
+      }
+      return [{dyn: 'p'}];
+    case K.Identifier: {
+      let sym;
+      try { sym = checker.getSymbolAtLocation(expr); } catch { sym = undefined; }
+      const d = sym?.valueDeclaration ?? sym?.declarations?.[0];
+      if (d && d.kind === K.Parameter && fn && d.parent === fn && d.name.kind === K.Identifier) {
+        const params = fn.parameters.filter(p => !(p.name.kind === K.Identifier && p.name.text === 'this'));
+        return [{param: params.indexOf(d), name: d.name.text}];
+      }
+      if (d && d.kind === K.VariableDeclaration && d.initializer && (ts.getCombinedNodeFlags(d) & ts.NodeFlags.Const)) {
+        const v = valueParts(ts, K, N, checker, d.initializer, null, depth + 1);
+        if (v.every(p => p.lit !== undefined)) return [{lit: v.map(p => p.lit).join(''), base: expr.text}];
+      }
+      return [{dyn: expr.text}];
+    }
+    default:
+      return [{dyn: nameOf(K, expr)}];
+  }
+}
+
+// {method} in an object literal: the variable it names.
+function shorthandParts(ts, K, N, checker, prop, fn) {
+  let sym;
+  try { sym = checker.getShorthandAssignmentValueSymbol(prop); } catch { sym = undefined; }
+  const d = sym?.valueDeclaration ?? sym?.declarations?.[0];
+  if (d && d.kind === K.Parameter && fn && d.parent === fn && d.name.kind === K.Identifier) {
+    const params = fn.parameters.filter(q => !(q.name.kind === K.Identifier && q.name.text === 'this'));
+    return [{param: params.indexOf(d), name: d.name.text}];
+  }
+  return valueParts(ts, K, N, checker, prop.name, fn, 0);
+}
+
+const nameOf = (K, e) => e.kind === K.Identifier ? e.text : e.kind === K.PropertyAccessExpression ? e.name.text : 'p';
+
+// buildRef turns parts into an http_refs item: a path from "/", the query
+// and fragment dropped, interpolations as :name. A URL with no host is
+// same-origin; an absolute one names its base. Anything else is no ref.
+function buildRef(parts, method, base0) {
+  while (parts.length && parts[0].lit === '') parts = parts.slice(1);
+  if (!parts.length || parts[0].lit === undefined) return null;
+  // Unknown parts are \u0000name\u0001 until the host is split off: a
+  // path that starts unknown (BASE + somethingComputed) is no ref.
+  let text = '';
+  let base = base0 ?? parts.find(p => p.base)?.base ?? '';
+  for (const p of parts) text += p.lit !== undefined ? p.lit : `\u0000${p.name ?? p.dyn ?? 'p'}\u0001`;
+  text = text.split(/[?#]/)[0];
+  const abs = /^https?:\/\/[^/\u0000]*(\u0000[^\u0001]*\u0001[^/\u0000]*)*/.exec(text);
+  let origin;
+  if (abs) {
+    if (!base) base = abs[0].replace(/\u0000([^\u0001]*)\u0001/g, '${$1}');
+    text = text.slice(abs[0].length);
+    if (text === '' && parts.some(p => p.lit === undefined)) return null;
+    text ||= '/';
+  } else if (text.startsWith('/') && !text.startsWith('//')) {
+    origin = 'same';
+    base = '';
+  } else return null;
+  if (!text.startsWith('/')) return null;
+  text = text.replace(/\u0000([^\u0001]*)\u0001/g, ':$1');
+  return {method, path: text, ...(origin ? {origin} : {}), ...(base ? {base} : {})};
+}
+
+// fetchRef records one fetch(url, init): a ref, or, when the URL comes from
+// the enclosing function's parameter, that function as a wrapper.
+function fetchRef({ts, K, N, checker, node, encl, from, file, line, http}) {
+  const [urlArg, init] = node.arguments;
+  if (!urlArg) return false;
+  const parts = valueParts(ts, K, N, checker, urlArg, encl, 0);
+  let method = 'GET';
+  const obj = init && N.skip(init);
+  if (obj) {
+    method = '';
+    if (obj.kind === K.ObjectLiteralExpression) {
+      method = 'GET';
+      for (const p of obj.properties) {
+        const key = p.name && N.keyName(p.name);
+        if (key !== 'method') continue;
+        const v = p.kind === K.ShorthandPropertyAssignment ? shorthandParts(ts, K, N, checker, p, encl)
+          : p.kind === K.PropertyAssignment ? valueParts(ts, K, N, checker, p.initializer, encl, 0) : [{dyn: 'p'}];
+        method = v.length === 1 && v[0].lit !== undefined ? v[0].lit.toUpperCase() : v.length === 1 && v[0].param !== undefined ? {param: v[0].param} : '';
+      }
+    }
+  }
+  if (parts.some(p => p.param !== undefined) && encl) {
+    const id = from;
+    const base = parts.find(p => p.base)?.base;
+    http.wrappers.set(id, {parts, method, ...(base ? {base} : {})});
+    return false;
+  }
+  http.sites++;
+  const ref = buildRef(parts, typeof method === 'object' ? '' : method);
+  if (!ref) { http.unbuilt++; return false; }
+  http.refs.push({from, ...ref, file, line});
+  return true;
 }
 
 function calleeName(K, N, callee) {

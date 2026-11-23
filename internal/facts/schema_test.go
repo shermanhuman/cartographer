@@ -12,6 +12,7 @@ import (
 
 // schemaNode is the part of a JSON Schema these checks read.
 type schemaNode struct {
+	AllOf      []schemaNode               `json:"allOf"`
 	Properties map[string]json.RawMessage `json:"properties"`
 	Items      json.RawMessage            `json:"items"`
 	Pattern    string                     `json:"pattern"`
@@ -21,7 +22,7 @@ type schemaNode struct {
 
 func readSchema(t *testing.T) *schemaNode {
 	t.Helper()
-	b, err := os.ReadFile("../../schema/facts.v2.json")
+	b, err := os.ReadFile("../../schema/facts.v3.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +108,28 @@ func TestSchemaIsAsStrictAsValidate(t *testing.T) {
 		if p := node(t, items.Properties["path"], sec+".path").Pattern; p != "^/" {
 			t.Errorf("%s[].path pattern %q, want ^/", sec, p)
 		}
+	}
+	// Version 1 and 2 documents carry no version 3 section or origin.
+	var gate struct {
+		Properties struct {
+			FactsVersion struct {
+				Enum []int `json:"enum"`
+			} `json:"facts_version"`
+		} `json:"properties"`
+	}
+	if len(s.AllOf) == 1 {
+		json.Unmarshal(s.AllOf[0].If, &gate)
+	}
+	if len(s.AllOf) != 1 || !slices.Equal(gate.Properties.FactsVersion.Enum, []int{1, 2}) || s.AllOf[0].Then == nil {
+		t.Fatalf("no allOf if facts_version 1 or 2 / then")
+	}
+	for _, sec := range Version3Sections {
+		if raw := s.AllOf[0].Then.Properties[sec]; string(raw) != "false" {
+			t.Errorf("allOf then: %s is %s, want false", sec, raw)
+		}
+	}
+	if raw := s.AllOf[0].Then.Properties["http_refs"]; !strings.Contains(string(raw), `"origin"`) {
+		t.Errorf("allOf then: http_refs[].origin allowed before version 3: %s", raw)
 	}
 	// Validate reports version 1 problems in a fixed order.
 	d := &Doc{FactsVersion: 1, Producer: Producer{Name: "x"}, Routes: []Route{{ID: "r", Path: "/", File: "f"}}, HTTPRefs: []HTTPRef{{From: "f", Path: "/", File: "f"}}, ConfigURLs: []ConfigURL{{Key: "k", Value: "http://x", File: "f"}}, Services: []Service{{Kind: "service", Name: "s", File: "f"}}, Stats: []Stats{{Language: "go"}}}
