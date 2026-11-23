@@ -324,7 +324,8 @@ defmodule Cartographer.HEEx do
     last =
       cond do
         c in ~c" \t\r\n" -> acc.last
-        c == ?. and acc.last != :number -> :dot
+        c == ?. and acc.last == :number -> :number
+        c == ?. -> :dot
         c in ?0..?9 -> :number
         c == ?] -> :value
         true -> :punct
@@ -371,6 +372,8 @@ defmodule Cartographer.HEEx do
 
   # A quoted string's raw body (escapes kept), the rest, and whether it closed.
   defp quoted(<<>>, _q, acc), do: {IO.iodata_to_binary(Enum.reverse(acc)), <<>>, false}
+  # \ then CRLF is one line continuation.
+  defp quoted(<<"\\\r\n", rest::binary>>, q, acc), do: quoted(rest, q, ["\\\r\n" | acc])
   defp quoted(<<"\\", c, rest::binary>>, q, acc), do: quoted(rest, q, [<<?\\, c>> | acc])
 
   defp quoted(<<q, rest::binary>>, q, acc),
@@ -403,6 +406,14 @@ defmodule Cartographer.HEEx do
   # is one character; a lone surrogate or an out-of-range code point is
   # U+FFFD. Never raises.
   defp decode(raw) do
+    decode!(raw)
+  rescue
+    # A malformed escape (\u without hex in String.raw`C:\users`): the raw
+    # text, never a crash.
+    _ -> raw
+  end
+
+  defp decode!(raw) do
     Regex.replace(
       ~r/\\(u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|\n|.)/s,
       raw,

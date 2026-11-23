@@ -168,6 +168,7 @@ defmodule Cartographer.HEExTest do
         x++ / this.pushEvent("divided") / 2; obj.return / this.pushEvent("divided") / 2;
         if (ok) /"/.test(s); this.pushEvent("divided");
         const smile = "\uD83D\uDE00"; const lone = "\uD83D";
+        const p = String.raw`C:\users`; const q = "\xZZ"; const one = 1./2; this.pushEvent("after_raw");
         export default { mounted() { this.pushEvent("signed", {}); this.pushEventTo("#x", "aimed", {}); this.pushEvent(this.el.dataset.event, {}) } }
       </script>
     </div>
@@ -407,7 +408,7 @@ defmodule Cartographer.HEExTest do
 
     assert Enum.sort(founders, &(inspect(&1) <= inspect(&2))) ==
              Enum.sort(
-               [:dynamic, "aimed", "divided", "signed", "templated"],
+               [:dynamic, "after_raw", "aimed", "divided", "signed", "templated"],
                &(inspect(&1) <= inspect(&2))
              )
 
