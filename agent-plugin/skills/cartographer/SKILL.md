@@ -44,12 +44,16 @@ lists with `limit`/`offset`.
 ## Trust
 
 - `[precise]`: statically resolved. `[heuristic]`: name-matched, an
-  interface or trait call linked to every implementation, or an HTTP link
-  with config evidence. `[candidate]`: text or path matches (table
-  mentions, path-only HTTP links), not proven reads, writes or calls.
+  interface or trait call linked to every implementation, an HTTP link
+  with config evidence or to the page's own server (`same-origin`), or a
+  LiveView `event` reached through components or a `phx-hook`.
+  `[candidate]`: text or path matches (table mentions, path-only HTTP
+  links), not proven reads, writes or calls.
+- `callers` on a `handle_event` lists the templates and JS hooks that send
+  to it, with the event names (`[precise event: phx-click "save"]`).
 - Not traced: unresolved and external calls, Elixir dynamic calls (`apply`,
-  `var.fun()`), JavaScript calls (functions are listed, calls aren't
-  resolved) and HTTP requests whose path the extractors couldn't read. An
+  `var.fun()`), JavaScript calls on untyped values, event names built at
+  runtime, and HTTP requests whose path the extractors couldn't read. An
   empty caller list is not proof that nothing calls X; say so when it
   matters. Details: `references/precision.md`.
 

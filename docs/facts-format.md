@@ -1,22 +1,26 @@
 # Facts format
 
-Version 2 is current; version 1 documents are still read. Everything below
-applies to both unless a section says "version 2".
+Version 3 is current; version 1 and 2 documents are still read. Everything
+below applies to all three unless a section says "version 2" or "version 3".
 
 An extractor plugin is any executable that writes one JSON document to stdout
 describing a repository (or a database schema). cartographer merges the
 documents from every plugin in a workspace into one snapshot.
 
-Schemas: [`schema/facts.v1.json`](../schema/facts.v1.json) and
-[`schema/facts.v2.json`](../schema/facts.v2.json). Go types and the
+Schemas: [`schema/facts.v1.json`](../schema/facts.v1.json),
+[`schema/facts.v2.json`](../schema/facts.v2.json) and
+[`schema/facts.v3.json`](../schema/facts.v3.json) (which reads all three
+versions). Go types and the
 validator: `internal/facts`. Check a plugin's output with
 `cartographer validate-facts <file>`.
 
 ## Rules
 
-- `facts_version` is `1` or `2`. Unknown fields are rejected, and a version 1
-  document may not carry a version 2 section (`routes`, `http_refs`,
-  `config_urls`, `services`, `stats`, `functions[].test`).
+- `facts_version` is `1`, `2` or `3`. `Decode` rejects unknown fields. A
+  version 1 document may not carry a version 2 section (`routes`,
+  `http_refs`, `config_urls`, `services`, `stats`, `functions[].test`), and
+  a version 1 or 2 document may not carry a version 3 one (`events`,
+  `event_handlers`, `hook_mounts`, `http_refs[].origin`).
 - A version 2 document needs snapshot format 2; a format 1 snapshot holding
   one is rejected, and so is a format 1 manifest with format 2 fields.
 - Ids are opaque strings. Module, function and table ids are unique across
@@ -55,6 +59,10 @@ starts with `<repo>:`.
 | Rust module (a module) | `<repo>:<crate dir>::<module path>` | `svc:crates/shapes::geo` |
 | Rust module (a type, trait or impl) | `<repo>:<crate dir>::<module path>.<Type>[impl <Trait>]` | `svc:crates/shapes::geo.Circle`, `svc:crates/shapes.Shape`, `svc:crates/shapes::a.A[impl Service]` |
 | Rust function | `<repo>:<crate dir>::<module path>.<Type>[impl <Trait>].<name>/<arity>`, in the module of its type, trait or impl | `svc:crates/shapes::geo.Circle[impl Shape].area/0` |
+| Elixir template function | a colocated `name.html.heex` is its module's `render/1`; an `embed_templates` file is `<repo>:<Module>.<file name>/1` (the names Phoenix compiles) | `shop:ShopWeb.PageHTML.home/1` |
+| JavaScript or TypeScript module | `<repo>:<path>` | `shop:assets/js/app.js` |
+| JavaScript or TypeScript function | `<repo>:<path>:<name>/<arity>`: `name` qualified by its class or object binding, `anonymous@<line>:<column>` when it has none, `#2`, `#3`, … for a repeated name in a file | `shop:assets/js/app.js:Hooks.Chart.mounted/0`, `shop:assets/js/app.js:anonymous@4:23/1` |
+| JavaScript or TypeScript top level | `<repo>:<path>:(top)/0`, the file's top-level code; listed after every real function, so a real function named `(top)` keeps its id and this one becomes `(top)/0#2` | `shop:assets/js/app.js:(top)/0` |
 
 The **package dir** of a Go package is its directory relative to the
 repository root, with these forms:
@@ -108,7 +116,9 @@ documents are merged:
 3. otherwise the call stays unresolved and is reported as such.
 
 Targets without a `module` resolve only against the caller's own module (a
-local call); they never match elsewhere. Calls with `kind` `dynamic`, or any
+local call); they never match elsewhere. `kind` `component` is a template's
+component call (`<.button>`, `<Mod.card>`, `<.live_component module={X}>`,
+which calls `X.render/1`); it resolves like any other call. Calls with `kind` `dynamic`, or any
 kind starting with `js_`, are never resolved: name-only evidence without
 lexical binding is not enough. Nor are calls with `kind` `unresolved`: the
 producer says it found no target, so a same-named function in the caller's
@@ -160,11 +170,16 @@ entities: they can be searched, shown and walked like functions.
 
 `http_refs[]` are requests a function builds to a path: `from` (the calling
 function), `method`, `path` (each parameter segment starts with `:`: Elixir
-writes interpolations as `:p1`, `:p2`, …, Go writes the parameter's name,
-`/people/:id`), `base` (what supplies the base URL, when the extractor
-knows), `file`, `line`.
+writes interpolations as `:p1`, `:p2`, …, Go and JavaScript write the
+parameter's name, `/people/:id`), `base` (what supplies the base URL, when
+the extractor knows), `file`, `line`, and, in version 3, `origin`.
 
-The core links a reference to routes in **other** repositories after all
+`origin` `"same"` marks a browser request with no host (`fetch("/dial/me")`):
+it goes to the server that served the page. The core links it to a matching
+route in the caller's **own** repository only, `heuristic`, provenance
+`same-origin`. A same-origin reference has no `base`.
+
+Every other reference links to routes in **other** repositories, after all
 documents are merged. A link is never `precise`:
 
 - `heuristic` when a URL in the caller's own configuration (its
@@ -209,11 +224,61 @@ invocation once, however many edges it gets), `in_repo`, `dispatch`,
 `external` (into dependencies; counted, not stored), `unresolved`, `refs`
 (references that aren't invocations) and `not_extracted` (routes or requests
 the extractor saw but couldn't read: closures, computed paths, piped
-arguments). `status` reports coverage from these and from the manifest's
-file inventory.
+arguments). Two entries aren't languages: `heex` counts template event sends
+(`in_repo` linked, `unresolved` with no receiver, `not_extracted` dynamic),
+and `http` counts JavaScript requests (`refs` with a path, `not_extracted`
+with none). `status` reports coverage from these, from the event and HTTP
+links, and from the manifest's file inventory.
 
 ### Tests
 
 `functions[].test` marks a test function where the file can't say so (a Rust
 `#[test]`, or a function inside a `#[cfg(test)]` module). Files keep
 `category: "test"` for whole test files.
+
+## Version 3 sections
+
+### Events
+
+`events[]` are places that send a LiveView event to the server: `from` (the
+function that renders the template or holds the hook), `event` (or `dynamic`
+`true` when the name is built at runtime), `via` (`phx-click`, `phx-submit`,
+… for an attribute; `JS.push`; `pushEvent` or `pushEventTo` for a hook),
+`target` (`myself` for `phx-target={@myself}`, `dynamic` for any other
+target, omitted for none), `file`, `line`, `precision`, and either:
+
+- `to`: the `handle_event` functions the producer resolved the send to
+  (a template's send), or
+- `hooks`: the names a hook object is registered under in
+  `new LiveSocket(..., {hooks})` (a JavaScript `pushEvent`), for the core to
+  resolve through `hook_mounts`.
+
+A send with a literal name and no `to` is unlinked; a dynamic one is never
+guessed. LiveView's own events (`lv:clear-flash`) aren't sends.
+
+### Event handlers
+
+`event_handlers[]` are the names a `handle_event` clause takes: `function`,
+`event`, `source` (`head` for `def handle_event("save", ...)`, `guard` for
+`when event in ~w(...)` or `== "..."`, `attribute` for `when event in
+@events`), and `line` (the clause). A catch-all that hands the event to
+another module's `handle_event` is `source` `delegate`, with that function as
+`delegate` and no `event`.
+
+### Hook mounts
+
+`hook_mounts[]` are `phx-hook` attributes: `hook` (the name; a colocated
+`.Name` is `<Module>.Name`), `from` (the rendering function), `receivers`
+(the `handle_event` functions a `pushEvent` from that element reaches),
+`file`, `line`.
+
+### Event links
+
+The core links a send to each of its `to` functions, and a hook's
+`pushEvent` to each receiver of each mount, in the same repository, whose
+hook is one of the send's `hooks` and that has a clause for the event (or a
+delegating catch-all to a module that has one). Hook links are `heuristic`,
+with the mount as provenance (`phx-hook DocumentSignature
+(lib/admin_web/live/finance_live/certificate.ex:193)`). Links are edges of
+kind `event`; `callers` names the events on each.
+

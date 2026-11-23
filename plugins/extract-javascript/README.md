@@ -1,6 +1,6 @@
 # extract-javascript
 
-Writes one [facts](../../docs/facts-format.md) document (version 2) to stdout,
+Writes one [facts](../../docs/facts-format.md) document (version 3) to stdout,
 describing a repository's JavaScript and TypeScript. The TypeScript compiler
 API parses the code and resolves its calls. The compiler is TypeScript 6.0.3,
 pinned exactly; cartographer passes its mise install with `--typescript`.
@@ -66,9 +66,39 @@ A call is one of three kinds:
 - **`unresolved`.** It has a `target` (name and arity) and no `to`. Examples: a call on an untyped value (`this.pushEvent`), on a parameter, or to something that isn't a function.
 - **Not listed.** Calls into the standard library or a package, or into a file in the snapshot that isn't extracted (`external`), and constructions of a class with no constructor (`not_extracted`). These are counted in `stats` only.
 
+### `http_refs`
+
+These are `fetch` calls whose URL the plugin can read: a literal, a template
+(`${id}` becomes `:id`) or a concatenation. The query and fragment are
+dropped. The method comes from the init object, `GET` when there is none.
+
+- **No host** (`/dial/me`): `origin: "same"`, linked to the caller's own
+  repository.
+- **Absolute URL:** `base` names its source, the constant it came from
+  (`ADMIN = process.env.ADMIN || "http://…"`) or the origin.
+- **Wrapper:** a function whose `fetch` URL or method is its parameter, like
+  `api(method, path)`. Each call to it is a request from the caller, one
+  level deep.
+
+A fetch with no path to link (`form.action`, `BASE + compute()`) is counted
+in the `http` stats entry as `not_extracted`.
+
+### `events`
+
+A LiveView hook's `this.pushEvent("name", …)` or `pushEventTo(selector,
+"name", …)`, inside an object literal, is a send.
+
+- `hooks` lists every name the object is registered under in
+  `new LiveSocket(url, Socket, {hooks: {...}})`, followed through imports and
+  `const A = B` aliases.
+- A name built at runtime is `dynamic`.
+- The core links a send through the Elixir extractor's `hook_mounts`.
+
 ### `stats`
 
-Counts per language: call sites, in-repo, external, unresolved and not extracted.
+Counts per language: call sites, in-repo, external, unresolved and not
+extracted. An `http` entry counts the fetch sites (`refs` with a path,
+`not_extracted` without).
 
 ### `notes`
 

@@ -1,6 +1,6 @@
 # extract-elixir
 
-Writes one [facts v2](../../docs/facts-format.md) document for an Elixir
+Writes one [facts v3](../../docs/facts-format.md) document for an Elixir
 repository to stdout. It parses source with `Code.string_to_quoted/2` and
 never compiles or runs project code. It needs Elixir 1.19+ and no
 dependencies.
@@ -105,13 +105,55 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   function), a capture of a carrier, and a Req call whose URL comes from no
   parameter and no literal (`url:` reaching `Req.new` through a pipe in
   another function, a module attribute).
+- Templates. `~H` bodies, and `.heex` files under the source roots, are read
+  with LiveView 1.2.15's tokenizer. The tokenizer is vendored in
+  `heex_tokenizer.exs` (MIT, `LIVEVIEW-LICENSE.md`); nothing is compiled.
+  - A template's owner is the function around its `~H`. A colocated
+    `name.html.heex` beside `name.ex` is that module's `render/1`, and a file
+    matched by `embed_templates "dir/*"` is `<Module>.<name>/1`. The last two
+    are added as functions (kind `def`, `file` the template) unless the
+    module defines them.
+  - `<.fun>`, `<Mod.fun>` and `<.live_component module={X}>` (a call to
+    `X.render/1`) are calls of kind `component`, attributed like any other
+    call. Code in `{...}`, attribute values and `<%= %>` is walked as code.
+  - `use X, :kind` (and `use X`) brings in the `import` and `alias` forms of
+    X's helper quote, as Phoenix's `html_helpers` does. Only one level is
+    followed, through `unquote(helper())` and a nested `use`. So `<.button>`
+    resolves to the CoreComponents of its own app, and other calls through
+    those imports resolve too.
+  - A syntax error is a `heex_parse_error` note; the rest of the file still
+    counts.
+- `events`: LiveView sends.
+  - **Sources.** An event attribute (`phx-click`, `phx-submit`, `phx-change`,
+    `phx-window-keydown`, …) with a literal, a conditional's branch literals
+    (never its condition's), or a `JS.push("name")`; a `JS.push` in any
+    attribute; a colocated hook's `this.pushEvent("name")`. `lv:` events are
+    LiveView's own and left out.
+  - **`to`.** The `handle_event` functions that take the name:
+    - `precise`: the LiveView's own template, or `phx-target={@myself}` in a
+      LiveComponent;
+    - `heuristic`: the LiveViews that render the sending function, found up
+      the component call graph, or a component's `phx-click={@attr}` filled
+      by a caller's literal attribute (one level). A clause that hands the
+      event to `X.handle_event(event, …)` adds `X`'s function (one hop).
+  - **Unlinked and dynamic.** A name no receiver takes is listed without
+    `to`. A name built at runtime (`"filter_#{@n}"`, an assign no caller
+    fills) is `dynamic`.
+- `event_handlers`: the names each `handle_event/3` clause takes (`head`,
+  `guard` `when e in ~w(...)`, `attribute` `when e in @events`), and
+  `delegate` for a catch-all that calls another module's `handle_event`.
+- `hook_mounts`: each `phx-hook` (a colocated `.Name` as `<Module>.Name`), with
+  the `handle_event` functions of the LiveViews that render it as
+  `receivers`. The core links a JavaScript hook's `pushEvent` through these.
 - `stats`: one entry, language `elixir`. `call_sites` counts `calls`;
   `in_repo` those whose target is a function in this document, `external`
   those naming a module outside it (Kernel and Erlang included),
   `unresolved` the rest (dynamic calls, unattributed unqualified calls, a
   function missing from a module that is here). `not_extracted` counts the
   routes and refs above that were not extracted; only the count is kept in
-  the document, not which sites they were. `dispatch` and `refs` are 0.
+  the document, not which sites they were. `dispatch` and `refs` are 0. A
+  second entry, `heex`, counts the event sends: `in_repo` linked,
+  `unresolved` with no receiver, `not_extracted` dynamic.
 - `notes`:
 
   | Kind | Meaning |
@@ -126,6 +168,8 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   | `empty_root` | A source or ref root has no matching files (or does not exist). |
   | `unknown_table` | An Ecto schema whose table is not in the schema facts. |
   | `duplicate_route` | A route with the method and path of an earlier one. |
+  | `heex_parse_error` | A template the tokenizer rejected (the message has its line). |
+  | `heex_unowned` | A `.heex` file no module renders (not colocated, no `embed_templates`). |
 
 Every array is sorted, and keys are written in a fixed order, so the same
 input gives byte-identical output.
@@ -134,6 +178,7 @@ input gives byte-identical output.
 
 ```bash
 mise exec -- elixir plugins/extract-elixir/test/extract_test.exs
+mise exec -- elixir plugins/extract-elixir/test/heex_test.exs
 mise exec -- go test ./internal/facts -run Contract
 ```
 
