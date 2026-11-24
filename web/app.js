@@ -15,7 +15,10 @@ const getJSON = async url => {const r=await fetch(url);if(!r.ok)throw new Error(
 const getText = async url => {const r=await fetch(url);if(!r.ok)throw new Error(await errorOf(r)||`Could not load ${url} (${r.status})`);return r.text()};
 // Every API call carries the snapshot chosen in the deep link (default newest).
 const SNAPSHOT = new URLSearchParams(location.hash.slice(1)).get('snapshot') || '';
-const api = (path, params={}) => {const p=new URLSearchParams(params);if(SNAPSHOT)p.set('snapshot',SNAPSHOT);const q=p.toString();return `api/${path}${q?'?'+q:''}`};
+// #project=NAME opens that registered project's newest main build; the
+// server resolves it, so the link survives rebuilds (an explicit snapshot wins).
+const PROJECT = new URLSearchParams(location.hash.slice(1)).get('project') || '';
+const api = (path, params={}) => {const p=new URLSearchParams(params);if(SNAPSHOT)p.set('snapshot',SNAPSHOT);if(PROJECT)p.set('project',PROJECT);const q=p.toString();return `api/${path}${q?'?'+q:''}`};
 let overview, catalog, entities, state, status, snapshots, currentGraph, renderToken=0, searchKind='all', listMode=false;
 let fileBrowser, schemaBrowser, contextBrowser, fileManifest, schemaIndex, journeyBrowser;
 let transform={x:0,y:0,z:1}, dimensions={w:1000,h:600}, lastLayoutKey='', drawn=[];
@@ -33,7 +36,7 @@ function byId(id){return entities.get(id)}
 function parent(e){return e?.parent?byId(e.parent):e}
 function journeyOf(view){return Object.hasOwn(journeys,view)?journeys[view]:null}
 async function detail(e){if(!e?.shard)return e||{};if(!cache.has(e.shard))cache.set(e.shard,getJSON(api('entity/'+encodeURIComponent(e.shard))).catch(error=>{cache.delete(e.shard);throw error}));const d=await cache.get(e.shard);return e.kind==='function'?(d.functions?.[e.id]||{}):d}
-function parse(){const p=new URLSearchParams(location.hash.slice(1));const print=p.get('print');return {view:p.get('view')||'home',entity:p.get('entity')||'',focus:p.get('focus')||'',tab:p.get('tab')||'overview',page:Math.max(0,Number(p.get('page'))||0),trail:p.get('trail')||'',filter:p.get('filter')||'',file:p.get('file')||'',table:p.get('table')||'',cluster:p.get('cluster')||'',context:p.get('context')||'',step:p.get('step')||'',investigation:p.get('investigation')||'',checkpoint:Math.max(0,Number(p.get('checkpoint'))||0),depth:Math.max(0,Math.min(4,Number(p.get('depth'))||0)),from:p.get('from')||'',to:p.get('to')||'',snapshot:p.get('snapshot')||'',print:['page','snippet'].includes(print)?print:''}}
+function parse(){const p=new URLSearchParams(location.hash.slice(1));const print=p.get('print');return {view:p.get('view')||'home',entity:p.get('entity')||'',focus:p.get('focus')||'',tab:p.get('tab')||'overview',page:Math.max(0,Number(p.get('page'))||0),trail:p.get('trail')||'',filter:p.get('filter')||'',file:p.get('file')||'',table:p.get('table')||'',cluster:p.get('cluster')||'',context:p.get('context')||'',step:p.get('step')||'',investigation:p.get('investigation')||'',checkpoint:Math.max(0,Number(p.get('checkpoint'))||0),depth:Math.max(0,Math.min(4,Number(p.get('depth'))||0)),from:p.get('from')||'',to:p.get('to')||'',snapshot:p.get('snapshot')||'',project:p.get('project')||'',print:['page','snippet'].includes(print)?print:''}}
 function hashOf(s){const p=new URLSearchParams();for(const [k,v]of Object.entries(s))if(v!==''&&v!==0)p.set(k,v);return p.toString()}
 function navigate(next,replace=false){const merged={...state,...next};history[replace?'replaceState':'pushState']({},'',`${location.pathname}${location.search}#${hashOf(merged)}`);lastHash=location.hash;state=merged;render()}
 function investigate(id,index=0){const check=investigationState(id,index);if(!check)return;navigate({context:'',step:'',tab:'overview',page:0,trail:'',...check})}
@@ -280,7 +283,7 @@ $('#stage').addEventListener('dblclick',event=>{const node=event.target.closest(
 $('#search-open').onclick=openSearch;$('#global-search').oninput=search;$('#provenance').onclick=sources;$('#source-button').onclick=sources;$('#close-sources').onclick=()=>$('#sources-dialog').close();
 $('#global-search').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();const row=$('[data-search-result]');if(row)row.click()}};
 document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'){event.preventDefault();if(!$('#search-dialog').open)openSearch()}});
-$('#copy-link').onclick=async()=>{try{const {print,...rest}=state;await navigator.clipboard.writeText(location.href.split('#')[0]+'#'+hashOf({...rest,snapshot:SNAPSHOT||status.snapshot}));toast('Link copied · opens this snapshot, view and selection')}catch{toast('Copy this page’s address from the address bar.')}};
+$('#copy-link').onclick=async()=>{try{const {print,...rest}=state;await navigator.clipboard.writeText(location.href.split('#')[0]+'#'+hashOf({...rest,snapshot:PROJECT?SNAPSHOT:SNAPSHOT||status.snapshot}));toast('Link copied · opens this snapshot, view and selection')}catch{toast('Copy this page’s address from the address bar.')}};
 $('#copy-embed').onclick=async()=>{const id=state.focus||state.entity,e=byId(id);if(!e||!['function','route','module','table','context'].includes(e.kind))return toast('Select a function, route, module, table or context to copy its embed.');try{const md=await getText(api('embed',{id}));await navigator.clipboard.writeText(md);toast('Embed copied · paste into a GitHub issue or PR')}catch(error){toast(error.message||'Could not copy the embed.')}};
 $('#save-pdf').onclick=()=>{preparePrint($('#export-mode').value);window.print()};
 $('#download-svg').onclick=()=>{if(!canExportSVG())return toast('Open a graph view to download it as SVG.');const url=URL.createObjectURL(new Blob([buildSVG()],{type:'image/svg+xml'}));const a=document.createElement('a');a.href=url;a.download=`cartographer-${String(currentGraph.title).replace(/[^A-Za-z0-9._-]+/g,'-')}.svg`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)};
@@ -290,11 +293,11 @@ let drag=null;$('#canvas').addEventListener('pointerdown',event=>{if(event.targe
 // too; render once per new location. A link to another snapshot reloads the
 // page, so every API call (SNAPSHOT) and all loaded data follow it.
 let lastHash=location.hash;
-function locationChanged(){if(location.hash===lastHash)return;lastHash=location.hash;const next=parse();if(next.snapshot!==SNAPSHOT){location.reload();return}state=next;render()}
+function locationChanged(){if(location.hash===lastHash)return;lastHash=location.hash;const next=parse();if(next.snapshot!==SNAPSHOT||next.project!==PROJECT){location.reload();return}state=next;render()}
 window.addEventListener('popstate',locationChanged);window.addEventListener('hashchange',locationChanged);new ResizeObserver(()=>requestAnimationFrame(fit)).observe($('#canvas'));
 const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 try{
-  let annotations;[overview,catalog,status,snapshots,annotations]=await Promise.all([getJSON(api('overview')),getJSON(api('catalog')),getJSON(api('status')),getJSON('api/snapshots'),getJSON(api('annotations'))]);
+  let annotations;[overview,catalog,status,snapshots,annotations]=await Promise.all([getJSON(api('overview')),getJSON(api('catalog')),getJSON(api('status')),getJSON(api('snapshots')),getJSON(api('annotations'))]);
   setJourneys(annotations);setDomains(annotations);setInvestigations(annotations);
   entities=new Map(catalog.map(e=>[e.id,e]));applyOverview(annotations.find(a=>a.kind==='overview'));state=parse();if(state.print)document.body.dataset.print=state.print;
   showFreshness();showSnapshots();showJourneyNav();

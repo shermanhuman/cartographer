@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -208,4 +209,43 @@ func List(stateDir string) ([]*Registration, error) {
 		out = append(out, r)
 	}
 	return out, errors.Join(errs...)
+}
+
+// ListProblem is one registration ListDetailed couldn't read.
+type ListProblem struct {
+	File  string `json:"file"`
+	Error string `json:"error"`
+}
+
+// ListDetailed is List for callers that must tell "no projects" from "can't
+// tell": a missing projects directory means none, any other directory read
+// error is returned, and each unreadable registration is its own problem
+// (the readable ones still come back, sorted by name).
+func ListDetailed(stateDir string) ([]*Registration, []ListProblem, error) {
+	if stateDir == "" {
+		return nil, nil, nil
+	}
+	dir := projectsDir(stateDir)
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing projects: %w", err)
+	}
+	var out []*Registration
+	var problems []ListProblem
+	for _, e := range ents { // ReadDir sorts by file name
+		name, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok || e.IsDir() {
+			continue
+		}
+		r, err := Load(stateDir, name)
+		if err != nil {
+			problems = append(problems, ListProblem{File: filepath.Join(dir, e.Name()), Error: err.Error()})
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, problems, nil
 }

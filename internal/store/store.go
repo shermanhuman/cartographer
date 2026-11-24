@@ -21,8 +21,9 @@ import (
 var schemaSQL string
 
 // schemaVersion is kept in PRAGMA user_version. The store is a cache of
-// published snapshots, so a database at any other version is dropped and
-// recreated rather than migrated; the next pull or import refills it.
+// published snapshots, so a database at an older version is dropped and
+// recreated rather than migrated; the next pull or import refills it. A
+// newer one is refused (ErrNewerStore).
 //
 //	1 (stored as 0): initial schema
 //	2: db_tables.kind
@@ -76,8 +77,19 @@ func fileURI(path string) (string, error) {
 	return u.String(), nil
 }
 
+// ErrNewerStore means the database was written by a newer cartographer.
+// Opening it here would drop every map in it (the rebuild below), and the
+// newer release that wrote them would then rebuild the store again, so an
+// old binary started by a stale PATH would wipe a store it can't read.
+type ErrNewerStore struct{ Have, Want int }
+
+func (e *ErrNewerStore) Error() string {
+	return fmt.Sprintf("the store was written by a newer cartographer (schema %d; this one reads %d), so it's left untouched: upgrade cartographer (mise use -g github:shermanhuman/cartographer@latest), or pass --db for a separate store", e.Have, e.Want)
+}
+
 // migrate creates the schema, first dropping every table when the database
-// was written at another schemaVersion.
+// was written at an older schemaVersion (the store is a cache of imported
+// snapshots). A newer one is refused, never dropped (ErrNewerStore).
 func migrate(ctx context.Context, db *sql.DB) error {
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -90,6 +102,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if v == schemaVersion {
 		return nil
+	}
+	if v > schemaVersion {
+		return &ErrNewerStore{Have: v, Want: schemaVersion}
 	}
 	// IMMEDIATE takes the write lock up front, so two processes opening an
 	// old database don't both rebuild it.
@@ -111,6 +126,9 @@ func rebuild(ctx context.Context, conn *sql.Conn) error {
 	}
 	if v == schemaVersion {
 		return nil // another process rebuilt it first
+	}
+	if v > schemaVersion {
+		return &ErrNewerStore{Have: v, Want: schemaVersion} // a newer one wrote it first
 	}
 	// Virtual tables go first (their shadow tables go with them), snapshots
 	// last (everything else references it).

@@ -42,6 +42,12 @@ type Options struct {
 	// be slow (it can run git); the server calls it again only when the set
 	// of imported snapshots changes.
 	Default func(ctx context.Context) (string, error)
+	// ProjectSnapshot resolves ?project=NAME to that project's newest main
+	// build. An error with a NotFound() bool method that returns true is a
+	// 404. nil reads the store directly (no build is started).
+	ProjectSnapshot func(ctx context.Context, name string) (string, error)
+	// Projects answers GET /api/projects. nil means none are registered here.
+	Projects func(ctx context.Context) (any, error)
 }
 
 // IsLoopback reports whether host (a name or IP, without port) is the
@@ -96,6 +102,7 @@ func New(o Options) http.Handler {
 	a := &api{o: o}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/snapshots", a.snapshots)
+	mux.HandleFunc("GET /api/projects", a.projects)
 	mux.HandleFunc("GET /api/catalog", a.with(func(r *http.Request, q *query.Q) (any, error) { return catalog(r.Context(), q) }))
 	mux.HandleFunc("GET /api/overview", a.with(func(r *http.Request, q *query.Q) (any, error) { return overview(r.Context(), q) }))
 	mux.HandleFunc("GET /api/files", a.with(func(r *http.Request, q *query.Q) (any, error) { return files(r.Context(), q) }))
@@ -199,10 +206,36 @@ func (a *api) defaultSnapshot(ctx context.Context) string {
 	return id
 }
 
-// snapshotQ selects ?snapshot= or the default snapshot.
+// projectSnapshot resolves a project name to its newest main build.
+func (a *api) projectSnapshot(ctx context.Context, name string) (string, int, error) {
+	if a.o.ProjectSnapshot != nil {
+		id, err := a.o.ProjectSnapshot(ctx, name)
+		if err != nil {
+			return "", errCode(err), err
+		}
+		return id, 0, nil
+	}
+	si, ok, err := a.o.Store.Newest(ctx, name, "main")
+	if err != nil {
+		return "", http.StatusInternalServerError, err
+	}
+	if !ok {
+		return "", http.StatusNotFound, fmt.Errorf("no map of project %s", name)
+	}
+	return si.ID, 0, nil
+}
+
+// snapshotQ selects ?snapshot=, else ?project='s newest main build, else
+// the default snapshot.
 func (a *api) snapshotQ(r *http.Request) (*query.Q, int, error) {
 	id := r.URL.Query().Get("snapshot")
-	if id != "" {
+	if p := r.URL.Query().Get("project"); id == "" && p != "" {
+		var code int
+		var err error
+		if id, code, err = a.projectSnapshot(r.Context(), p); err != nil {
+			return nil, code, err
+		}
+	} else if id != "" {
 		var n int
 		if err := a.o.Store.DB.QueryRowContext(r.Context(), `SELECT count(*) FROM snapshots WHERE id = ?`, id).Scan(&n); err != nil {
 			return nil, http.StatusInternalServerError, err
@@ -268,7 +301,8 @@ func errCode(err error) int {
 	var nf *query.ErrNotFound
 	var enf errNotFound
 	var nofn *query.ErrNoFunctions
-	if errors.As(err, &amb) || errors.As(err, &nf) || errors.As(err, &enf) || errors.As(err, &nofn) {
+	var mark interface{ NotFound() bool }
+	if errors.As(err, &amb) || errors.As(err, &nf) || errors.As(err, &enf) || errors.As(err, &nofn) || (errors.As(err, &mark) && mark.NotFound()) {
 		return http.StatusNotFound
 	}
 	return http.StatusInternalServerError
@@ -297,17 +331,35 @@ func (a *api) snapshots(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// ?project= lists only that project's main builds (the ones it shows).
+	project := r.URL.Query().Get("project")
 	out := []obj{}
 	for _, si := range list {
+		if project != "" && (si.Workspace != project || si.Source != "main") {
+			continue
+		}
 		q := &query.Q{S: a.o.Store, Snapshot: si.ID}
 		repos, err := q.Repos(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		out = append(out, obj{"id": si.ID, "workspace": si.Workspace, "created_at": si.CreatedAt, "repos": nonNil(repos)})
+		out = append(out, obj{"id": si.ID, "workspace": si.Workspace, "source": si.Source, "created_at": si.CreatedAt, "repos": nonNil(repos)})
 	}
 	writeJSON(w, out)
+}
+
+func (a *api) projects(w http.ResponseWriter, r *http.Request) {
+	if a.o.Projects == nil {
+		writeJSON(w, obj{"projects": []obj{}, "problems": []obj{}})
+		return
+	}
+	v, err := a.o.Projects(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "projects: "+err.Error())
+		return
+	}
+	writeJSON(w, v)
 }
 
 func (a *api) status(r *http.Request, q *query.Q) (any, error) {
@@ -361,7 +413,15 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 	}
 	// The snapshot a link without #snapshot= opens: the UI drops the
 	// parameter only when the picked snapshot is this one.
-	def := a.defaultSnapshot(ctx)
+	var def string
+	if p := r.URL.Query().Get("project"); p != "" {
+		// A project link's default is its newest main build, not serve's.
+		if def, _, err = a.projectSnapshot(ctx, p); err != nil {
+			return nil, err
+		}
+	} else {
+		def = a.defaultSnapshot(ctx)
+	}
 	if def == "" {
 		if def, err = q.S.Latest(ctx); err != nil {
 			return nil, err
