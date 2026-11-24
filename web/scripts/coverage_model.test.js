@@ -18,3 +18,12 @@ test('a note replaces the call figures', () => {
 test('no rows says so', () => {
   assert.match(coverageHTML([]), /No coverage figures/);
 });
+
+test('event and http rows show sends and requests linked', () => {
+  const html = coverageHTML([
+    {repo: 'breakdown-admin', language: 'events', files_extracted: 0, files_tracked: 0, sends: 288, sends_linked: 278, sends_dynamic: 2, handler_clauses: 250, handler_clauses_linked: 240},
+    {repo: 'breakdown-sales', language: 'http', files_extracted: 0, files_tracked: 0, http_refs: 101, http_linked: 54, not_extracted: 8},
+  ]);
+  assert.match(html, /events<\/td><td>—<\/td><td>278 of 288 sends \(97%\)<br><small>dynamic 2 · unlinked 8<\/small><\/td><td>96% of handle_event clauses/);
+  assert.match(html, /54 of 101 requests linked to a route \(53%\)<br><small>no path 8/);
+});

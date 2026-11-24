@@ -20,7 +20,8 @@ type edge struct {
 	Precision string   // best precision across sites
 	Kinds     []string // distinct edge kinds, sorted: call, dispatch, http, route, …
 	// Provenance says why an HTTP link was made (config key or deployment
-	// env → service → repo); empty for other kinds.
+	// env → service → repo), or which events a send carries to a
+	// handle_event (phx-click "save", "delete"); empty for other kinds.
 	Provenance string
 }
 
@@ -35,7 +36,7 @@ func (e edge) Has(kind string) bool {
 }
 
 // Notable kinds are drawn and printed: they are not a direct call.
-var notable = map[string]bool{"dispatch": true, "http": true, "route": true}
+var notable = map[string]bool{"dispatch": true, "event": true, "http": true, "route": true}
 
 // Notable returns the edge's kinds that are not a direct call (dispatch,
 // http, route), in order.
@@ -80,8 +81,11 @@ func (q *Q) edgeQuery(ctx context.Context, where string, args ...any) ([]edge, e
 		return nil, err
 	}
 	for i := range out {
-		if out[i].Has("http") {
+		switch {
+		case out[i].Has("http"):
 			out[i].Provenance = q.provenance(ctx, out[i].From, out[i].To)
+		case out[i].Has("event"):
+			out[i].Provenance = q.eventProvenance(ctx, out[i].From, out[i].To)
 		}
 	}
 	return out, nil
@@ -94,6 +98,54 @@ func (q *Q) provenance(ctx context.Context, from, route string) string {
 	q.S.DB.QueryRowContext(ctx, `SELECT provenance FROM http_links WHERE snapshot_id = ? AND from_id = ? AND route_id = ?
 	  ORDER BY CASE precision WHEN 'heuristic' THEN 0 ELSE 1 END, provenance LIMIT 1`, q.Snapshot, from, route).Scan(&p)
 	return p
+}
+
+// eventProvenance names the events one function sends to a handle_event,
+// grouped by how (phx-click "save", "delete"; pushEvent "signed" via phx-hook
+// Pad (page.ex:12)), at most eight names.
+func (q *Q) eventProvenance(ctx context.Context, from, to string) string {
+	rows, err := q.S.DB.QueryContext(ctx, `SELECT DISTINCT via, provenance, event FROM event_links
+	  WHERE snapshot_id = ? AND from_id = ? AND to_id = ? ORDER BY via, provenance, event`, q.Snapshot, from, to)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	type group struct{ via, prov string }
+	var order []group
+	names := map[group][]string{}
+	total := 0
+	for rows.Next() {
+		var g group
+		var ev string
+		if rows.Scan(&g.via, &g.prov, &ev) != nil {
+			return ""
+		}
+		if _, ok := names[g]; !ok {
+			order = append(order, g)
+		}
+		total++
+		if total <= 8 {
+			names[g] = append(names[g], fmt.Sprintf("%q", ev))
+		} else if names[g] == nil {
+			names[g] = []string{}
+		}
+	}
+	var parts []string
+	for _, g := range order {
+		if len(names[g]) == 0 {
+			continue
+		}
+		p := g.via + " " + strings.Join(names[g], ", ")
+		if g.prov != "" {
+			p += " via " + g.prov
+		}
+		parts = append(parts, p)
+	}
+	s := strings.Join(parts, "; ")
+	if total > 8 {
+		s += fmt.Sprintf(" +%d more", total-8)
+	}
+	return s
 }
 
 // splitSet splits a group_concat list into its sorted non-empty values.

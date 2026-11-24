@@ -309,7 +309,11 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 				case "elixir":
 					argv = []string{"elixir", filepath.Join(o.PluginsDir, "extract-elixir", "extract.exs"), "--repo", name, "--root", t.root, "--revision", t.Commit, "--source-roots", roots, "--schema-facts", schemaFacts}
 				case "javascript":
-					argv = []string{"node", filepath.Join(o.PluginsDir, "extract-javascript", "extract.mjs"), "--repo", name, "--root", t.root, "--revision", t.Commit, "--source-roots", roots}
+					tsDir, err := o.Mise.Where(ctx, TypeScript)
+					if err != nil {
+						return nil, &StepError{t.Repo, t.Commit, "tools", err}
+					}
+					argv = []string{"node", filepath.Join(o.PluginsDir, "extract-javascript", "extract.mjs"), "--repo", name, "--root", t.root, "--revision", t.Commit, "--source-roots", roots, "--typescript", tsDir}
 				}
 				argv = dropEmpty(argv)
 				if argv, err = resolve(env, argv); err != nil {

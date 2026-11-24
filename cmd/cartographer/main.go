@@ -93,7 +93,7 @@ Building (in a workspace with cartographer.toml):
                               --import keeps the newest 10 snapshots per workspace
   publish <snapshot-dir>      pack and publish as a GitHub release, prune old ones
   review <annotation-id>      mark an annotation reviewed against the snapshot's code
-  validate-facts <file>...    check extractor plugin output (facts v1 or v2)
+  validate-facts <file>...    check extractor plugin output (facts v1, v2 or v3)
   extract scip --lang go|rust --repo NAME --root DIR [--revision REV] [--rust-build-scripts=false]
   extract kubernetes|urls --repo NAME --root DIR [--revision REV]
                               built-in extractors: Deployments and Services; URLs in YAML config

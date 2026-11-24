@@ -14,7 +14,7 @@ func TestExtract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"extract-elixir/extract.exs", "extract-elixir/source.exs", "extract-elixir/http.exs", "extract-javascript/vendor/acorn.mjs", "extract-postgres-schema/schema.sql"} {
+	for _, f := range []string{"extract-elixir/extract.exs", "extract-elixir/source.exs", "extract-elixir/http.exs", "extract-javascript/extract.mjs", "extract-postgres-schema/schema.sql"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("missing %s", f)
 		}

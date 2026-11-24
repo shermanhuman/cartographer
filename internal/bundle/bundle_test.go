@@ -223,7 +223,16 @@ func TestFormat1RejectsFormat2Content(t *testing.T) {
 	if _, err := Read(dir); err != nil {
 		t.Errorf("format 2 with facts 2: %v", err)
 	}
+	// Facts version 3 needs snapshot format 3; format 4 is newer than this.
+	edit(t, filepath.Join(dir, "facts", "shop-worker.json"), `"facts_version": 2`, `"facts_version": 3`)
+	if _, err := Read(dir); err == nil || !strings.Contains(err.Error(), "facts_version 3 in a snapshot_format 2") {
+		t.Errorf("got %v", err)
+	}
 	edit(t, filepath.Join(dir, "manifest.json"), `"snapshot_format": 2`, `"snapshot_format": 3`)
+	if _, err := Read(dir); err != nil {
+		t.Errorf("format 3 with facts 3: %v", err)
+	}
+	edit(t, filepath.Join(dir, "manifest.json"), `"snapshot_format": 3`, `"snapshot_format": 4`)
 	if _, err := Read(dir); err == nil || !strings.Contains(err.Error(), "newer cartographer") {
 		t.Errorf("got %v", err)
 	}

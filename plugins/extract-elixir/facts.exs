@@ -1,14 +1,15 @@
 defmodule Cartographer.ElixirFacts do
   @moduledoc """
-  Builds one facts v2 document for an Elixir repository from the raw output
+  Builds one facts v3 document for an Elixir repository from the raw output
   of `Cartographer.ElixirSource`: v1's sections plus Phoenix `routes`,
-  `http_refs` through Req wrappers (`Cartographer.ElixirHTTP`) and one
-  `stats` entry. See docs/facts-format.md.
+  `http_refs` through Req wrappers (`Cartographer.ElixirHTTP`), `stats`,
+  and the templates' LiveView `events`, `event_handlers` and `hook_mounts`.
+  See docs/facts-format.md.
   """
 
   alias Cartographer.{ElixirHTTP, ElixirSource}
 
-  @version "0.2.0"
+  @version "0.3.0"
   @public ~w(def defmacro defdelegate defguard)
   # defguard defines a macro; defdelegate a function.
   @macro_kinds ~w(defmacro defmacrop defguard defguardp)
@@ -38,13 +39,16 @@ defmodule Cartographer.ElixirFacts do
     ref_roots = Keyword.get(opts, :ref_roots) || ["lib", "priv/repo/migrations", "scripts"]
 
     {sources, skipped} = list_files(root, source_roots, ~w(.ex .exs))
+    {heex_files, _} = list_files(root, source_roots, ~w(.heex))
+    helpers = use_helpers(root, sources)
+    parse = fn acc, text, rel -> ElixirSource.parse(acc, text, rel, repo, helpers: helpers) end
 
     parsed =
       Enum.reduce(sources, ElixirSource.new(), fn rel, acc ->
         case File.read(Path.join(root, rel)) do
           {:ok, text} ->
             if String.valid?(text) do
-              ElixirSource.parse(acc, text, rel, repo)
+              parse.(acc, text, rel)
             else
               # The tokenizer rejects invalid UTF-8 outright; parse the
               # repaired text so the file still contributes its definitions.
@@ -60,7 +64,7 @@ defmodule Cartographer.ElixirFacts do
                   | &1
                 ]
               )
-              |> ElixirSource.parse(String.replace_invalid(text), rel, repo)
+              |> parse.(String.replace_invalid(text), rel)
             end
 
           {:error, reason} ->
@@ -71,11 +75,14 @@ defmodule Cartographer.ElixirFacts do
         end
       end)
 
+    parsed = heex_templates(parsed, root, heex_files, repo, helpers)
+
     {modules, module_notes} = modules(parsed.modules, repo)
     {functions, clauses, function_notes} = functions(parsed.clauses, repo)
     {calls, classified, defined} = calls(parsed.calls, functions)
     {routes, route_notes} = routes(parsed.routes, functions, repo)
     {http_refs, http_skipped} = ElixirHTTP.refs(parsed.clauses, classified, functions)
+    browser = events(parsed, classified, functions, repo)
 
     stats =
       calls
@@ -94,7 +101,7 @@ defmodule Cartographer.ElixirFacts do
       end
 
     files =
-      (sources ++ ref_files)
+      (sources ++ heex_files ++ ref_files)
       |> Enum.uniq()
       |> Enum.sort()
       |> Enum.map(&file_entry/1)
@@ -105,7 +112,7 @@ defmodule Cartographer.ElixirFacts do
       |> Enum.sort_by(&{&1[:file] || "", &1.kind, &1.message})
 
     %{
-      facts_version: 2,
+      facts_version: 3,
       producer: %{name: "extract-elixir", version: @version, call_precision: "precise"},
       repo: repo,
       revision: opts[:revision],
@@ -117,7 +124,10 @@ defmodule Cartographer.ElixirFacts do
       notes: notes,
       routes: if(routes != [], do: routes),
       http_refs: if(http_refs != [], do: http_refs),
-      stats: [stats]
+      stats: [stats | browser.stats],
+      events: if(browser.events != [], do: browser.events),
+      event_handlers: if(browser.handlers != [], do: browser.handlers),
+      hook_mounts: if(browser.mounts != [], do: browser.mounts)
     }
     |> Enum.reject(fn {_, v} -> is_nil(v) end)
     |> Map.new()
@@ -133,8 +143,8 @@ defmodule Cartographer.ElixirFacts do
   # Keys in this order first, then alphabetically, so output is stable and
   # reads like docs/facts-format.md regardless of atom table order.
   @key_order ~w(facts_version producer repo revision files modules functions calls table_refs
-                notes routes http_refs stats id path from target table name version call_precision
-                module arity kind)
+                notes routes http_refs stats events event_handlers hook_mounts id path from target
+                table name version call_precision module arity kind)
 
   @doc "Encodes `term` as JSON with deterministic key order."
   def encode(term), do: term |> encode_iodata() |> IO.iodata_to_binary()
@@ -264,6 +274,7 @@ defmodule Cartographer.ElixirFacts do
   defp language(path) do
     case Path.extname(path) do
       ext when ext in [".ex", ".exs"] -> "elixir"
+      ".heex" -> "heex"
       ".sql" -> "sql"
       ".sh" -> "shell"
       _ -> "text"
@@ -385,7 +396,12 @@ defmodule Cartographer.ElixirFacts do
             do: %{module: c.target_module, name: c.name, arity: c.arity},
             else: %{name: c.name, arity: c.arity}
 
-        %{from: c.from, target: target, kind: c.kind, file: c.file, line: c.line}
+        kind =
+          if Map.get(c, :component, false) and c.kind in ~w(local import remote local_or_import),
+            do: "component",
+            else: c.kind
+
+        %{from: c.from, target: target, kind: kind, file: c.file, line: c.line}
       end)
       |> Enum.uniq()
       |> Enum.sort_by(
@@ -522,13 +538,424 @@ defmodule Cartographer.ElixirFacts do
     end)
   end
 
+  # --- templates and LiveView events ------------------------------------------
+
+  # The `use` helpers of every source file (see ElixirSource.helpers/1),
+  # read before the walk so a module sees its app's helpers wherever the
+  # app module is defined.
+  defp use_helpers(root, sources) do
+    Enum.reduce(sources, %{}, fn rel, acc ->
+      with {:ok, text} <- File.read(Path.join(root, rel)),
+           true <- String.valid?(text),
+           {:ok, ast} <-
+             (try do
+                Code.string_to_quoted(text,
+                  emit_warnings: false,
+                  file: rel,
+                  static_atoms_encoder: &ElixirSource.encode_atom/2
+                )
+              rescue
+                _ -> :error
+              end) do
+        Map.merge(acc, ElixirSource.helpers(ast), fn _, a, b ->
+          %{funs: Map.merge(a.funs, b.funs), using: b.using || a.using}
+        end)
+      else
+        _ -> acc
+      end
+    end)
+  end
+
+  # .heex files compile into functions: a colocated `name.html.heex` beside
+  # `name.ex` is that module's render/1, and a file matched by a module's
+  # `embed_templates "dir/*"` is `<Module>.<file name>/1`. Each becomes a
+  # function (unless the module defines it) and is read like a ~H body, in
+  # the module's scope.
+  defp heex_templates(parsed, _root, [], _repo, _helpers), do: parsed
+
+  defp heex_templates(parsed, root, files, repo, helpers) do
+    envs = Enum.group_by(parsed.module_envs, & &1.file)
+    by_module = Map.new(parsed.module_envs, &{&1.module, &1})
+    ids = MapSet.new(parsed.clauses, & &1.id)
+
+    Enum.reduce(files, parsed, fn rel, acc ->
+      base = rel |> Path.basename() |> String.replace(~r/(\.[a-z]+)?\.heex$/, "")
+      stem = Path.join(Path.dirname(rel), base)
+
+      owner =
+        cond do
+          (mods = Map.get(envs, stem <> ".ex", [])) != [] ->
+            {hd(Enum.sort_by(mods, & &1.module)), "render"}
+
+          (e = embed_owner(acc.embeds, String.replace_suffix(rel, ".heex", ""))) != nil ->
+            {Map.get(by_module, e.module), base <> e.suffix}
+
+          true ->
+            nil
+        end
+
+      case {owner, File.read(Path.join(root, rel))} do
+        {{%{} = env0, fun}, {:ok, text}} ->
+          fid = "#{repo}:#{env0.module}.#{fun}/1"
+
+          acc =
+            if MapSet.member?(ids, fid),
+              do: acc,
+              else: %{
+                acc
+                | clauses: [
+                    %{
+                      id: fid,
+                      module: env0.module,
+                      name: fun,
+                      arity: 1,
+                      min_arity: 1,
+                      kind: "def",
+                      file: rel,
+                      line: 1,
+                      end_line: length(String.split(text, "\n")),
+                      normalized: text
+                    }
+                    | acc.clauses
+                  ]
+              }
+
+          env = %{
+            module: env0.module,
+            aliases: env0.aliases,
+            imports: env0.imports,
+            file: rel,
+            repo: repo,
+            caller: fid,
+            helpers: helpers
+          }
+
+          ElixirSource.template(acc, env, text, 1)
+
+        {nil, _} ->
+          %{
+            acc
+            | notes: [
+                %{
+                  kind: "heex_unowned",
+                  file: rel,
+                  message: "no module renders this template (not colocated, no embed_templates)"
+                }
+                | acc.notes
+              ]
+          }
+
+        {_, {:error, reason}} ->
+          %{acc | notes: [%{kind: "read_error", file: rel, message: inspect(reason)} | acc.notes]}
+      end
+    end)
+  end
+
+  defp embed_owner(embeds, stem) do
+    Enum.find_value(embeds, fn e ->
+      # Matched against the path without .heex ("mail/welcome.html"), as
+      # Phoenix does: "mail/*.html" takes only html templates, and a pattern
+      # with no format ("mail/*") takes every format.
+      pattern = Path.join(Path.dirname(e.file), e.pattern)
+
+      regex =
+        pattern
+        |> Regex.escape()
+        |> String.replace("\\*\\*", ".*")
+        |> String.replace("\\*", "[^/]*")
+
+      if Regex.match?(~r/\A#{regex}\z/, stem), do: e
+    end)
+  end
+
+  # The module kind a `use` makes: a LiveView, a LiveComponent or a
+  # function-component module, directly or through an in-repo helper.
+  defp module_kinds(uses) do
+    Enum.reduce(uses, %{}, fn u, acc ->
+      kind =
+        cond do
+          u.use == "Phoenix.LiveView" or u.kind == "live_view" -> :live_view
+          u.use == "Phoenix.LiveComponent" or u.kind == "live_component" -> :live_component
+          u.use == "Phoenix.Component" or u.kind in ["html", "component"] -> :component
+          true -> nil
+        end
+
+      rank = %{live_view: 3, live_component: 2, component: 1}
+
+      if kind && Map.get(rank, kind) > Map.get(rank, Map.get(acc, u.module), 0),
+        do: Map.put(acc, u.module, kind),
+        else: acc
+    end)
+  end
+
+  @doc false
+  # Resolves sends to the handle_event functions that receive them:
+  #   * a template in a LiveView, or `phx-target={@myself}` in a
+  #     LiveComponent, goes to that module (precise);
+  #   * anything else goes to the LiveViews that render the sending
+  #     function, found up the call graph (heuristic), as LiveView sends an
+  #     untargeted event to the LiveView whatever component renders it;
+  # and a receiver only counts when it has a clause for the name (its head,
+  # a guard or a module attribute), or a catch-all that delegates to a
+  # module that has one.
+  defp events(parsed, classified, functions, repo) do
+    kinds = module_kinds(parsed.uses)
+    fids = MapSet.new(functions, & &1.id)
+
+    module_of =
+      Map.new(functions, fn f -> {f.id, String.replace_prefix(f.module, repo <> ":", "")} end)
+
+    span =
+      Enum.reduce(functions, %{}, fn f, acc ->
+        Map.update(
+          acc,
+          {module_of[f.id], f.name},
+          [{f.min_arity, f.arity, f.id}],
+          &[{f.min_arity, f.arity, f.id} | &1]
+        )
+      end)
+
+    resolve = fn module, name, arity ->
+      span
+      |> Map.get({module, name}, [])
+      |> Enum.find_value(fn {min, max, id} -> if arity in min..max, do: id end)
+    end
+
+    callers =
+      Enum.reduce(classified, %{}, fn c, acc ->
+        with m when is_binary(m) <- c.target_module,
+             to when is_binary(to) <- resolve.(m, c.name, c.arity),
+             true <- c.from != to do
+          Map.update(acc, to, MapSet.new([c.from]), &MapSet.put(&1, c.from))
+        else
+          _ -> acc
+        end
+      end)
+
+    attrs = Map.new(parsed.attrs, &{{&1.module, &1.name}, &1.values})
+
+    handlers =
+      parsed.handlers
+      |> Enum.flat_map(fn
+        %{source: "attribute"} = h ->
+          for e <- Map.get(attrs, {h.module, h.attr}, []),
+              e != "",
+              do: %{function: h.function, event: e, source: "attribute", line: h.line}
+
+        %{source: "delegate"} = h ->
+          d = "#{repo}:#{h.delegate_module}.handle_event/3"
+
+          if MapSet.member?(fids, d),
+            do: [%{function: h.function, delegate: d, source: "delegate", line: h.line}],
+            else: []
+
+        h ->
+          [h]
+      end)
+      |> Enum.filter(&MapSet.member?(fids, &1.function))
+      |> Enum.uniq()
+      |> Enum.sort_by(&{&1.function, &1.line, &1[:event] || "", &1[:delegate] || ""})
+
+    names =
+      Enum.reduce(handlers, %{}, fn h, acc ->
+        if h[:event],
+          do: Map.update(acc, h.function, MapSet.new([h.event]), &MapSet.put(&1, h.event)),
+          else: acc
+      end)
+
+    delegates =
+      Enum.reduce(handlers, %{}, fn h, acc ->
+        if h[:delegate],
+          do: Map.update(acc, h.function, [h.delegate], &[h.delegate | &1]),
+          else: acc
+      end)
+
+    # Modules of kind `want` that render fid, walking callers up (a LiveView
+    # stops the walk).
+    up = fn fid, want ->
+      Stream.unfold({[fid], MapSet.new([fid]), 0}, fn
+        {[], _, _} ->
+          nil
+
+        {_, _, depth} when depth > 12 ->
+          nil
+
+        {frontier, seen, depth} ->
+          found =
+            for f <- frontier, kinds[module_of[f]] in want, into: MapSet.new(), do: module_of[f]
+
+          next =
+            for f <- frontier,
+                kinds[module_of[f]] != :live_view,
+                c <- Map.get(callers, f, []),
+                not MapSet.member?(seen, c),
+                uniq: true,
+                do: c
+
+          {found, {next, Enum.into(next, seen), depth + 1}}
+      end)
+      |> Enum.reduce(MapSet.new(), &MapSet.union/2)
+      |> Enum.sort()
+    end
+
+    receivers = fn from, target ->
+      module = module_of[from]
+
+      cond do
+        target == "myself" and kinds[module] == :live_component -> {[module], :precise}
+        target == "myself" -> {up.(from, [:live_component]), :heuristic}
+        target == "dynamic" -> {[], :heuristic}
+        kinds[module] == :live_view -> {[module], :precise}
+        true -> {up.(from, [:live_view]), :heuristic}
+      end
+    end
+
+    # handle_event functions of the receivers that take this name.
+    takers = fn modules, event ->
+      Enum.flat_map(modules, fn m ->
+        he = "#{repo}:#{m}.handle_event/3"
+
+        # One delegation hop: a clause handing the name to another module's
+        # handle_event that takes it.
+        ds =
+          Enum.filter(
+            Map.get(delegates, he, []),
+            &MapSet.member?(Map.get(names, &1, MapSet.new()), event)
+          )
+
+        cond do
+          MapSet.member?(Map.get(names, he, MapSet.new()), event) ->
+            [{he, :direct} | Enum.map(ds, &{&1, :delegated})]
+
+          ds != [] ->
+            [{he, :delegated} | Enum.map(ds, &{&1, :delegated})]
+
+          true ->
+            []
+        end
+      end)
+    end
+
+    # A component sending whatever its caller passes (phx-click={@click}):
+    # each call site that passes the attribute is a send from the caller,
+    # by name for a literal, dynamic for code. A component no call passes
+    # it to is a dynamic send of its own.
+    passed =
+      for p <- parsed.passthrough,
+          c <- classified,
+          Map.get(c, :component),
+          c.target_module,
+          resolve.(c.target_module, c.name, c.arity) == p.component,
+          {name, value} <- Map.get(c, :attrs, []),
+          name == p.assign,
+          not (is_binary(value) and String.starts_with?(value, "lv:")),
+          do:
+            {p,
+             %{
+               from: c.from,
+               module: module_of[c.from],
+               via: p.via,
+               target: p.target,
+               file: c.file,
+               line: c.line,
+               event: if(is_binary(value) and value != "", do: value),
+               dynamic: not (is_binary(value) and value != ""),
+               passed: true
+             }}
+
+    reached = MapSet.new(passed, fn {p, _} -> {p.component, p.assign} end)
+    passthrough = Enum.map(passed, &elem(&1, 1))
+
+    unfilled =
+      for p <- parsed.passthrough,
+          not MapSet.member?(reached, {p.component, p.assign}),
+          do: %{
+            from: p.component,
+            module: module_of[p.component],
+            via: p.via,
+            target: p.target,
+            file: p.file,
+            line: p.line,
+            event: nil,
+            dynamic: true
+          }
+
+    sends =
+      (parsed.events ++ passthrough ++ unfilled)
+      |> Enum.filter(&MapSet.member?(fids, &1.from))
+      |> Enum.map(fn e ->
+        if e.dynamic do
+          %{from: e.from, dynamic: true, via: e.via, target: e.target, file: e.file, line: e.line}
+        else
+          {mods, how} = receivers.(e.from, e.target)
+          to = takers.(mods, e.event)
+
+          precise =
+            how == :precise and not Map.get(e, :passed, false) and
+              Enum.all?(to, &(elem(&1, 1) == :direct))
+
+          %{
+            from: e.from,
+            event: e.event,
+            via: e.via,
+            target: e.target,
+            to: to |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort(),
+            file: e.file,
+            line: e.line,
+            precision: if(precise, do: "precise", else: "heuristic")
+          }
+        end
+      end)
+      |> Enum.map(fn e -> if e[:to] == [], do: Map.delete(e, :to), else: e end)
+      |> Enum.map(fn e -> if e.target == "", do: Map.delete(e, :target), else: e end)
+      |> Enum.uniq()
+      |> Enum.sort_by(&{&1.file, &1.line, &1.from, &1[:event] || "", &1.via})
+
+    mounts =
+      parsed.hook_mounts
+      |> Enum.filter(&MapSet.member?(fids, &1.from))
+      |> Enum.map(fn m ->
+        {mods, _} = receivers.(m.from, "")
+
+        rs =
+          for mod <- mods, he = "#{repo}:#{mod}.handle_event/3", MapSet.member?(fids, he), do: he
+
+        Map.put(m, :receivers, Enum.sort(rs))
+      end)
+      |> Enum.map(fn m -> if m.receivers == [], do: Map.delete(m, :receivers), else: m end)
+      |> Enum.uniq()
+      |> Enum.sort_by(&{&1.file, &1.line, &1.hook})
+
+    stats =
+      if sends == [],
+        do: [],
+        else: [
+          %{
+            language: "heex",
+            call_sites: length(sends),
+            in_repo: Enum.count(sends, &(&1[:to] != nil)),
+            dispatch: 0,
+            external: 0,
+            unresolved: Enum.count(sends, &(not Map.get(&1, :dynamic, false) and &1[:to] == nil)),
+            refs: 0,
+            not_extracted: Enum.count(sends, &Map.get(&1, :dynamic, false))
+          }
+        ]
+
+    handlers_out =
+      Enum.map(handlers, &Map.take(&1, [:function, :event, :source, :delegate, :line]))
+
+    %{events: sends, handlers: handlers_out, mounts: mounts, stats: stats}
+  end
+
   # --- table references ------------------------------------------------------
 
   defp table_refs(root, ref_roots, schema_path, schemas, clauses) do
     schema = schema_path |> File.read!() |> JSON.decode!()
 
-    if schema["facts_version"] not in [1, 2],
-      do: raise(ArgumentError, "--schema-facts #{schema_path} is not a facts v1 or v2 document")
+    if schema["facts_version"] not in [1, 2, 3],
+      do:
+        raise(ArgumentError, "--schema-facts #{schema_path} is not a facts v1, v2 or v3 document")
 
     by_name =
       (schema["tables"] || [])

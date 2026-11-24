@@ -1,5 +1,5 @@
 {
-  "facts_version": 2,
+  "facts_version": 3,
   "producer": {
     "name": "rust-analyzer",
     "version": "0.3.3121-standalone",

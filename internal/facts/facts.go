@@ -1,7 +1,9 @@
 // Package facts defines the facts interchange format that extractor plugins
 // emit, one document per repository (or one for a database schema). Version 2
 // adds routes, HTTP references, config URLs, services, per-language stats and
-// test functions; version 1 documents are still read. See docs/facts-format.md.
+// test functions; version 3 adds browser events (events, event_handlers,
+// hook_mounts) and same-origin HTTP references. Older documents are still
+// read. See docs/facts-format.md.
 package facts
 
 import (
@@ -12,9 +14,9 @@ import (
 )
 
 // Version is the facts format version this package writes; MinVersion is the
-// oldest it reads. A version-1 document may not carry version-2 sections.
+// oldest it reads. A document may not carry a later version's sections.
 const (
-	Version    = 2
+	Version    = 3
 	MinVersion = 1
 )
 
@@ -46,6 +48,11 @@ type Doc struct {
 	ConfigURLs []ConfigURL `json:"config_urls,omitempty"`
 	Services   []Service   `json:"services,omitempty"`
 	Stats      []Stats     `json:"stats,omitempty"`
+
+	// Version 3.
+	Events        []Event        `json:"events,omitempty"`
+	EventHandlers []EventHandler `json:"event_handlers,omitempty"`
+	HookMounts    []HookMount    `json:"hook_mounts,omitempty"`
 }
 
 type Producer struct {
@@ -177,8 +184,49 @@ type HTTPRef struct {
 	Method string `json:"method,omitempty"`
 	Path   string `json:"path"` // interpolations as :name
 	Base   string `json:"base,omitempty"`
+	// Origin "same" (version 3) marks a browser request with no host: it
+	// goes to the server that served the page, the caller's own repo.
+	Origin string `json:"origin,omitempty"`
 	File   string `json:"file"`
 	Line   int    `json:"line,omitempty"`
+}
+
+// Event is one place that sends a LiveView event (version 3): a phx-*
+// attribute or JS.push in a template, or a hook's pushEvent. To lists the
+// handle_event functions the producer resolved it to; a hook's send names
+// its Hooks instead and the core resolves it through hook_mounts.
+type Event struct {
+	From      string   `json:"from"`
+	Event     string   `json:"event,omitempty"` // empty when Dynamic
+	Dynamic   bool     `json:"dynamic,omitempty"`
+	Via       string   `json:"via"`              // phx-click, JS.push, pushEvent, ...
+	Target    string   `json:"target,omitempty"` // "", myself, dynamic
+	Hooks     []string `json:"hooks,omitempty"`
+	To        []string `json:"to,omitempty"`
+	File      string   `json:"file"`
+	Line      int      `json:"line,omitempty"`
+	Precision string   `json:"precision,omitempty"`
+}
+
+// EventHandler is one event name a handle_event clause matches (version 3):
+// its head, a guard list or a module attribute. A catch-all clause that hands
+// the event on names its Delegate and no Event.
+type EventHandler struct {
+	Function string `json:"function"`
+	Event    string `json:"event,omitempty"`
+	Source   string `json:"source"` // head, guard, attribute, delegate
+	Delegate string `json:"delegate,omitempty"`
+	Line     int    `json:"line"`
+}
+
+// HookMount is one phx-hook in a template (version 3), with the handle_event
+// functions that receive the hook's pushEvent there.
+type HookMount struct {
+	Hook      string   `json:"hook"`
+	From      string   `json:"from"`
+	Receivers []string `json:"receivers,omitempty"`
+	File      string   `json:"file"`
+	Line      int      `json:"line,omitempty"`
 }
 
 // ConfigURL is a URL found in a repository's configuration (version 2): a
@@ -239,6 +287,10 @@ func (e *ValidationError) Error() string {
 // not carry (with functions[].test).
 var Version2Sections = []string{"routes", "http_refs", "config_urls", "services", "stats"}
 
+// Version3Sections are the sections a version 1 or 2 document may not carry
+// (with http_refs[].origin).
+var Version3Sections = []string{"events", "event_handlers", "hook_mounts"}
+
 // Validate checks required fields, id uniqueness and internal references.
 func (d *Doc) Validate() error {
 	var p []string
@@ -257,6 +309,19 @@ func (d *Doc) Validate() error {
 		for i, f := range d.Functions {
 			if f.Test {
 				add("$.functions[%d].test: needs facts_version 2", i)
+			}
+		}
+	}
+	if d.FactsVersion < 3 {
+		counts := []int{len(d.Events), len(d.EventHandlers), len(d.HookMounts)}
+		for i, name := range Version3Sections {
+			if counts[i] > 0 {
+				add("$.%s: needs facts_version 3", name)
+			}
+		}
+		for i, r := range d.HTTPRefs {
+			if r.Origin != "" {
+				add("$.http_refs[%d].origin: needs facts_version 3", i)
 			}
 		}
 	}
@@ -407,7 +472,71 @@ func (d *Doc) Validate() error {
 		if r.Method != "" && r.Method != strings.ToUpper(r.Method) {
 			add("%s.method: must be upper case", w)
 		}
+		switch {
+		case r.Origin == "":
+		case r.Origin != "same":
+			add("%s.origin: want \"same\" or none, got %q", w, r.Origin)
+		case r.Base != "":
+			add("%s: a same-origin ref has no base", w)
+		}
 		checkFile(r.File, w+".file")
+	}
+	fn := func(id, where string) {
+		if !funcs[id] {
+			add("%s: unknown function %q", where, id)
+		}
+	}
+	for i, e := range d.Events {
+		w := fmt.Sprintf("$.events[%d]", i)
+		fn(e.From, w+".from")
+		for j, to := range e.To {
+			fn(to, fmt.Sprintf("%s.to[%d]", w, j))
+		}
+		if e.Via == "" {
+			add("%s.via: required", w)
+		}
+		if (e.Event == "") != e.Dynamic {
+			add("%s: an event has a name or is dynamic, not both or neither", w)
+		}
+		switch e.Target {
+		case "", "myself", "dynamic":
+		default:
+			add("%s.target: unknown target %q", w, e.Target)
+		}
+		checkFile(e.File, w+".file")
+		precision(e.Precision, w+".precision")
+	}
+	for i, h := range d.EventHandlers {
+		w := fmt.Sprintf("$.event_handlers[%d]", i)
+		fn(h.Function, w+".function")
+		switch h.Source {
+		case "head", "guard", "attribute":
+			if h.Event == "" || h.Delegate != "" {
+				add("%s: a %s handler names an event and no delegate", w, h.Source)
+			}
+		case "delegate":
+			if h.Event != "" || h.Delegate == "" {
+				add("%s: a delegate names the delegate and no event", w)
+			} else {
+				fn(h.Delegate, w+".delegate")
+			}
+		default:
+			add("%s.source: unknown source %q", w, h.Source)
+		}
+		if h.Line <= 0 {
+			add("%s.line: must be > 0", w)
+		}
+	}
+	for i, m := range d.HookMounts {
+		w := fmt.Sprintf("$.hook_mounts[%d]", i)
+		if m.Hook == "" {
+			add("%s.hook: required", w)
+		}
+		fn(m.From, w+".from")
+		for j, r := range m.Receivers {
+			fn(r, fmt.Sprintf("%s.receivers[%d]", w, j))
+		}
+		checkFile(m.File, w+".file")
 	}
 	for i, c := range d.ConfigURLs {
 		w := fmt.Sprintf("$.config_urls[%d]", i)

@@ -83,7 +83,16 @@ defmodule Cartographer.ElixirSource do
       schemas: [],
       notes: [],
       routes: [],
-      route_skips: []
+      route_skips: [],
+      # Templates and LiveView events (see template/5).
+      events: [],
+      handlers: [],
+      hook_mounts: [],
+      passthrough: [],
+      uses: [],
+      module_envs: [],
+      embeds: [],
+      attrs: []
     }
 
   # Req functions that send a request; their URL-or-options arguments are
@@ -106,18 +115,19 @@ defmodule Cartographer.ElixirSource do
         "not parsed: the atom table is past its budget (#{budget} of #{:erlang.system_info(:atom_limit)})"
       )
     else
-      parse_source(acc, source, relative, repo)
+      parse_source(acc, source, relative, repo, Keyword.get(opts, :helpers, %{}))
     end
   end
 
-  defp parse_source(acc, source, relative, repo) do
+  defp parse_source(acc, source, relative, repo, helpers) do
     env = %{
       module: nil,
       aliases: %{},
       imports: %{},
       file: relative,
       repo: repo,
-      caller: nil
+      caller: nil,
+      helpers: helpers
     }
 
     result =
@@ -270,7 +280,21 @@ defmodule Cartographer.ElixirSource do
       | modules: [%{name: module, file: env.file, line: line(meta)} | acc.modules]
     }
 
-    {_, acc} = walk(body, next, acc)
+    # The module body's own scope, walked so its final aliases and imports
+    # (those a .heex template of the module sees) can be kept.
+    {inner, acc} =
+      case body do
+        [{:do, block}] -> walk(block, next, acc)
+        _ -> walk(body, next, acc)
+      end
+
+    acc = %{
+      acc
+      | module_envs: [
+          %{module: module, aliases: inner.aliases, imports: inner.imports, file: env.file}
+          | acc.module_envs
+        ]
+    }
 
     acc =
       if router?(body), do: route_walk(body[:do], next, %{path: [], alias: nil}, acc), else: acc
@@ -332,6 +356,66 @@ defmodule Cartographer.ElixirSource do
         end
       end)
 
+    {env, acc}
+  end
+
+  # A template inside a function: its components, expressions and events
+  # belong to that function.
+  defp walk({:sigil_H, meta, [{:<<>>, _, [text]}, _mods]}, env, acc) when is_binary(text) do
+    heredoc = Keyword.get(meta, :delimiter) in [~s("""), "'''"]
+    first = if heredoc, do: line(meta) + 1, else: line(meta)
+    {env, template(acc, env, text, first)}
+  end
+
+  # `use X, :kind` and `use X`: the imports and aliases X's __using__ quote
+  # brings in (one level of an in-repo helper, as Phoenix's `html_helpers`),
+  # so template components resolve per app.
+  defp walk({:use, _, [mod | rest]}, %{module: m, caller: nil} = env, acc) when m != nil do
+    kind =
+      case rest do
+        [k | _] when ident?(k) -> str(k)
+        _ -> nil
+      end
+
+    expand_use(name(mod, env), kind, env, acc, 0)
+  end
+
+  defp walk({:embed_templates, meta, [pattern | rest]}, %{module: m, caller: nil} = env, acc)
+       when m != nil and is_binary(pattern) do
+    # `suffix: "_html"` is added to each function name.
+    suffix =
+      case rest do
+        [opts] when is_list(opts) ->
+          Enum.find_value(opts, "", fn
+            {k, v} when is_binary(v) -> if ident?(k) and str(k) == "suffix", do: v
+            _ -> nil
+          end)
+
+        _ ->
+          ""
+      end
+
+    {env,
+     %{
+       acc
+       | embeds: [
+           %{module: m, pattern: pattern, suffix: suffix, file: env.file, line: line(meta)}
+           | acc.embeds
+         ]
+     }}
+  end
+
+  # A module attribute holding literal strings (`@events ~w(a b)`), which a
+  # handle_event guard may name.
+  defp walk({:@, _, [{attr, _, [value]}]}, %{module: m, caller: nil} = env, acc)
+       when m != nil and ident?(attr) do
+    acc =
+      case literal_strings(value) do
+        {:ok, list} -> %{acc | attrs: [%{module: m, name: str(attr), values: list} | acc.attrs]}
+        :error -> acc
+      end
+
+    {_, acc} = walk(value, env, acc)
     {env, acc}
   end
 
@@ -402,6 +486,12 @@ defmodule Cartographer.ElixirSource do
         }
 
         acc = %{acc | clauses: [c | acc.clauses]}
+
+        acc =
+          if str(fun) == "handle_event" and arity == 3,
+            do: handler(acc, env, fid, args, guards, body, meta),
+            else: acc
+
         next = %{env | caller: fid}
         {_, acc} = walk(body, next, acc)
         {_, acc} = walk(args, next, acc)
@@ -545,6 +635,575 @@ defmodule Cartographer.ElixirSource do
 
   defp walk(tuple, env, acc) when is_tuple(tuple), do: walk(Tuple.to_list(tuple), env, acc)
   defp walk(_, env, acc), do: {env, acc}
+
+  # --- templates and LiveView events ------------------------------------------
+
+  @doc """
+  Reads one HEEx template rendered by `env.caller` (the function that owns
+  it): component calls become calls marked `component`, expressions are
+  walked as code, and event attributes, hook mounts and colocated hooks are
+  recorded for `Cartographer.ElixirFacts` to resolve.
+  """
+  def template(acc, %{caller: nil}, _text, _first), do: acc
+
+  def template(acc, env, text, first) do
+    case Cartographer.HEEx.tokenize(text, env.file, first) do
+      {:error, message} ->
+        note(acc, "heex_parse_error", env.file, message)
+
+      {:ok, tokens} ->
+        tokens
+        |> Cartographer.HEEx.items()
+        |> Enum.reduce(acc, fn item, acc -> template_item(item, env, acc) end)
+    end
+  end
+
+  defp template_item({:component, :local, fun, attrs, l}, env, acc) do
+    component_call(acc, env, nil, fun, l, attrs)
+  end
+
+  defp template_item({:component, :remote, dotted, attrs, l}, env, acc) do
+    parts = String.split(dotted, ".")
+    {mod, [fun]} = Enum.split(parts, -1)
+    module = name({:__aliases__, [], Enum.map(mod, &atomish/1)}, env)
+    component_call(acc, env, module, fun, l, attrs)
+  end
+
+  defp template_item({:live_component, code, l}, env, acc) do
+    case expr(code, l) do
+      {:ok, {:__aliases__, _, _} = mod} ->
+        component_call(acc, env, name(mod, env), "render", l, [])
+
+      _ ->
+        acc
+    end
+  end
+
+  defp template_item({:expr, code, l}, env, acc) do
+    case expr(code, l) do
+      {:ok, ast} ->
+        acc = js_pushes(ast, env, l, acc)
+        {_, acc} = walk(ast, env, acc)
+        acc
+
+      :error ->
+        acc
+    end
+  end
+
+  defp template_item({:event, attr, value, target, l}, env, acc) do
+    target = target_of(target)
+
+    # The attribute's code is code: its calls are calls (show_modal("x")).
+    acc =
+      with {:expr, code, _} <- value,
+           {:ok, ast} <- expr(code, l) do
+        {_, acc} = walk(ast, env, acc)
+        acc
+      else
+        _ -> acc
+      end
+
+    case event_value(value, env, l) do
+      {:names, names} ->
+        Enum.reduce(names, acc, &add_event(&2, env, attr, &1, target, l))
+
+      {:pushes, pushes} ->
+        Enum.reduce(pushes, acc, fn {name, push_target}, acc ->
+          add_event(
+            acc,
+            env,
+            "JS.push",
+            name,
+            if(push_target == "", do: target, else: push_target),
+            l
+          )
+        end)
+
+      {:assign, assign} ->
+        # A component sending whatever event its caller names: resolved
+        # through the caller's literal attribute (see ElixirFacts).
+        %{
+          acc
+          | passthrough: [
+              %{
+                component: env.caller,
+                assign: assign,
+                via: attr,
+                target: target,
+                file: env.file,
+                line: l
+              }
+              | acc.passthrough
+            ]
+        }
+
+      :client_only ->
+        acc
+
+      :dynamic ->
+        add_event(acc, env, attr, :dynamic, target, l)
+    end
+  end
+
+  defp template_item({:hook, value, l}, env, acc) do
+    names =
+      case value do
+        {:string, s, _} ->
+          [s]
+
+        {:expr, code, _} ->
+          with({:ok, ast} <- expr(code, l), do: branch_strings(ast), else: (_ -> []))
+
+        _ ->
+          []
+      end
+
+    Enum.reduce(names, acc, fn hook, acc ->
+      # A colocated `.Name` hook is scoped to its module.
+      full = if String.starts_with?(hook, "."), do: env.module <> hook, else: hook
+
+      %{
+        acc
+        | hook_mounts: [
+            %{hook: full, from: env.caller, file: env.file, line: l} | acc.hook_mounts
+          ]
+      }
+    end)
+  end
+
+  # A colocated hook's script runs in the element that renders it, so its
+  # literal pushEvent goes where that template's events go.
+  # pushEventTo goes to whatever its selector matches: a dynamic target.
+  defp template_item({:colocated_hook, _hook, text, l}, env, acc) do
+    text
+    |> Cartographer.HEEx.script_pushes()
+    |> Enum.reduce(acc, fn {name, via}, acc ->
+      add_event(acc, env, via, name, if(via == "pushEventTo", do: "dynamic", else: ""), l)
+    end)
+  end
+
+  defp component_call(acc, env, module, fun, l, attrs) do
+    kind = if module, do: "remote", else: "local_or_import"
+    acc = call(acc, env, module, atomish(fun), 1, [line: l], kind)
+
+    case acc.calls do
+      [c | rest] when c.from == env.caller ->
+        %{acc | calls: [Map.merge(c, %{component: true, attrs: attrs}) | rest]}
+
+      _ ->
+        acc
+    end
+  end
+
+  # LiveView's own events (lv:clear-flash) aren't the app's to handle.
+  defp add_event(acc, _env, _via, "lv:" <> _, _target, _l), do: acc
+  # An empty name is no name.
+  defp add_event(acc, env, via, "", target, l), do: add_event(acc, env, via, :dynamic, target, l)
+
+  defp add_event(acc, env, via, name, target, l) do
+    e = %{
+      from: env.caller,
+      module: env.module,
+      via: via,
+      target: target,
+      file: env.file,
+      line: l,
+      event: if(name == :dynamic, do: nil, else: name),
+      dynamic: name == :dynamic
+    }
+
+    %{acc | events: [e | acc.events]}
+  end
+
+  defp expr(code, l) do
+    case Code.string_to_quoted(code,
+           line: l,
+           columns: true,
+           emit_warnings: false,
+           file: "template",
+           static_atoms_encoder: &__MODULE__.encode_atom/2
+         ) do
+      {:ok, ast} -> {:ok, ast}
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  # A name from template text, as the parser would give it.
+  defp atomish(text) do
+    {:ok, a} = encode_atom(text, [])
+    a
+  end
+
+  defp target_of(nil), do: ""
+
+  defp target_of({:expr, code, _}) do
+    case expr(code, 1) do
+      {:ok, {:@, _, [{name, _, ctx}]}} when ident?(name) and is_atom(ctx) ->
+        if str(name) == "myself", do: "myself", else: "dynamic"
+
+      _ ->
+        "dynamic"
+    end
+  end
+
+  defp target_of(_), do: "dynamic"
+
+  # An event attribute's value: literal names, JS.push calls, an assign
+  # (pass-through), a client-only JS chain, or something dynamic.
+  defp event_value(nil, _env, _l), do: :client_only
+  defp event_value({:string, s, _}, _env, _l), do: {:names, [s]}
+
+  defp event_value({:expr, code, _}, env, l) do
+    case expr(code, l) do
+      {:ok, s} when is_binary(s) ->
+        {:names, [s]}
+
+      {:ok, {:@, _, [{name, _, ctx}]}} when ident?(name) and is_atom(ctx) ->
+        {:assign, str(name)}
+
+      {:ok, ast} ->
+        pushes = push_calls(ast, env)
+
+        cond do
+          pushes != [] -> {:pushes, pushes}
+          js_call?(ast, env) -> :client_only
+          (names = branch_strings(ast)) != [] -> {:names, names}
+          true -> :dynamic
+        end
+
+      :error ->
+        :dynamic
+    end
+  end
+
+  defp event_value(_, _env, _l), do: :dynamic
+
+  # JS.push calls in an expression not on an event attribute
+  # (dismiss={JS.push("dismiss_notice")}).
+  defp js_pushes(ast, env, l, acc) do
+    ast
+    |> push_calls(env)
+    |> Enum.reduce(acc, fn {name, target}, acc ->
+      add_event(acc, env, "JS.push", name, target, l)
+    end)
+  end
+
+  defp js_module?(mod, env), do: name(mod, env) in ["JS", "Phoenix.LiveView.JS"]
+
+  # [{name | :dynamic, target}] for each JS.push in ast.
+  defp push_calls(ast, env) do
+    {_, found} =
+      Macro.prewalk(ast, [], fn
+        {{:., _, [mod, fun]}, _, args} = node, acc when is_list(args) and ident?(fun) ->
+          if str(fun) == "push" and js_module?(mod, env) do
+            {node, [push_info(args) | acc]}
+          else
+            {node, acc}
+          end
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    Enum.reverse(found)
+  end
+
+  defp push_info(args) do
+    # JS.push("e"), JS.push(js, "e"), JS.push("e", target: ...).
+    name = Enum.find(args, &is_binary/1) || :dynamic
+
+    opts =
+      Enum.find(args, [], fn a ->
+        is_list(a) and a != [] and Enum.all?(a, &match?({k, _} when ident?(k), &1))
+      end)
+
+    # By name: another option's key may be an encoded (unknown) atom.
+    target =
+      case Enum.find(opts, fn {k, _} -> ident?(k) and str(k) == "target" end) do
+        nil ->
+          ""
+
+        {_, {:@, _, [{n, _, ctx}]}} when ident?(n) and is_atom(ctx) ->
+          if(str(n) == "myself", do: "myself", else: "dynamic")
+
+        _ ->
+          "dynamic"
+      end
+
+    {name, target}
+  end
+
+  defp js_call?(ast, env) do
+    {_, found} =
+      Macro.prewalk(ast, false, fn
+        {{:., _, [mod, _]}, _, _} = node, acc -> {node, acc or js_module?(mod, env)}
+        node, acc -> {node, acc}
+      end)
+
+    found
+  end
+
+  # The literal results of `if`/`unless`/`case`/`cond` branches (never the
+  # condition), or a plain literal.
+  defp branch_strings(s) when is_binary(s), do: [s]
+
+  defp branch_strings({kind, _, [_cond, opts]}) when kind in [:if, :unless] and is_list(opts) do
+    Enum.flat_map([:do, :else], fn k ->
+      case List.keyfind(opts, k, 0) do
+        {_, v} -> branch_strings(v)
+        nil -> []
+      end
+    end)
+  end
+
+  defp branch_strings({kind, _, args}) when kind in [:case, :cond] and is_list(args) do
+    clauses =
+      case List.last(args) do
+        [{:do, list}] when is_list(list) -> list
+        _ -> []
+      end
+
+    Enum.flat_map(clauses, fn
+      {:->, _, [_, rhs]} -> branch_strings(rhs)
+      _ -> []
+    end)
+  end
+
+  defp branch_strings({:__block__, _, [one]}), do: branch_strings(one)
+  defp branch_strings(_), do: []
+
+  # `~w(a b)`, `["a", "b"]` or `"a"`: the strings, else :error.
+  def literal_strings({:sigil_w, _, [{:<<>>, _, [text]}, mods]})
+      when is_binary(text) and mods in [[], ~c"s"],
+      do: {:ok, String.split(text)}
+
+  def literal_strings(list) when is_list(list) do
+    if list != [] and Enum.all?(list, &is_binary/1), do: {:ok, list}, else: :error
+  end
+
+  def literal_strings(_), do: :error
+
+  # The event names one handle_event clause matches: its head literal, or a
+  # guard on its first parameter (`when event in ~w(...)`, `in [...]`,
+  # `== "x"`, `in @attr`); a catch-all whose body hands the event to
+  # `Mod.handle_event(event, ...)` names that delegate.
+  defp handler(acc, env, fid, [first | _], guards, body, meta) do
+    l = line(meta)
+
+    entries =
+      case first do
+        s when is_binary(s) and s != "" ->
+          [%{function: fid, event: s, source: "head", line: l}]
+
+        {var, _, ctx} when ident?(var) and is_atom(ctx) ->
+          guarded = Enum.flat_map(guards, &guard_names(&1, var, env))
+
+          # A clause may name its events in a guard and hand them on too.
+          # An empty name is no name.
+          guarded = Enum.reject(guarded, &(&1 == ""))
+
+          Enum.map(guarded, fn
+            {:attr, name} ->
+              %{function: fid, attr: name, module: env.module, source: "attribute", line: l}
+
+            s ->
+              %{function: fid, event: s, source: "guard", line: l}
+          end) ++
+            for(
+              mod <- delegates(body, var, env),
+              do: %{function: fid, delegate_module: mod, source: "delegate", line: l}
+            )
+
+        _ ->
+          []
+      end
+
+    %{acc | handlers: entries ++ acc.handlers}
+  end
+
+  defp guard_names({op, _, [l, r]}, var, env) when op in [:or, :and, :when],
+    do: guard_names(l, var, env) ++ guard_names(r, var, env)
+
+  defp guard_names({:in, _, [{v, _, ctx}, right]}, var, _env) when ident?(v) and is_atom(ctx) do
+    if str(v) == str(var) do
+      case right do
+        {:@, _, [{attr, _, ctx2}]} when ident?(attr) and is_atom(ctx2) -> [{:attr, str(attr)}]
+        other -> with({:ok, list} <- literal_strings(other), do: list, else: (_ -> []))
+      end
+    else
+      []
+    end
+  end
+
+  defp guard_names({:==, _, [{v, _, ctx}, s]}, var, _env)
+       when ident?(v) and is_atom(ctx) and is_binary(s),
+       do: if(str(v) == str(var), do: [s], else: [])
+
+  defp guard_names(_, _, _), do: []
+
+  defp delegates(body, var, env) do
+    {_, found} =
+      Macro.prewalk(body, [], fn
+        {{:., _, [mod, fun]}, _, [{v, _, ctx} | _]} = node, acc
+        when ident?(fun) and ident?(v) and is_atom(ctx) ->
+          if str(fun) == "handle_event" and str(v) == str(var) and literal_module?(mod),
+            do: {node, [name(mod, env) | acc]},
+            else: {node, acc}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found |> Enum.reverse() |> Enum.uniq()
+  end
+
+  # `use` expansion: the forms of an in-repo module's __using__ quote (or,
+  # for `use X, :kind`, of its `kind/0` quote), applied to this module's
+  # scope. `unquote(helper())` follows another quote of the same module;
+  # a nested `use` follows up to three levels.
+  defp expand_use(module, kind, env, acc, depth) do
+    acc = %{acc | uses: [%{module: env.module, use: module, kind: kind} | acc.uses]}
+    h = Map.get(env.helpers, module)
+
+    forms =
+      cond do
+        h == nil or depth >= 3 -> []
+        kind && h.using == :dispatch -> Map.get(h.funs, kind, [])
+        is_list(h.using) -> h.using
+        true -> []
+      end
+
+    Enum.reduce(forms, {env, acc}, fn form, {e, a} ->
+      expand_form(form, module, h, e, a, depth)
+    end)
+  end
+
+  defp expand_form({kind, _, _} = form, _module, _h, env, acc, _depth)
+       when kind in [:import, :alias, :require],
+       do: walk(form, env, acc)
+
+  defp expand_form({:use, _, [mod | rest]}, _module, _h, env, acc, depth) do
+    kind =
+      case rest do
+        [k | _] when ident?(k) -> str(k)
+        _ -> nil
+      end
+
+    expand_use(name(mod, env), kind, env, acc, depth + 1)
+  end
+
+  defp expand_form({:unquote, _, [{fun, _, args}]}, module, h, env, acc, depth)
+       when ident?(fun) and args in [nil, []] do
+    forms = Map.get(h.funs, str(fun), [])
+
+    Enum.reduce(forms, {env, acc}, fn form, {e, a} ->
+      expand_form(form, module, h, e, a, depth + 1)
+    end)
+  end
+
+  defp expand_form({:__block__, _, forms}, module, h, env, acc, depth),
+    do:
+      Enum.reduce(forms, {env, acc}, fn form, {e, a} ->
+        expand_form(form, module, h, e, a, depth)
+      end)
+
+  defp expand_form(_, _module, _h, env, acc, _depth), do: {env, acc}
+
+  @doc """
+  The `use` helpers of one parsed file: `%{module => %{funs: %{name =>
+  forms}, using: :dispatch | forms | nil}}`, where funs are zero-arity
+  `def`s returning a `quote`, and `using` is the `__using__` quote (or
+  `:dispatch` for Phoenix's `apply(__MODULE__, which, [])`).
+  """
+  def helpers(ast), do: helpers(ast, nil, %{})
+
+  defp helpers({:defmodule, _, [mod, body]}, outer, acc) do
+    module =
+      case mod do
+        {:__aliases__, _, parts} ->
+          Enum.join(Enum.reject([outer | Enum.map(parts, &part/1)], &is_nil/1), ".")
+
+        other ->
+          print(other)
+      end
+
+    forms =
+      case body do
+        [{:do, {:__block__, _, forms}}] -> forms
+        [{:do, form}] -> [form]
+        _ -> []
+      end
+
+    Enum.reduce(forms, acc, fn form, acc ->
+      case form do
+        {:defmodule, _, _} ->
+          helpers(form, module, acc)
+
+        {kind, _, [head, [{:do, quoted}]]} when kind in [:def, :defp, :defmacro] ->
+          {fun, args} =
+            case head do
+              {:when, _, [{f, _, a} | _]} -> {f, a}
+              {f, _, a} -> {f, a}
+            end
+
+          entry = Map.get(acc, module, %{funs: %{}, using: nil})
+
+          entry =
+            cond do
+              not ident?(fun) ->
+                entry
+
+              str(fun) == "__using__" and dispatch?(quoted) ->
+                %{entry | using: :dispatch}
+
+              str(fun) == "__using__" ->
+                case quote_forms(quoted) do
+                  nil -> entry
+                  fs -> %{entry | using: fs}
+                end
+
+              args in [nil, []] ->
+                case quote_forms(quoted) do
+                  nil -> entry
+                  fs -> %{entry | funs: Map.put(entry.funs, str(fun), fs)}
+                end
+
+              true ->
+                entry
+            end
+
+          Map.put(acc, module, entry)
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp helpers({:__block__, _, forms}, outer, acc),
+    do: Enum.reduce(forms, acc, &helpers(&1, outer, &2))
+
+  defp helpers(_, _, acc), do: acc
+
+  defp quote_forms({:quote, _, [[{:do, {:__block__, _, forms}}]]}), do: forms
+  defp quote_forms({:quote, _, [[{:do, form}]]}), do: [form]
+  defp quote_forms({:quote, _, [_opts, [{:do, {:__block__, _, forms}}]]}), do: forms
+  defp quote_forms({:quote, _, [_opts, [{:do, form}]]}), do: [form]
+  defp quote_forms({:__block__, _, forms}), do: forms |> List.last() |> quote_forms()
+  defp quote_forms(_), do: nil
+
+  defp dispatch?(body) do
+    {_, found} =
+      Macro.prewalk(body, false, fn
+        {:apply, _, [{:__MODULE__, _, _} | _]} = node, _ -> {node, true}
+        node, acc -> {node, acc}
+      end)
+
+    found
+  end
 
   # --- Phoenix routes -------------------------------------------------------
 

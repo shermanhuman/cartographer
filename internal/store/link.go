@@ -10,7 +10,9 @@ import (
 )
 
 // link stores services with the repo each deployment builds from, then links
-// HTTP refs to routes in other repos. A link is never precise: it is
+// HTTP refs to routes. A same-origin ref (a browser request with no host)
+// links to its own repo's routes, heuristic; every other ref links to routes
+// in other repos. A link is never precise: it is
 // heuristic when a URL in the caller's own configuration (its config files,
 // or the env of a deployment built from it) resolves through a Service to
 // the route's repo, and candidate when, without that, exactly one other repo
@@ -144,6 +146,16 @@ func (im *importer) link() error {
 			im.sid, ref.From, r.ID, ref.repo, precision, prov, ref.File, ref.Line)
 	}
 	for _, ref := range im.refs {
+		// A browser request with no host goes to the server that served
+		// the page: the caller's own repo, and only it.
+		if ref.Origin == "same" {
+			for _, r := range matches(ref.repo, ref.HTTPRef, []string{""}) {
+				if err := insert(ref, r, facts.Heuristic, "same-origin"); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		linked := false
 		allBases := []string{""}
 		for _, ev := range callerURLs[ref.repo] {

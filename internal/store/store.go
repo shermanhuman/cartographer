@@ -26,7 +26,9 @@ var schemaSQL string
 //
 //	1 (stored as 0): initial schema
 //	2: db_tables.kind
-const schemaVersion = 3
+//	4: http_refs.origin, LiveView events (event_sends, event_handlers,
+//	   hook_mounts, event_links), the edges view's 'event' kind
+const schemaVersion = 4
 
 // DefaultKeep is how many snapshots per workspace Prune keeps by default.
 const DefaultKeep = 10

@@ -16,6 +16,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      # The JavaScript plugin runs on this exact compiler (tools.go
+      # TypeScript); the Go tests below find it with `mise where`.
+      - name: Install the TypeScript pin
+        run: mise install node@26.12.1 npm:typescript@6.0.3
       - name: Format
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: Vet
@@ -32,6 +36,13 @@ jobs:
       - name: Elixir plugin tests
         run: |
           elixir plugins/extract-elixir/test/extract_test.exs
+          elixir plugins/extract-elixir/test/heex_test.exs
           elixir plugins/extract-postgres-schema/test/capture_test.exs
       - name: JavaScript plugin tests
-        run: node --test plugins/extract-javascript/test/
+        run: |
+          export CARTOGRAPHER_TYPESCRIPT="$(mise where npm:typescript@6.0.3)"
+          node --test plugins/extract-javascript/test/
+      - name: JavaScript tools through mise
+        env:
+          CARTOGRAPHER_REQUIRE_INDEXERS: "1"
+        run: go test -count=1 -run 'TestJavaScriptTools' -v ./internal/project

@@ -122,7 +122,7 @@ fetch, up to 15 minutes after the push), or by `cartographer refresh`. Turn auto
 Building needs [mise](https://mise.jdx.dev): each extractor runs with the
 language version its repository pins (`mise.toml`, `.mise.toml` or
 `.tool-versions`), and the indexers (scip-go, rust-analyzer), PostgreSQL and
-the Node used for JavaScript inventories are pinned by the cartographer
+the Node and TypeScript compiler used for JavaScript and TypeScript are pinned by the cartographer
 release. No other mise configuration is read. A tool mise doesn't have yet
 is installed before the build starts, each install with its own 30-minute
 limit, separate from the build's 15-minute limit; a failed install fails
@@ -131,8 +131,10 @@ binary.
 
 Extractors: Go and Rust through SCIP indexers (`cartographer extract scip`:
 calls, interface and trait dispatch, `net/http` routes, HTTP requests), the
-bundled Elixir extractor (AST: calls, Phoenix routes, `Req` requests),
-JavaScript (inventory), Kubernetes manifests and URLs in YAML configuration
+bundled Elixir extractor (AST: calls, Phoenix routes, `Req` requests, HEEx
+templates: component calls and LiveView events to `handle_event`),
+JavaScript and TypeScript (the TypeScript 6 compiler: resolved calls,
+`fetch` requests, LiveView hook `pushEvent`), Kubernetes manifests and URLs in YAML configuration
 (built in), and the PostgreSQL schema. Calls between services are linked
 from a request to the route it reaches, never as `precise`: see
 [the facts format](docs/facts-format.md).

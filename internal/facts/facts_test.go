@@ -64,7 +64,7 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 }
 
 func TestVersionAndPrecisionChecked(t *testing.T) {
-	d := &Doc{FactsVersion: 3, Producer: Producer{Name: "x", CallPrecision: "maybe"}}
+	d := &Doc{FactsVersion: 4, Producer: Producer{Name: "x", CallPrecision: "maybe"}}
 	err := d.Validate()
 	if err == nil || !strings.Contains(err.Error(), "$.facts_version") || !strings.Contains(err.Error(), "call_precision") {
 		t.Fatalf("got %v", err)
@@ -142,5 +142,51 @@ func TestDecodeRejectsUnknownFieldsInVersion2(t *testing.T) {
 	_, err := Decode(strings.NewReader(`{"facts_version":2,"producer":{"name":"x"},"routes":[{"id":"r","path":"/","file":"a","verb":"GET"}]}`))
 	if err == nil || !strings.Contains(err.Error(), "verb") {
 		t.Fatalf("want unknown-field error, got %v", err)
+	}
+}
+
+// Version 3: events, handlers and hook mounts name functions in the
+// document, keep their shapes, and need facts_version 3, as does origin.
+func TestVersion3EventsValidated(t *testing.T) {
+	base := func() *Doc {
+		return &Doc{FactsVersion: 3, Producer: Producer{Name: "x"},
+			Functions: []Function{{ID: "r:M.render/1", Name: "render", Arity: 1, MinArity: 1, File: "m.ex"}, {ID: "r:M.handle_event/3", Name: "handle_event", Arity: 3, MinArity: 3, File: "m.ex"}}}
+	}
+	ok := base()
+	ok.Events = []Event{{From: "r:M.render/1", Event: "save", Via: "phx-click", To: []string{"r:M.handle_event/3"}, File: "m.ex", Line: 3, Precision: Precise},
+		{From: "r:M.render/1", Dynamic: true, Via: "phx-click", File: "m.ex", Line: 4}}
+	ok.EventHandlers = []EventHandler{{Function: "r:M.handle_event/3", Event: "save", Source: "head", Line: 9},
+		{Function: "r:M.handle_event/3", Source: "delegate", Delegate: "r:M.render/1", Line: 12}}
+	ok.HookMounts = []HookMount{{Hook: "Pad", From: "r:M.render/1", Receivers: []string{"r:M.handle_event/3"}, File: "m.ex", Line: 5}}
+	ok.HTTPRefs = []HTTPRef{{From: "r:M.render/1", Path: "/x", Origin: "same", File: "m.ex"}}
+	if err := ok.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	bad := base()
+	bad.Events = []Event{{From: "r:Nope.f/0", Via: "", Event: "x", Dynamic: true, Target: "else", To: []string{"r:Gone/1"}, File: "m.ex", Precision: "maybe"}}
+	bad.EventHandlers = []EventHandler{{Function: "r:M.handle_event/3", Source: "delegate", Event: "x", Line: 0}, {Function: "r:M.handle_event/3", Source: "head", Line: 2}, {Function: "r:M.handle_event/3", Source: "delegate", Delegate: "r:Gone/3", Line: 3}}
+	bad.HookMounts = []HookMount{{From: "r:M.render/1", Receivers: []string{"r:Gone/3"}, File: "m.ex"}}
+	bad.HTTPRefs = []HTTPRef{{From: "r:M.render/1", Path: "/x", Origin: "other", File: "m.ex"}, {From: "r:M.render/1", Path: "/x", Origin: "same", Base: "API", File: "m.ex"}}
+	err := bad.Validate()
+	for _, want := range []string{
+		`$.events[0].from: unknown function "r:Nope.f/0"`, `$.events[0].to[0]: unknown function "r:Gone/1"`, `$.events[0].via: required`,
+		`$.events[0]: an event has a name or is dynamic`, `$.events[0].target: unknown target "else"`, `$.events[0].precision: unknown precision "maybe"`,
+		`$.event_handlers[0]: a delegate names the delegate and no event`, `$.event_handlers[0].line: must be > 0`,
+		`$.event_handlers[1]: a head handler names an event and no delegate`, `$.event_handlers[2].delegate: unknown function "r:Gone/3"`,
+		`$.hook_mounts[0].hook: required`, `$.hook_mounts[0].receivers[0]: unknown function "r:Gone/3"`,
+		`$.http_refs[0].origin: want "same" or none, got "other"`, `$.http_refs[1]: a same-origin ref has no base`,
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in %v", want, err)
+		}
+	}
+
+	old := base()
+	old.FactsVersion = 2
+	old.HookMounts = ok.HookMounts
+	old.HTTPRefs = ok.HTTPRefs
+	if err := old.Validate(); err == nil || !strings.Contains(err.Error(), "$.hook_mounts: needs facts_version 3") || !strings.Contains(err.Error(), "$.http_refs[0].origin: needs facts_version 3") {
+		t.Fatalf("version 2 with version 3 fields: %v", err)
 	}
 }

@@ -73,7 +73,10 @@ type importer struct {
 
 	routes   []routeRow
 	refs     []refRow
-	urls     map[string][]facts.ConfigURL // repo -> config URLs
+	sends    []sendRow                       // hook pushEvent sends, linked after every document
+	handlers map[string][]facts.EventHandler // handle_event function id -> its names
+	mounts   map[string][]mountRow           // repo -> hook mounts
+	urls     map[string][]facts.ConfigURL    // repo -> config URLs
 	services []serviceRow
 }
 
@@ -84,6 +87,16 @@ type routeRow struct {
 
 type refRow struct {
 	facts.HTTPRef
+	repo string
+}
+
+type sendRow struct {
+	facts.Event
+	repo string
+}
+
+type mountRow struct {
+	facts.HookMount
 	repo string
 }
 
@@ -166,6 +179,9 @@ func (im *importer) run() error {
 		if err := im.v2(d); err != nil {
 			return err
 		}
+		if err := im.v3(d); err != nil {
+			return err
+		}
 		for _, n := range d.Notes {
 			if err := im.exec(`INSERT INTO notes(snapshot_id, repo, kind, file, message) VALUES (?,?,?,?,?)`, im.sid, d.Repo, n.Kind, n.File, n.Message); err != nil {
 				return err
@@ -173,6 +189,9 @@ func (im *importer) run() error {
 		}
 	}
 	if err := im.link(); err != nil {
+		return err
+	}
+	if err := im.linkEvents(); err != nil {
 		return err
 	}
 	if err := im.docs(); err != nil {
@@ -675,8 +694,8 @@ func (im *importer) v2(d *facts.Doc) error {
 		im.urls = map[string][]facts.ConfigURL{}
 	}
 	for _, r := range d.HTTPRefs {
-		if err := im.exec(`INSERT INTO http_refs(snapshot_id, repo, from_id, method, path, base, file, line) VALUES (?,?,?,?,?,?,?,?)`,
-			im.sid, d.Repo, r.From, r.Method, r.Path, r.Base, r.File, r.Line); err != nil {
+		if err := im.exec(`INSERT INTO http_refs(snapshot_id, repo, from_id, method, path, base, origin, file, line) VALUES (?,?,?,?,?,?,?,?,?)`,
+			im.sid, d.Repo, r.From, r.Method, r.Path, r.Base, r.Origin, r.File, r.Line); err != nil {
 			return err
 		}
 		im.refs = append(im.refs, refRow{HTTPRef: r, repo: d.Repo})

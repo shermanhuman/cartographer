@@ -63,9 +63,9 @@ func TestElixirPluginContract(t *testing.T) {
 	if d.Producer.Name != "extract-elixir" || d.Producer.CallPrecision != Precise {
 		t.Errorf("producer = %+v", d.Producer)
 	}
-	if d.FactsVersion != 2 || len(d.Stats) != 1 || d.Stats[0].Language != "elixir" ||
+	if d.FactsVersion != 3 || len(d.Stats) != 1 || d.Stats[0].Language != "elixir" ||
 		d.Stats[0].CallSites != len(d.Calls) {
-		t.Errorf("facts_version %d, stats %+v (want version 2, one elixir entry counting %d calls)",
+		t.Errorf("facts_version %d, stats %+v (want version 3, one elixir entry counting %d calls)",
 			d.FactsVersion, d.Stats, len(d.Calls))
 	}
 	if d.Repo != "shop" || d.Revision != "0123456789abcdef" {
@@ -144,18 +144,30 @@ func TestElixirPluginWebContract(t *testing.T) {
 }
 
 func TestJavaScriptPluginContract(t *testing.T) {
+	ts := os.Getenv("CARTOGRAPHER_TYPESCRIPT")
+	if ts == "" {
+		out, err := exec.Command("mise", "where", "npm:typescript@6.0.3").Output()
+		if err != nil {
+			t.Skip("npm:typescript@6.0.3 not installed in mise")
+		}
+		ts = strings.TrimSpace(string(out))
+	}
 	d := runPlugin(t, "node", "plugins/extract-javascript/extract.mjs",
-		"--repo", "shop", "--root", "plugins/extract-javascript/test/fixture")
+		"--repo", "shop", "--root", "plugins/extract-javascript/test/fixture", "--typescript", ts)
 
 	if d.Producer.Name != "extract-javascript" || d.Producer.CallPrecision != Heuristic {
 		t.Errorf("producer = %+v", d.Producer)
 	}
-	if len(d.Functions) == 0 || len(d.Calls) == 0 {
-		t.Fatalf("empty sections: %d functions, %d calls", len(d.Functions), len(d.Calls))
+	if len(d.Functions) == 0 || len(d.Calls) == 0 || len(d.Stats) == 0 {
+		t.Fatalf("empty sections: %d functions, %d calls, %d stats", len(d.Functions), len(d.Calls), len(d.Stats))
 	}
+	// A call is resolved (to, with a precision) or unresolved (a target).
 	for i, c := range d.Calls {
-		if !strings.HasPrefix(c.Kind, "js_") || c.Target == nil {
-			t.Errorf("calls[%d]: want a js_* target, got %+v", i, c)
+		switch {
+		case (c.Kind == "call" || c.Kind == "jsx") && c.To != "" && c.Precision != "":
+		case c.Kind == "unresolved" && c.Target != nil && c.To == "":
+		default:
+			t.Errorf("calls[%d]: %+v", i, c)
 		}
 	}
 }

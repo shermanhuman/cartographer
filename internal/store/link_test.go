@@ -62,6 +62,7 @@ func TestPathMatch(t *testing.T) {
 type linkCase struct {
 	name, url, ns      string
 	refPath, file, svc string
+	origin             string
 	routes             map[string][]string
 	want               []string
 }
@@ -81,14 +82,14 @@ func linksOf(t *testing.T, c linkCase) []string {
 	b := emptyBundle("snapshot-L", "shop", "2026-11-20T00:00:00Z")
 	doc := func(repo string) *facts.Doc {
 		b.Manifest.Repos = append(b.Manifest.Repos, bundle.Repo{Name: repo, URL: "https://github.com/acme/" + repo, Revision: "r"})
-		d := &facts.Doc{FactsVersion: 2, Producer: facts.Producer{Name: "t", Version: "1"}, Repo: repo}
+		d := &facts.Doc{FactsVersion: 3, Producer: facts.Producer{Name: "t", Version: "1"}, Repo: repo}
 		b.Facts = append(b.Facts, d)
 		return d
 	}
 	sales := doc("sales")
 	sales.Modules = []facts.Module{{ID: "sales:M", Name: "M", File: "m.go"}}
 	sales.Functions = []facts.Function{{ID: "sales:M.f/0", Module: "sales:M", Name: "f", File: "m.go", Line: 1}}
-	sales.HTTPRefs = []facts.HTTPRef{{From: "sales:M.f/0", Method: "POST", Path: refPath, File: "m.go", Line: 2}}
+	sales.HTTPRefs = []facts.HTTPRef{{From: "sales:M.f/0", Method: "POST", Path: refPath, Origin: c.origin, File: "m.go", Line: 2}}
 	if salesURL != "" {
 		sales.ConfigURLs = []facts.ConfigURL{{Key: "cold.admin_url", Value: salesURL, File: "config.yaml", Line: 1}}
 	}
@@ -147,6 +148,13 @@ func TestLinkChoices(t *testing.T) {
 			want:   []string{"sales:M.f/0 -> admin:route:R:POST /static/ candidate"}},
 		{name: "an Elixir route is no subtree", ns: "shop", refPath: "/static/app.js",
 			routes: map[string][]string{"admin": {"/static/"}}},
+		// A browser request with no host: its own repo, never another, even
+		// when another repo's route matches or a Service points there.
+		{name: "same-origin: its own repo", url: "http://admin.shop.svc", ns: "shop", origin: "same",
+			routes: map[string][]string{"sales": {"/check"}, "admin": {"/check"}},
+			want:   []string{"sales:M.f/0 -> sales:route:R:POST /check heuristic"}},
+		{name: "same-origin: never another repo", ns: "shop", origin: "same",
+			routes: map[string][]string{"admin": {"/check"}}},
 	} {
 		if got := linksOf(t, c); !slices.Equal(got, c.want) {
 			t.Errorf("%s: links %q, want %q", c.name, got, c.want)

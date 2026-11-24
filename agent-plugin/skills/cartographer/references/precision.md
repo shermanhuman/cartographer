@@ -2,8 +2,8 @@
 
 | Tag | Source | Use it for |
 |---|---|---|
-| `precise` | resolution inside one repository: the Elixir AST (`Mod.fun/arity`, default arguments, pipes, captures, `defdelegate`) or a Go/Rust compiler index (scip-go, rust-analyzer) on a concrete receiver | definite call edges |
-| `heuristic` | an interface or trait call linked to every implementation in the repo (`dispatch`); an HTTP request linked to another repo's route because the caller's config URL resolves through a Kubernetes Service to it (`http`, with the config key as provenance); a call whose target module is defined in exactly one *other* repository | leads to verify |
+| `precise` | resolution inside one repository: the Elixir AST (`Mod.fun/arity`, default arguments, pipes, captures, `defdelegate`), a Go/Rust compiler index (scip-go, rust-analyzer) on a concrete receiver, the TypeScript compiler for a JavaScript or TypeScript identifier or import, a template component call, or a LiveView event from the LiveView's own template (or `phx-target={@myself}`) to a clause that names it | definite call edges |
+| `heuristic` | an interface or trait call linked to every implementation in the repo (`dispatch`); an HTTP request linked to another repo's route because the caller's config URL resolves through a Kubernetes Service to it (`http`, with the config key as provenance), or a browser request with no host linked to its own repo's route (`same-origin`); a JavaScript member call resolved through an inferred type; a LiveView event that reaches its LiveView through components, a delegating catch-all or a `phx-hook` (`event`, with the mount as provenance); a call whose target module is defined in exactly one *other* repository | leads to verify |
 | `candidate` | text: a source line naming a table; an HTTP request whose path matches a route in exactly one other repo, with no config evidence | where to look, not proof |
 
 Routes (`GET /path` served by a Phoenix router or Go `net/http`) are
@@ -12,12 +12,15 @@ entities: `map_entity` shows a route's handler and its HTTP callers, and
 
 Not traced: dynamic dispatch in Elixir (`apply/3` with variables,
 `var.fun()`), behaviour callbacks invoked by a framework, macro-generated
-functions, calls into dependencies (counted as external), requests whose
-path is built across functions or piped, JavaScript calls (functions are
-listed, calls aren't resolved), TypeScript and templates.
+functions (including handlers injected by `__using__` and `attach_hook`),
+calls into dependencies (counted as external), requests whose path is built
+across functions or piped, JavaScript calls on untyped values (`this.el`,
+Playwright's `page`), and LiveView event names built at runtime (counted as
+dynamic, never guessed).
 `map_status` shows coverage per repository and language (files, call sites
-resolved in the repo, functions linked), so you can tell how much is
-missing.
+resolved in the repo, functions linked), plus an `events` row (sends linked,
+`handle_event` clauses reached) and an `http` row (requests linked to a
+route), so you can tell how much is missing.
 
 For a registered project the map is each member's default branch as last
 fetched, at the revisions in its header; your branch, commits ahead and

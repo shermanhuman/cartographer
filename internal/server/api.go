@@ -706,7 +706,7 @@ func overview(ctx context.Context, q *query.Q) (any, error) {
 	var routes, links int
 	db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM routes WHERE snapshot_id = ?1), (SELECT count(*) FROM http_links WHERE snapshot_id = ?1)`, q.Snapshot).Scan(&routes, &links)
 	if routes > 0 {
-		coverage = append(coverage, fmt.Sprintf("%d HTTP routes; %d HTTP links from functions to routes in other repositories. A link is never precise: heuristic when the caller's configuration names a Service that runs the route's repository, candidate when only one repository has a matching method and path.", routes, links))
+		coverage = append(coverage, fmt.Sprintf("%d HTTP routes; %d HTTP links from functions to routes. A link is never precise: a browser request with no host links to its own repository's route (heuristic, same-origin); any other request links to another repository's route, heuristic when the caller's configuration names a Service that runs that repository, candidate when only one repository has a matching method and path.", routes, links))
 	}
 	var notes []string
 	rows, err := db.QueryContext(ctx, `SELECT kind, count(*) FROM notes WHERE snapshot_id = ? GROUP BY 1 ORDER BY 1`, q.Snapshot)
