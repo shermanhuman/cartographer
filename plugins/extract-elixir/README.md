@@ -178,12 +178,14 @@ Exit status 2 means bad arguments; nothing is written to stdout.
     those quotes import. A superset is sound here because the project's
     own definitions are checked first.
 - **The rules**, in order:
-  1. query vocabulary: a bare call whose name `Ecto.Query.API` or
-     `WindowAPI` exports, inside a proven `Ecto.Query` macro's expression
-     arguments (those after the first; for `dynamic`, its last), reached
-     only through calls that are themselves API names (`subquery`,
-     `exists`, `all`, `any` and `values` evaluate their arguments as code
-     and break the chain), and with no `^` inside the macro covering it;
+  1. query vocabulary: a bare call whose name and arity `Ecto.Query.API`
+     or `WindowAPI` exports (`fragment` at any arity), inside a proven
+     `Ecto.Query` macro's expression arguments (after the first; `join`'s
+     from the third; `dynamic`'s last), reached only through API calls at
+     query positions, and with no `^` inside the macro covering it. The
+     positions Ecto 3.14.3 runs as code break the chain: every argument of
+     `exists`, `all`, `any` and `values`, `type/2`'s second, `map/2`'s and
+     `struct/2`'s field list, and `fragment`'s first;
   2. the project's own definitions: the caller's module, a project module
      it imports, and what a project `use` put there;
   3. a bare call is external when an admitting import of a module that

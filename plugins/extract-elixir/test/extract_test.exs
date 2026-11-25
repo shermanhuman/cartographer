@@ -1636,6 +1636,40 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "P.later/1", "count")
     end
 
+    # Review round 3 (X3-M5..M7): one case per row of the query-position
+    # table (Ecto 3.14.3's builders, recorded with the decision).
+    test "the query-position table, one row each" do
+      doc =
+        extract(~S"""
+        defmodule T do
+          import Ecto.Query
+          def count(x), do: x
+          defmacro coalesce(a, b, c), do: {a, b, c}
+          def join_kind(q, o), do: join(q, count(o), [u], p in "p", on: count(p.id) > 0)
+          def type_arg(q, o), do: select(q, [u], type(u.x, count(o)))
+          def map_fields(q, o), do: select(q, [u], map(u, count(o)))
+          def struct_fields(q, o), do: select(q, [u], struct(u, count(o)))
+          def fragment_first(q, o), do: where(q, [u], fragment(count(o), u.x))
+          def fragment_later(q), do: where(q, [u], fragment("?", count(u.id)))
+          def in_any(q, o), do: where(q, [u], u.x > any(count(o)))
+          def in_all(q, o), do: where(q, [u], u.x > all(count(o)))
+          def in_values(q, o), do: where(q, [u], u.id in values(count(o), %{}))
+          def arity(q), do: where(q, [u], coalesce(u.a, u.b, u.c))
+        end
+        """)
+
+      for f <- ~w(join_kind/2 type_arg/2 map_fields/2 struct_fields/2 fragment_first/2 in_any/2 in_all/2 in_values/2) do
+        assert {"local", "T"} in for(c <- from(doc, "T.#{f}", "count"), do: {c.kind, c.target[:module]}), f
+        refute Enum.any?(from(doc, "T.#{f}", "count"), &(&1.kind == "external" and &1.target[:module] == "Ecto.Query.API" and f != "join_kind/2")), f
+      end
+
+      # join's on: is a query expression; fragment's later arguments too.
+      assert {"external", "Ecto.Query.API"} in for(c <- from(doc, "T.join_kind/2", "count"), do: {c.kind, c.target[:module]})
+      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "T.fragment_later/1", "count")
+      # Matched by name and arity: coalesce/3 is the project's macro.
+      assert [%{kind: "local"}] = from(doc, "T.arity/1", "coalesce")
+    end
+
     test "under ^ a call is ordinary code, not query vocabulary" do
       doc =
         extract(~S"""

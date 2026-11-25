@@ -505,21 +505,31 @@ defmodule Cartographer.ElixirFacts do
 
   # --- external, on evidence (map-coverage-2) -------------------------------
 
-  # Decision 17 and 25: a bare call inside the arguments of a proven
-  # `Ecto.Query` macro, not under `^`, whose name `Ecto.Query.API` or
-  # `Ecto.Query.WindowAPI` exports, is that module's query vocabulary. It
-  # comes before the project's own definitions. Returns the owner or nil.
+  # Where query vocabulary is exported (see query_dsl/2).
   @query_api ["Ecto.Query.API", "Ecto.Query.WindowAPI"]
 
-  # Query vocabulary (decisions 17 and 25, narrowed after review round 2):
-  # a bare call whose name Ecto.Query.API or WindowAPI exports, inside a
-  # proven Ecto.Query macro's expression arguments (those after the first;
-  # for dynamic, its last), reached only through calls that are themselves
-  # API names (subquery, exists, all, any and values evaluate their
-  # arguments as code, so they break the chain), and with no pin taken
-  # inside the macro. Anything else goes through the ordinary rules: this
-  # can lose vocabulary to "unknown", never label a project call.
-  @chain_breakers ~w(subquery exists all any values)
+  # Query vocabulary (decisions 17 and 25), by a complete table of Ecto
+  # 3.14.3's query builders (recorded with the decision): a bare call whose
+  # name and arity Ecto.Query.API or WindowAPI exports (fragment at any
+  # arity), inside a proven Ecto.Query macro's expression arguments, reached
+  # only through such API calls at query positions, with no pin inside the
+  # macro covering it. Positions Ecto runs as code break the chain. This can
+  # lose vocabulary to "unknown", never label a project call.
+  #
+  # A macro's expression arguments: after the first (the query or source);
+  # join's from the third (its second is the join kind); dynamic's last.
+  # Positions that run as code, as {name, argument index or :all}
+  # (subquery isn't an API name, so it breaks the chain already):
+  @code_positions %{
+    "exists" => :all,
+    "all" => :all,
+    "any" => :all,
+    "values" => :all,
+    "type" => [1],
+    "map" => [1],
+    "struct" => [1],
+    "fragment" => [0]
+  }
 
   defp query_dsl(%{module: nil, kind: "local_or_import"} = c, ctx) do
     lock = ElixirDeps.lock_of(ctx.ev, c.file)
@@ -527,13 +537,13 @@ defmodule Cartographer.ElixirFacts do
     depth = length(enclosing)
     api = query_api(ctx, lock)
 
-    with true <- api != %{} and Map.has_key?(api, c.name),
+    with owner when owner != nil <- api_owner(api, c.name, c.arity),
          {macro, j} <- Enum.with_index(enclosing) |> Enum.find(fn {e, _} -> query_macro?(e, c, ctx, lock) end),
          true <- expression_arg?(macro),
          true <- Enum.all?(Enum.take(enclosing, j), &api_link?(&1, api)),
          pin = Map.get(c, :pinned),
          false <- is_integer(pin) and pin >= depth - j do
-      Map.fetch!(api, c.name)
+      owner
     else
       _ -> nil
     end
@@ -542,14 +552,31 @@ defmodule Cartographer.ElixirFacts do
   defp query_dsl(_c, _ctx), do: nil
 
   defp expression_arg?(%{name: "dynamic", arg: arg, arity: arity}), do: arg == arity - 1
+  defp expression_arg?(%{name: "join", arg: arg}), do: arg >= 2
   defp expression_arg?(%{arg: arg}), do: arg > 0
 
-  defp api_link?(%{module: nil, name: n}, api), do: Map.has_key?(api, n) and n not in @chain_breakers
+  # An enclosing API call whose argument holding the call is a query
+  # position.
+  defp api_link?(%{module: nil, name: n, arity: a, arg: arg}, api) do
+    api_owner(api, n, a) != nil and
+      case Map.get(@code_positions, n) do
+        :all -> false
+        positions when is_list(positions) -> arg not in positions
+        nil -> true
+      end
+  end
+
   defp api_link?(_, _), do: false
 
-  # name => the API module exporting it.
+  defp api_owner(api, name, arity) do
+    Enum.find_value(api, fn {mod, ex} ->
+      if (name == "fragment" and Enum.any?(ex, &(elem(&1, 0) == name))) or ElixirDeps.exported?(ex, name, arity), do: mod
+    end)
+  end
+
+  # [{API module, its exports}], in @query_api order.
   defp query_api(ctx, lock) do
-    for mod <- Enum.reverse(@query_api), ex = ElixirDeps.exports(ctx.ev, lock, mod), ex != nil, {n, _, _} <- ex, into: %{}, do: {n, mod}
+    for mod <- @query_api, ex = ElixirDeps.exports(ctx.ev, lock, mod), ex != nil, do: {mod, ex}
   end
 
   defp query_macro?(%{module: m, name: n, arity: a}, c, ctx, lock) do

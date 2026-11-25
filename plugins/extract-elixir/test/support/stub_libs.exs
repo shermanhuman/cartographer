@@ -14,6 +14,7 @@ defmodule Cartographer.StubLibs do
     defmacro update(q, binding \\ [], expr), do: {q, binding, expr}
     def subquery(q, opts \\ []), do: {q, opts}
     defmacro dynamic(binding \\ [], expr), do: {binding, expr}
+    defmacro join(q, qual, binding \\ [], expr, opts \\ []), do: {q, qual, binding, expr, opts}
   end
   defmodule Ecto.Query.API do
     def count(v), do: v
@@ -22,6 +23,13 @@ defmodule Cartographer.StubLibs do
     def max(v), do: v
     def is_nil(v), do: v
     def exists(q), do: q
+    def type(v, t), do: {v, t}
+    def map(v, fields), do: {v, fields}
+    def struct(v, fields), do: {v, fields}
+    def any(q), do: q
+    def all(q), do: q
+    def values(list, types), do: {list, types}
+    def coalesce(a, b), do: {a, b}
   end
   defmodule Ecto.Changeset do
     def cast(data, params, permitted, opts \\ []), do: {data, params, permitted, opts}
