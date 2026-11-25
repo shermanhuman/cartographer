@@ -538,7 +538,8 @@ defmodule Cartographer.ElixirFacts do
       # Unless the caller, or a project module it imports, has functions
       # the inventory can't list (H1-M1): then the call may be theirs.
       module == nil and kind in ["local_or_import", "capture"] and
-        not MapSet.member?(ctx.public, fa) and not reaches_dynamic?(c, ctx) ->
+        not MapSet.member?(ctx.public, fa) and not reaches_dynamic?(c, ctx) and
+          not defined?(ctx.defined, c.caller_module, c.name, c.arity, false) ->
         case owners(c, ctx) do
           {[], _} -> {nil, kind, false}
           {[owner], false} -> {owner, external_kind(kind), true}

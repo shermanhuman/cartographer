@@ -1187,7 +1187,7 @@ defmodule Cartographer.ElixirSource do
   defp holds_def?(form) do
     {_, found} =
       Macro.prewalk(form, false, fn
-        {:defmodule, _, _}, acc -> {nil, acc}
+        {kind, _, _}, acc when kind in [:defmodule, :defimpl, :defprotocol] -> {nil, acc}
         {kind, _, [_ | _]} = node, _ when kind in [:def, :defp, :defmacro, :defmacrop, :defdelegate] -> {node, true}
         node, acc -> {node, acc}
       end)

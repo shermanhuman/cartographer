@@ -497,6 +497,35 @@ defmodule Cartographer.ElixirExtractTest do
           defp admin(path), do: Req.get(Req.new(base_url: Application.fetch_env!(:app, :admin_url)), url: path)
           defp interp(path, ns), do: Req.get(Req.new(base_url: "http://admin.#{ns}.svc:4000"), url: path)
           def either(kind), do: mixed("/e", kind)
+          def param(url), do: from_param("/p", url)
+          def lit_case, do: lc("/c")
+          def concat, do: cc("/k")
+          def pair, do: tp("/t")
+
+          defp from_param(path, url) do
+            base = if url, do: url, else: "https://api.stripe.com/v1"
+            Req.get(Req.new(base_url: base), url: path)
+          end
+
+          defp lc(path) do
+            base =
+              case Application.get_env(:app, :mode) do
+                :live -> "https://api.stripe.com/v1"
+                _ -> "https://api.stripe.com/v1"
+              end
+
+            Req.get(Req.new(base_url: base), url: path)
+          end
+
+          defp cc(path) do
+            base = "https://api.stripe.com" <> "/v1"
+            Req.get(Req.new(base_url: base), url: path)
+          end
+
+          defp tp(path) do
+            {base, _key} = {"https://api.stripe.com/v1", Application.fetch_env!(:app, :key)}
+            Req.get(Req.new(base_url: base), url: path)
+          end
 
           defp mixed(path, kind) do
             base =
@@ -516,6 +545,12 @@ defmodule Cartographer.ElixirExtractTest do
       assert refs["fixture:Two.ping/1"] == {"Two", "/ping"}
       # A binding with a literal branch and a config branch (H3-m12).
       assert refs["fixture:Two.either/1"] == {"Two", "/e"}
+      # Decision 31 (H4-m13): a variable branch is unknown; literal-only
+      # branches, literal concatenation and a tuple position are read.
+      assert refs["fixture:Two.param/1"] == {"Two", "/p"}
+      assert refs["fixture:Two.lit_case/0"] == {"https://api.stripe.com", "/v1/c"}
+      assert refs["fixture:Two.concat/0"] == {"https://api.stripe.com", "/v1/k"}
+      assert refs["fixture:Two.pair/0"] == {"https://api.stripe.com", "/v1/t"}
     end
 
     # Decision 26.
@@ -1330,6 +1365,59 @@ defmodule Cartographer.ElixirExtractTest do
 
       assert [%{kind: "local_or_import"}] = from(doc, "App.User.go/1", "touch")
       assert [%{kind: "local_or_import"}] = from(doc, "App.User.go/1", "a")
+    end
+
+    test "a use chain past the expansion depth marks the module dynamic" do
+      chain =
+        for i <- 1..4, into: %{} do
+          next = if i < 4, do: "use App.U#{i + 1}", else: "def touch(x), do: x"
+          {"lib/u#{i}.ex",
+           "defmodule App.U#{i} do\n  defmacro __using__(_) do\n    quote do\n      #{next}\n    end\n  end\nend\n"}
+        end
+
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(
+              Map.put(chain, "lib/deep.ex", "defmodule App.Deep do\n  use App.U1\n  import Ecto.Changeset\n  def go(x), do: touch(x)\nend\n")
+            )
+        )
+
+      assert [%{kind: "local_or_import"}] = from(doc, "App.Deep.go/1", "touch")
+    end
+
+    # Round 4, H4-M10 and H4-n10.
+    test "a private function a use defines is the caller's own; defimpl in a quote isn't a def" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/priv.ex" => ~S"""
+              defmodule App.Priv do
+                defmacro __using__(_) do
+                  quote do
+                    defp touch(x), do: x
+                    defimpl String.Chars do
+                      def to_string(_), do: "x"
+                    end
+                  end
+                end
+              end
+              """,
+              "lib/user.ex" => ~S"""
+              defmodule App.User do
+                use App.Priv
+                import Ecto.Changeset
+                def go(x), do: {touch(x), cast(x, %{}, [])}
+              end
+              """
+            })
+        )
+
+      assert [%{kind: "local_or_import"}] = from(doc, "App.User.go/1", "touch")
+      assert [%{kind: "external"}] = from(doc, "App.User.go/1", "cast")
     end
 
     # Round 1, H1-m1 and H1-m2.
