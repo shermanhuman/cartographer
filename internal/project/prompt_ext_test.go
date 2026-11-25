@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/shermanhuman/cartographer/internal/project"
+	"github.com/shermanhuman/cartographer/internal/store"
 )
 
 // mise's env output can't restore a prompt: Mise.Env makes the environment
@@ -39,5 +40,35 @@ func TestMiseEnvOutputCantRestoreAPrompt(t *testing.T) {
 	}
 	if len(got["SSH_ASKPASS"]) != 0 {
 		t.Errorf("SSH_ASKPASS = %q", got["SSH_ASKPASS"])
+	}
+}
+
+// A registration recorded at a default store follows the store to the
+// current schema's file, for every reader (Load, List, InStore); a custom
+// store name stays as recorded.
+func TestRegistrationFollowsTheDefaultStore(t *testing.T) {
+	defer store.SetSchemaVersionForTest(5)()
+	sd := t.TempDir()
+	data := t.TempDir()
+	for name, st := range map[string]string{"alpha": filepath.Join(data, "carto.db"), "beta": filepath.Join(data, "mine.db")} {
+		if err := project.Save(sd, &project.Registration{Name: name, Anchor: "acme/" + name, Store: st}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := project.Load(sd, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(data, "carto-v5.db"); a.Store != want {
+		t.Errorf("alpha's store = %s, want %s", a.Store, want)
+	}
+	regs, _ := project.List(sd)
+	for _, r := range regs {
+		if r.Name == "beta" && r.Store != filepath.Join(data, "mine.db") {
+			t.Errorf("a custom store changed: %s", r.Store)
+		}
+	}
+	if !a.InStore(filepath.Join(data, "carto-v5.db")) || a.InStore(filepath.Join(t.TempDir(), "carto-v5.db")) {
+		t.Error("InStore matched the wrong store")
 	}
 }

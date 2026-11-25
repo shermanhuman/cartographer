@@ -3,42 +3,13 @@ package server
 import (
 	"context"
 	"errors"
+	"github.com/shermanhuman/cartographer/internal/testfixture"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/shermanhuman/cartographer/internal/store"
 )
-
-// v2As copies the format-2 fixture under another workspace, id and source.
-func v2As(t *testing.T, workspace, id, source string) string {
-	t.Helper()
-	dst := t.TempDir()
-	err := filepath.WalkDir(fixtureV2, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(fixtureV2, p)
-		if d.IsDir() {
-			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
-		}
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		if rel == "manifest.json" {
-			b = []byte(strings.NewReplacer(`"workspace": "v2"`, `"workspace": "`+workspace+`"`,
-				"snapshot-20261120T000000Z", id, `"source": "main"`, `"source": "`+source+`"`).Replace(string(b)))
-		}
-		return os.WriteFile(filepath.Join(dst, rel), b, 0o644)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return dst
-}
 
 const (
 	alphaOld  = "snapshot-20261120T000000Z"
@@ -57,7 +28,7 @@ func projectStore(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	for _, v := range [][3]string{{"alpha", alphaOld, "main"}, {"alpha", alphaMain, "main"}, {"alpha", alphaPub, "published"}, {"beta", betaMain, "main"}} {
-		if _, err := s.Import(context.Background(), v2As(t, v[0], v[1], v[2])); err != nil {
+		if _, err := s.Import(context.Background(), testfixture.V2As(t, v[0], v[1], v[2])); err != nil {
 			t.Fatal(err)
 		}
 	}

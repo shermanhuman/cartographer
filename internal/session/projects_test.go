@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"github.com/shermanhuman/cartographer/internal/testfixture"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,7 +79,7 @@ func TestProjectSnapshotNewestMainOnly(t *testing.T) {
 		t.Fatal("a published snapshot was taken as alpha's map")
 	}
 	sess.memo = nil
-	v2 := v2As(t, "alpha", "snapshot-20261121T000000Z", "main")
+	v2 := testfixture.V2As(t, "alpha", "snapshot-20261121T000000Z", "main")
 	if _, err := sess.Store.Import(ctx, v2); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +96,7 @@ func TestProjectSnapshotNewestMainOnly(t *testing.T) {
 func TestProjectsList(t *testing.T) {
 	sess, _ := projectSession(t)
 	ctx := context.Background()
-	if _, err := sess.Store.Import(ctx, v2As(t, "alpha", "snapshot-20261121T000000Z", "main")); err != nil {
+	if _, err := sess.Store.Import(ctx, testfixture.V2As(t, "alpha", "snapshot-20261121T000000Z", "main")); err != nil {
 		t.Fatal(err)
 	}
 	l, err := sess.Projects(ctx)
@@ -130,34 +131,4 @@ func TestProjectsRegistryErrors(t *testing.T) {
 	if _, err := sess.Projects(ctx); err == nil {
 		t.Error("an unreadable registry listed as no projects")
 	}
-}
-
-// v2As copies the format-2 fixture (source main) under another workspace,
-// id and source.
-func v2As(t *testing.T, workspace, id, source string) string {
-	t.Helper()
-	src := "../../testdata/workspace-v2/snapshot"
-	dst := t.TempDir()
-	err := filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, p)
-		if d.IsDir() {
-			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
-		}
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		if rel == "manifest.json" {
-			b = []byte(strings.NewReplacer(`"workspace": "v2"`, `"workspace": "`+workspace+`"`,
-				"snapshot-20261120T000000Z", id, `"source": "main"`, `"source": "`+source+`"`).Replace(string(b)))
-		}
-		return os.WriteFile(filepath.Join(dst, rel), b, 0o644)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return dst
 }

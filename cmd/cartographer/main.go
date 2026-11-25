@@ -180,7 +180,7 @@ func defaultDB() string {
 	if p := os.Getenv("CARTOGRAPHER_DB"); p != "" {
 		return p
 	}
-	return filepath.Join(session.DataDir(), "carto.db")
+	return filepath.Join(session.DataDir(), store.DefaultFile(store.SchemaVersion()))
 }
 
 func flags(name string, c *common) *flag.FlagSet {

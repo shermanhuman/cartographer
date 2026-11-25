@@ -30,7 +30,49 @@ var schemaSQL string
 //	2: db_tables.kind
 //	4: http_refs.origin, LiveView events (event_sends, event_handlers,
 //	   hook_mounts, event_links), the edges view's 'event' kind
-const schemaVersion = 4
+var schemaVersion = 4 // a var only so tests can pose as a later schema (SetSchemaVersionForTest)
+
+// SchemaVersion is the schema this binary reads and writes.
+func SchemaVersion() int { return schemaVersion }
+
+// SetSchemaVersionForTest makes this binary act as schema v for a test and
+// returns the restore function. Production code never calls it.
+func SetSchemaVersionForTest(v int) (restore func()) {
+	old := schemaVersion
+	schemaVersion = v
+	return func() { schemaVersion = old }
+}
+
+// DefaultFile is the default store's file name for schema v. Each schema
+// after 4 gets its own file, so an older cartographer never opens a newer
+// store: it only knows its own name. Schema 4 keeps the name it always had.
+func DefaultFile(v int) string {
+	if v <= 4 {
+		return "carto.db"
+	}
+	return fmt.Sprintf("carto-v%d.db", v)
+}
+
+// IsDefaultFile reports whether name (a base name) is a default store's
+// file name for some schema.
+func IsDefaultFile(name string) bool {
+	if name == "carto.db" {
+		return true
+	}
+	var v int
+	n, err := fmt.Sscanf(name, "carto-v%d.db", &v)
+	return err == nil && n == 1 && v > 4 && name == DefaultFile(v)
+}
+
+// Resolve maps a default store path recorded under any schema to this
+// schema's file in the same directory; any other path is returned as is.
+// A registration recorded before a schema change then follows the store.
+func Resolve(path string) string {
+	if path == "" || !IsDefaultFile(filepath.Base(path)) {
+		return path
+	}
+	return filepath.Join(filepath.Dir(path), DefaultFile(schemaVersion))
+}
 
 // DefaultKeep is how many snapshots per workspace Prune keeps by default.
 const DefaultKeep = 10
