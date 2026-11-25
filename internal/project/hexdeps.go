@@ -29,7 +29,7 @@ type hexEntry struct {
 
 // hexLine matches a lock entry: "key": {:hex, :name, "version", "inner",
 // [managers], [deps], "hexpm", "outer"}. Entries are one line each.
-var hexLine = regexp.MustCompile(`\{:hex, :([a-z0-9_]+), "([^"]+)",.*"hexpm", "([0-9a-fA-F]{64})"`)
+var hexLine = regexp.MustCompile(`\{:hex, :([a-z0-9_]+), "([0-9A-Za-z.+_-]+)",.*"hexpm", "([0-9a-fA-F]{64})"`)
 
 // parseHexLock lists a lock's `:hex` entries, as data.
 func parseHexLock(text []byte) []hexEntry {

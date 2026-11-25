@@ -224,7 +224,7 @@ defmodule Cartographer.ElixirDeps do
     with {:ok, text} <- File.read(Path.join(root, path)),
          true <- String.valid?(text),
          {:ok, {m, _, entries}} <- safe_quoted(text),
-         "%{}" <- s(m) || "%{}" do
+         "%{}" <- s(m) do
       Enum.reduce(entries, {[], []}, fn entry, {ok, notes} ->
         case lock_entry(entry) do
           {:ok, e} -> {[e | ok], notes}

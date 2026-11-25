@@ -511,39 +511,46 @@ defmodule Cartographer.ElixirFacts do
   # comes before the project's own definitions. Returns the owner or nil.
   @query_api ["Ecto.Query.API", "Ecto.Query.WindowAPI"]
 
-  # The nearest enclosing call that is a proven Ecto.Query macro, with the
-  # call in one of its arguments after the first (the first is the query or
-  # its source, evaluated as ordinary code), and no pin taken inside that
-  # macro covering it (round 1 of review, X1-M1 and X1-m2).
+  # Query vocabulary (decisions 17 and 25, narrowed after review round 2):
+  # a bare call whose name Ecto.Query.API or WindowAPI exports, inside a
+  # proven Ecto.Query macro's expression arguments (those after the first;
+  # for dynamic, its last), reached only through calls that are themselves
+  # API names (subquery, exists, all, any and values evaluate their
+  # arguments as code, so they break the chain), and with no pin taken
+  # inside the macro. Anything else goes through the ordinary rules: this
+  # can lose vocabulary to "unknown", never label a project call.
+  @chain_breakers ~w(subquery exists all any values)
+
   defp query_dsl(%{module: nil, kind: "local_or_import"} = c, ctx) do
     lock = ElixirDeps.lock_of(ctx.ev, c.file)
     enclosing = Map.get(c, :enclosing, [])
     depth = length(enclosing)
+    api = query_api(ctx, lock)
 
-    in_query =
-      enclosing
-      |> Enum.with_index()
-      |> Enum.find(fn {e, _j} -> query_macro?(e, c, ctx, lock) end)
-
-    case in_query do
-      {%{arg: arg}, j} when arg > 0 ->
-        pin = Map.get(c, :pinned)
-
-        unless is_integer(pin) and pin >= depth - j do
-          Enum.find(@query_api, fn api ->
-            case ElixirDeps.exports(ctx.ev, lock, api) do
-              nil -> false
-              ex -> Enum.any?(ex, fn {n, _, _} -> n == c.name end)
-            end
-          end)
-        end
-
-      _ ->
-        nil
+    with true <- api != %{} and Map.has_key?(api, c.name),
+         {macro, j} <- Enum.with_index(enclosing) |> Enum.find(fn {e, _} -> query_macro?(e, c, ctx, lock) end),
+         true <- expression_arg?(macro),
+         true <- Enum.all?(Enum.take(enclosing, j), &api_link?(&1, api)),
+         pin = Map.get(c, :pinned),
+         false <- is_integer(pin) and pin >= depth - j do
+      Map.fetch!(api, c.name)
+    else
+      _ -> nil
     end
   end
 
   defp query_dsl(_c, _ctx), do: nil
+
+  defp expression_arg?(%{name: "dynamic", arg: arg, arity: arity}), do: arg == arity - 1
+  defp expression_arg?(%{arg: arg}), do: arg > 0
+
+  defp api_link?(%{module: nil, name: n}, api), do: Map.has_key?(api, n) and n not in @chain_breakers
+  defp api_link?(_, _), do: false
+
+  # name => the API module exporting it.
+  defp query_api(ctx, lock) do
+    for mod <- Enum.reverse(@query_api), ex = ElixirDeps.exports(ctx.ev, lock, mod), ex != nil, {n, _, _} <- ex, into: %{}, do: {n, mod}
+  end
 
   defp query_macro?(%{module: m, name: n, arity: a}, c, ctx, lock) do
     module =

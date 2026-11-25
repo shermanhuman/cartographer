@@ -1549,6 +1549,11 @@ defmodule Cartographer.ElixirExtractTest do
                 import Ecto.Changeset
                 def go(x), do: change(x)
               end
+              defmodule A.LeakyUse do
+                use Leaky.Lib
+                import Ecto.Changeset
+                def go(x), do: change(x)
+              end
               defmodule A.NotAdmitted do
                 import Ecto.Changeset, only: [cast: 3]
                 def go(x), do: change(x)
@@ -1572,7 +1577,7 @@ defmodule Cartographer.ElixirExtractTest do
             })
         )
 
-      for m <- ~w(UnreadableImport UnknownModule UseWithoutQuotes NotAdmitted) do
+      for m <- ~w(UnreadableImport UnknownModule UseWithoutQuotes NotAdmitted LeakyUse) do
         assert [%{kind: "local_or_import"}] = from(doc, "A.#{m}.go/1", if(m == "UnreadableImport", do: "from", else: "change")), m
       end
 
@@ -1606,12 +1611,25 @@ defmodule Cartographer.ElixirExtractTest do
           def dyn_later(repo, x), do: repo.update(x, [], count(1))
           def nested(ids), do: from(u in "u", preload: [posts: ^from(p in "p", where: fragment("x"))], where: u.id in ^ids)
           def later(q), do: where(q, [u], count(u.id) > 1)
+          def in_exists(q), do: where(q, [u], exists(count(q)))
+          def in_sub(q), do: where(q, [u], u.id in subquery(count(q)))
+          def dyn_expr, do: dynamic(is_nil(1))
+          def dyn_binding, do: dynamic([u], is_nil(u.x))
         end
         """)
 
       for f <- ~w(src/1 first/1 sub/1 dyn/2 dyn_later/2) do
         assert [%{kind: "local"}] = from(doc, "P.#{f}", "count"), f
       end
+
+      # Review round 2 (X2-M3, X2-M4): through subquery/exists the argument
+      # is code; dynamic's expression is its last argument.
+      for f <- ~w(in_exists/1 in_sub/1) do
+        assert [%{kind: "local"}] = from(doc, "P.#{f}", "count"), f
+      end
+
+      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "P.dyn_expr/0", "is_nil")
+      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "P.dyn_binding/0", "is_nil")
 
       # A query nested under ^ keeps its own vocabulary.
       assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "P.nested/1", "fragment")

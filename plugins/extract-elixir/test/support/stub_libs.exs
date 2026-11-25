@@ -13,12 +13,15 @@ defmodule Cartographer.StubLibs do
     defmacro select(q, binding \\ [], expr), do: {q, binding, expr}
     defmacro update(q, binding \\ [], expr), do: {q, binding, expr}
     def subquery(q, opts \\ []), do: {q, opts}
+    defmacro dynamic(binding \\ [], expr), do: {binding, expr}
   end
   defmodule Ecto.Query.API do
     def count(v), do: v
     def fragment(f), do: f
     def ilike(a, b), do: {a, b}
     def max(v), do: v
+    def is_nil(v), do: v
+    def exists(q), do: q
   end
   defmodule Ecto.Changeset do
     def cast(data, params, permitted, opts \\ []), do: {data, params, permitted, opts}
@@ -70,6 +73,13 @@ defmodule Cartographer.StubLibs do
   defmodule Phoenix.HTML do
     def raw(x), do: x
     def lib_only(x), do: x
+  end
+  defmodule Leaky.Lib do
+    defmacro __using__(_) do
+      quote do
+        use Not.Shipped
+      end
+    end
   end
   defmodule Plug.Conn do
     def put_req_header(conn, k, v), do: {conn, k, v}
