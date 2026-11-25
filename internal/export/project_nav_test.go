@@ -112,6 +112,21 @@ func TestProjectLinkFollowsProject(t *testing.T) {
 		t.Errorf("after navigating, the address is %q; want view=modules with project=alpha", hash)
 	}
 
+	// The logo goes home inside the map: the project stays (R1-M1).
+	if _, err := chromedp.Run(tctx, chromedp.Evaluate[any](`document.querySelector("a.brand").click()`)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	sidebar(alpha)
+	if hash := evalStr(t, tctx, `location.hash`); !strings.Contains(hash, "project=alpha") || !strings.Contains(hash, "view=home") {
+		t.Errorf("after the logo, the address is %q; want view=home with project=alpha", hash)
+	}
+	// Copy link keeps the project and pins no snapshot (R1-m2).
+	copied := evalStr(t, tctx, `new Promise(res => { navigator.clipboard.writeText = t => { res(t); return Promise.resolve(); }; document.getElementById("copy-link").click(); })`)
+	if !strings.Contains(copied, "project=alpha") || strings.Contains(copied, "snapshot=") {
+		t.Errorf("copied link %q; want project=alpha and no snapshot", copied)
+	}
+
 	// Switching the project reloads onto its data.
 	mu.Lock()
 	seen = nil
@@ -121,6 +136,15 @@ func TestProjectLinkFollowsProject(t *testing.T) {
 	}
 	sidebar(beta)
 	allCarry("beta")
+}
+
+func evalStr(t *testing.T, ctx context.Context, expr string) string {
+	t.Helper()
+	v, err := chromedp.Run(ctx, chromedp.Evaluate[string](expr, chromedp.EvalAwaitPromise))
+	if err != nil {
+		t.Fatalf("%s: %v", expr, err)
+	}
+	return v
 }
 
 // v2Project copies the format-2 fixture (source main) as workspace ws with

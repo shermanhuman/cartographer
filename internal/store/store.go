@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -84,7 +85,7 @@ func fileURI(path string) (string, error) {
 type ErrNewerStore struct{ Have, Want int }
 
 func (e *ErrNewerStore) Error() string {
-	return fmt.Sprintf("the store was written by a newer cartographer (schema %d; this one reads %d), so it's left untouched: upgrade cartographer (mise use -g github:shermanhuman/cartographer@latest), or pass --db for a separate store", e.Have, e.Want)
+	return fmt.Sprintf("the store was written by a newer cartographer (schema %d; this binary, %s, reads %d), so it's left untouched: an older cartographer is running, often one first on a stale PATH (check `which -a cartographer`); run the newer one, or upgrade (mise use -g github:shermanhuman/cartographer@latest), or pass --db for a separate store", e.Have, exe(), e.Want)
 }
 
 // migrate creates the schema, first dropping every table when the database
@@ -205,16 +206,18 @@ func (s *Store) Snapshots(ctx context.Context) ([]SnapshotInfo, error) {
 // Newest returns the newest snapshot of workspace with the given source
 // (ok false when there is none).
 func (s *Store) Newest(ctx context.Context, workspace, source string) (SnapshotInfo, bool, error) {
-	all, err := s.Snapshots(ctx)
+	// One row, in Snapshots' order: project pages ask on every API call.
+	var si SnapshotInfo
+	err := s.DB.QueryRowContext(ctx, `SELECT id, workspace, created_at, source, map_id, coalesce(json_extract(manifest, '$.inputs_digest'), '')
+	  FROM snapshots WHERE workspace = ? AND source = ? ORDER BY created_at DESC, id DESC LIMIT 1`, workspace, source).
+		Scan(&si.ID, &si.Workspace, &si.CreatedAt, &si.Source, &si.MapID, &si.InputsDigest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SnapshotInfo{}, false, nil
+	}
 	if err != nil {
 		return SnapshotInfo{}, false, err
 	}
-	for _, si := range all {
-		if si.Workspace == workspace && si.Source == source {
-			return si, true, nil
-		}
-	}
-	return SnapshotInfo{}, false, nil
+	return si, true, nil
 }
 
 // Info returns one snapshot's summary (ok false when it isn't imported).
@@ -366,4 +369,12 @@ func (s *Store) Repos(ctx context.Context, snapshot string) ([]RepoInfo, error) 
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// exe names this binary for ErrNewerStore ("cartographer" when unknown).
+func exe() string {
+	if p, err := os.Executable(); err == nil {
+		return p
+	}
+	return "cartographer"
 }

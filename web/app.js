@@ -18,7 +18,11 @@ const SNAPSHOT = new URLSearchParams(location.hash.slice(1)).get('snapshot') || 
 // #project=NAME opens that registered project's newest main build; the
 // server resolves it, so the link survives rebuilds (an explicit snapshot wins).
 const PROJECT = new URLSearchParams(location.hash.slice(1)).get('project') || '';
-const api = (path, params={}) => {const p=new URLSearchParams(params);if(SNAPSHOT)p.set('snapshot',SNAPSHOT);if(PROJECT)p.set('project',PROJECT);const q=p.toString();return `api/${path}${q?'?'+q:''}`};
+// A project page pins the build it loaded (PIN) once /api/status answers, so
+// calls made later (a graph, an entity) can't land on a newer build that a
+// background rebuild imported meanwhile; reloading picks the newest again.
+let PIN = '';
+const api = (path, params={}) => {const p=new URLSearchParams(params);const snap=SNAPSHOT||PIN;if(snap)p.set('snapshot',snap);if(PROJECT)p.set('project',PROJECT);const q=p.toString();return `api/${path}${q?'?'+q:''}`};
 let overview, catalog, entities, state, status, snapshots, currentGraph, renderToken=0, searchKind='all', listMode=false;
 let fileBrowser, schemaBrowser, contextBrowser, fileManifest, schemaIndex, journeyBrowser;
 let transform={x:0,y:0,z:1}, dimensions={w:1000,h:600}, lastLayoutKey='', drawn=[];
@@ -283,7 +287,7 @@ $('#stage').addEventListener('dblclick',event=>{const node=event.target.closest(
 $('#search-open').onclick=openSearch;$('#global-search').oninput=search;$('#provenance').onclick=sources;$('#source-button').onclick=sources;$('#close-sources').onclick=()=>$('#sources-dialog').close();
 $('#global-search').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();const row=$('[data-search-result]');if(row)row.click()}};
 document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'){event.preventDefault();if(!$('#search-dialog').open)openSearch()}});
-$('#copy-link').onclick=async()=>{try{const {print,...rest}=state;await navigator.clipboard.writeText(location.href.split('#')[0]+'#'+hashOf({...rest,snapshot:PROJECT?SNAPSHOT:SNAPSHOT||status.snapshot}));toast('Link copied · opens this snapshot, view and selection')}catch{toast('Copy this page’s address from the address bar.')}};
+$('#copy-link').onclick=async()=>{try{const {print,...rest}=state;await navigator.clipboard.writeText(location.href.split('#')[0]+'#'+hashOf({...rest,snapshot:PROJECT?SNAPSHOT:SNAPSHOT||status.snapshot}));toast(PROJECT&&!SNAPSHOT?'Link copied · opens this project’s newest map, view and selection':'Link copied · opens this snapshot, view and selection')}catch{toast('Copy this page’s address from the address bar.')}};
 $('#copy-embed').onclick=async()=>{const id=state.focus||state.entity,e=byId(id);if(!e||!['function','route','module','table','context'].includes(e.kind))return toast('Select a function, route, module, table or context to copy its embed.');try{const md=await getText(api('embed',{id}));await navigator.clipboard.writeText(md);toast('Embed copied · paste into a GitHub issue or PR')}catch(error){toast(error.message||'Could not copy the embed.')}};
 $('#save-pdf').onclick=()=>{preparePrint($('#export-mode').value);window.print()};
 $('#download-svg').onclick=()=>{if(!canExportSVG())return toast('Open a graph view to download it as SVG.');const url=URL.createObjectURL(new Blob([buildSVG()],{type:'image/svg+xml'}));const a=document.createElement('a');a.href=url;a.download=`cartographer-${String(currentGraph.title).replace(/[^A-Za-z0-9._-]+/g,'-')}.svg`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)};
@@ -298,6 +302,7 @@ window.addEventListener('popstate',locationChanged);window.addEventListener('has
 const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 try{
   let annotations;[overview,catalog,status,snapshots,annotations]=await Promise.all([getJSON(api('overview')),getJSON(api('catalog')),getJSON(api('status')),getJSON(api('snapshots')),getJSON(api('annotations'))]);
+  if(PROJECT&&!SNAPSHOT)PIN=status.snapshot;
   setJourneys(annotations);setDomains(annotations);setInvestigations(annotations);
   entities=new Map(catalog.map(e=>[e.id,e]));applyOverview(annotations.find(a=>a.kind==='overview'));state=parse();if(state.print)document.body.dataset.print=state.print;
   showFreshness();showSnapshots();showJourneyNav();

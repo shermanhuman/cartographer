@@ -1,6 +1,7 @@
 // Package server serves the browser UI and its JSON API on the loopback
 // interface only. Every API response is computed from the store for one
-// snapshot (?snapshot=ID, default newest).
+// snapshot (?snapshot=ID, else ?project=NAME's newest main build, else the
+// default; see docs/serve-api.md).
 package server
 
 import (
@@ -220,7 +221,7 @@ func (a *api) projectSnapshot(ctx context.Context, name string) (string, int, er
 		return "", http.StatusInternalServerError, err
 	}
 	if !ok {
-		return "", http.StatusNotFound, fmt.Errorf("no map of project %s", name)
+		return "", http.StatusNotFound, errNotFound{fmt.Sprintf("no map of project %s", name)}
 	}
 	return si.ID, 0, nil
 }
@@ -416,8 +417,14 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 	var def string
 	if p := r.URL.Query().Get("project"); p != "" {
 		// A project link's default is its newest main build, not serve's.
+		// With ?snapshot= the answer is that snapshot's, as on every other
+		// endpoint, so a project that resolves to nothing falls back to
+		// serve's default instead of failing the request.
 		if def, _, err = a.projectSnapshot(ctx, p); err != nil {
-			return nil, err
+			if r.URL.Query().Get("snapshot") == "" {
+				return nil, err
+			}
+			def = a.defaultSnapshot(ctx)
 		}
 	} else {
 		def = a.defaultSnapshot(ctx)

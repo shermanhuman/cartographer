@@ -23,6 +23,8 @@ With `?project=`, `/api/status`'s `default_snapshot` is the project's newest mai
 
 The UI keeps the same choice in its hash: `#project=NAME` or `#snapshot=ID`. It sends the choice on every API call and keeps it while you move around the map. Changing either one reloads the page onto that snapshot's data.
 
+A `#project=` page pins the build it loaded: later calls also send that `snapshot`. A background rebuild therefore never mixes two builds on one page. Reloading opens the newest build again.
+
 **Copy link:**
 - **On a `#project=` page:** the link keeps `project` and pins a snapshot only when you picked an older build. It keeps opening the newest build after rebuilds.
 - **Without a project:** the link pins the snapshot, as before.

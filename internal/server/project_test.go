@@ -103,6 +103,11 @@ func TestProjectParamOpensNewestMainBuild(t *testing.T) {
 	if all := getJSON[[]obj](t, srv, "/api/snapshots"); len(all) != 4 {
 		t.Errorf("snapshots without project: %d, want 4", len(all))
 	}
+	// With an explicit snapshot, a project that resolves to nothing doesn't
+	// fail status (R1-m3): snapshot wins, as on every endpoint.
+	if st := getJSON[obj](t, srv, "/api/status?project=nope&snapshot="+alphaOld); st["snapshot"] != alphaOld {
+		t.Errorf("status with snapshot and an unknown project: %v", st["snapshot"])
+	}
 	body, _ := get(t, srv, "/api/status?project=nope", 404)
 	if !strings.Contains(body, "no map of project nope") {
 		t.Errorf("unknown project: %s", body)

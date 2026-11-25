@@ -62,3 +62,39 @@ func reopenAt(t *testing.T, db string, v int) *Store {
 	}
 	return s
 }
+
+// The locked re-check alone: a newer release that wins the write lock first
+// must not have its store dropped by the older one waiting on it (R1-m1).
+func TestRebuildRefusesANewerStore(t *testing.T) {
+	ctx := context.Background()
+	db := filepath.Join(t.TempDir(), "carto.db")
+	s, err := Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Import(ctx, "../../testdata/workspace-mini/snapshot"); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := s.DB.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion+1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	err = rebuild(ctx, conn)
+	conn.ExecContext(ctx, `ROLLBACK`)
+	var newer *ErrNewerStore
+	if !errors.As(err, &newer) {
+		t.Fatalf("rebuild of a newer store: %v, want ErrNewerStore", err)
+	}
+	var n int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM snapshots`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("snapshots after the refused rebuild: %d, %v", n, err)
+	}
+}

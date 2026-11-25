@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/shermanhuman/cartographer/internal/rebuild"
@@ -193,20 +192,13 @@ func Remove(ctx context.Context, stateDir, name string, s *store.Store) error {
 // List returns every registration, sorted by name. Unreadable ones are
 // skipped and reported in the error (the rest still come back).
 func List(stateDir string) ([]*Registration, error) {
-	if stateDir == "" {
-		return nil, nil
+	out, problems, err := ListDetailed(stateDir)
+	if err != nil {
+		return nil, err
 	}
-	files, _ := filepath.Glob(filepath.Join(projectsDir(stateDir), "*.json"))
-	sort.Strings(files)
-	var out []*Registration
 	var errs []error
-	for _, f := range files {
-		r, err := Load(stateDir, strings.TrimSuffix(filepath.Base(f), ".json"))
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		out = append(out, r)
+	for _, p := range problems {
+		errs = append(errs, errors.New(p.Error))
 	}
 	return out, errors.Join(errs...)
 }
