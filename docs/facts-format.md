@@ -186,10 +186,12 @@ route in the caller's **own** repository only, `heuristic`, provenance
 `same-origin`. A same-origin reference has no `base`.
 
 A reference whose `base` is an absolute `http(s)` URL with a literal host is
-**external** when that host is not loopback, not a cluster Service name (one
-label, `name.namespace` for a namespace the project's Services use, or
-`name.namespace.svc…`) and not a host named by the project's own
-`config_urls` or Deployment env. The core sets its stored origin to
+**external** when that host is not loopback, not a private, link-local,
+unspecified or 100.64.0.0/10 IP address, not a cluster Service name (one
+label, `name.namespace` for `default` or a namespace the project's Services
+use, or `name.namespace.svc…`) and not a host named by the project's own
+`config_urls` or Deployment env. A trailing dot and letter case are
+ignored. The core sets its stored origin to
 `external` and never links it. Coverage counts these apart: `N of M
 requests linked · external K`, with external left out of M. Extractors send
 only `""` or `"same"`.

@@ -507,11 +507,13 @@ defmodule Cartographer.ElixirExtractTest do
           def by_fn(base), do: bf("/bf", base)
 
           defp bp(path, base) do
-            _ = "https://api.stripe.com/v1"
+            Req.get(Req.new(base_url: base), url: path)
+            base = "https://api.stripe.com/v1"
             Req.get(Req.new(base_url: base), url: path)
           end
 
           defp bc(path, x) do
+            base = "https://api.stripe.com/v1"
             case x do
               {:ok, base} -> Req.get(Req.new(base_url: base, headers: [{"a", "https://api.stripe.com"}]), url: path)
             end

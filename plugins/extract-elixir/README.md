@@ -148,22 +148,38 @@ Exit status 2 means bad arguments; nothing is written to stdout.
 - `hook_mounts`: each `phx-hook` (a colocated `.Name` as `<Module>.Name`), with
   the `handle_event` functions of the LiveViews that render it as
   `receivers`. The core links a JavaScript hook's `pushEvent` through these.
-- Library calls are `external` (kind `external`): an unqualified call with
-  no public definition of that name and arity anywhere in the repository,
-  when a library is imported or `use`d in scope (the target names it when
-  it is the only one); a call to a project module that `use`s a library and
-  doesn't define the function (`Repo.all/1` from `use Ecto.Repo`), keeping
-  its module. ExUnit.CaseTemplate `using` blocks are expanded like a
-  helper quote, so a test's imports through its case template are seen.
-  Component and capture calls keep their kinds and count as external.
-- Requests: a `base_url:` literal in the requesting function (a string, a
-  module attribute, the literal default of a local function it calls, or
-  the literals a match binds to a variable) sets the ref's `base` to
-  `scheme://host` and joins the URL's path; with several hosts the first in
-  source order is used and no path joined. An interpolated string and a
-  loopback URL set none. A base joined into the URL itself
-  (`url: base <> path`) isn't read: such a request keeps its module as its
-  base.
+- Library calls are `external` (kind `external`). An unqualified call is
+  external when no project module defines that name and arity publicly,
+  its own module doesn't define it, and a library is imported (admitting
+  the name under `only:`/`except:`) or `use`d in scope. The target names
+  the library only when it is the one candidate and the scope has no
+  project `use` the walk can't expand and no project import that passes a
+  library on. A call to a project module that `use`s a library and doesn't
+  define the function (`Repo.all/1` from `use Ecto.Repo`) is external and
+  keeps its module; so are its captures and `apply/3`, keeping their
+  kinds. Component calls keep their kind and count as external.
+- What a project `use` defines: the walk that applies a `use` (through
+  Phoenix's `use AppWeb, :kind`, `unquote(helpers())` and nested uses,
+  three levels deep) records each `def`, `defp`, `defmacro` and
+  `defdelegate` it puts in the module, with the arities its defaults
+  allow; those are the module's own. A definition it can't place (inside
+  an `if` or `for`, a computed name, a chain past the depth limit) marks
+  the module dynamic, as does a `dynamic_definition` note: bare calls in
+  such a module, or in one importing it, stay unresolved rather than being
+  named after a library. ExUnit.CaseTemplate `using` blocks are expanded
+  the same way.
+- Requests: a request's base comes from a `base_url:` in its own function:
+  a string, a module attribute, the literals of a local function it calls
+  (`base_url(opts)`), or a variable whose every possible value (each
+  branch of a `case`/`cond`/`if`, a tuple position, `||` alternatives,
+  `<>` of literals) is a literal URL, bound only by `=` at the top of the
+  function. It sets `base` to `scheme://host` and joins the URL's path;
+  with several hosts the first in source order is used and no path joined.
+  A function with no `base_url:` takes its module's host when every
+  `base_url:` in the module is a literal naming one host. An interpolated
+  string, a loopback URL or anything computed sets none, and a base joined
+  into the URL itself (`url: base <> path`) isn't read: such a request
+  keeps its module as its base.
 - `stats`: one entry, language `elixir`. `call_sites` counts `calls`;
   `in_repo` those whose target is a function in this document, `external`
   those naming a module outside it (Kernel and Erlang included) and the
