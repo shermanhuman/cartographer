@@ -29,3 +29,19 @@ own registry, store and cache (cartographer#34):
 CARTOGRAPHER_STATE=$d/state CARTOGRAPHER_DATA=$d/data XDG_CACHE_HOME=$d/cache \
   cartographer project add <anchor> --yes && cartographer refresh <name>
 ```
+
+## The compiler oracle (map-coverage-2)
+
+Checks the Elixir extractor's `external` labels against the compiler, once,
+on a scratch copy (never a user's checkout):
+
+```sh
+git -C ~/github/<repo> archive origin/main | tar -x -C $scratch/app
+elixir stage_deps.exs $scratch/app ~/.hex/packages/hexpm   # verified tarballs into deps/<lock key>
+cd $scratch/app && env -u XDG_CACHE_HOME MIX_ENV=dev elixir ../trace.exs   # deps.compile, compile with a tracer, debug info
+CARTO_DEBUG_EXT=1 elixir extract.exs ... > ext.json   # a facts.exs that keeps `ext` on each call
+python3 compare.py ext.json $scratch/app/oracle.json
+```
+
+`extract_shapes.exs` collected the regression corpus's shapes from the
+review probes.
