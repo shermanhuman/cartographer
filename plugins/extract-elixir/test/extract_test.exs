@@ -1246,7 +1246,7 @@ defmodule Cartographer.ElixirExtractTest do
               "lib/helper.ex" =>
                 "defmodule App.Helper do\n  defmacro __using__(_) do\n    quote do\n      use Ecto.Schema\n      def touch(x), do: x\n    end\n  end\nend\n",
               "lib/thing.ex" =>
-                "defmodule App.Thing do\n  use App.Helper\n  import Ecto.Changeset\n  def go(x), do: touch(x)\nend\n",
+                "defmodule App.Thing do\n  use App.Helper\n  import Ecto.Changeset\n  def go(x), do: {touch(x), cast(x, %{}, [])}\nend\n",
               "lib/caller.ex" =>
                 "defmodule App.Caller do\n  def go(x), do: App.Thing.touch(x)\nend\n"
             })
@@ -1256,6 +1256,8 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{kind: "local_or_import"}] = from(doc, "App.Reader.r/0", "a")
       assert [%{kind: "local_or_import"}] = from(doc, "App.Thing.go/1", "touch")
       assert [%{kind: "remote"}] = from(doc, "App.Caller.go/1", "touch")
+      # The helper's quoted defs don't hide the module's library calls.
+      assert [%{kind: "external"}] = from(doc, "App.Thing.go/1", "cast")
     end
   end
 

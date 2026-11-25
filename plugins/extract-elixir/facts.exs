@@ -431,6 +431,30 @@ defmodule Cartographer.ElixirFacts do
   defp external_context(parsed, defined, helpers) do
     project = MapSet.new(parsed.modules, & &1.name)
 
+    # A project helper whose quote defines functions (`def mount/3` inside
+    # `__using__`): the modules that use it define them too. When every
+    # quoted def has a literal name they're added as definitions; when a
+    # name is computed (`def unquote(n)()`), the using modules count as
+    # dynamic (round 1, H1-M1).
+    quoted =
+      for {m, h} <- helpers, h.using != nil, defs = quote_defs(h.using), defs != [], into: %{}, do: {m, defs}
+
+    users = fn pred ->
+      parsed.uses
+      |> Enum.filter(fn u -> pred.(Map.get(quoted, u.use)) end)
+      |> Enum.map(& &1.module)
+    end
+
+    computed = users.(&(&1 != nil and :computed in &1)) |> MapSet.new()
+
+    defined =
+      for module <- users.(&(&1 != nil and :computed not in &1)),
+          {name, arity} <- Enum.flat_map([module], fn mod -> quoted_for(parsed.uses, quoted, mod) end),
+          reduce: defined do
+        acc ->
+          Map.update(acc, {module, name}, [{arity, arity, true, :functions}], &[{arity, arity, true, :functions} | &1])
+      end
+
     # Every {name, arity} some project module defines publicly (decision 15).
     public =
       Enum.reduce(defined, MapSet.new(), fn {{_module, name}, entries}, acc ->
@@ -459,23 +483,11 @@ defmodule Cartographer.ElixirFacts do
       |> Enum.filter(&(&1.kind == "dynamic_definition"))
       |> MapSet.new(& &1.file)
 
-    # A project helper whose quote defines functions (`def` inside
-    # `__using__`): the modules that use it have functions the inventory
-    # doesn't list, so they count as dynamic too (round 1, H1-M1).
-    defining =
-      helpers
-      |> Enum.filter(fn {_m, h} -> h.using != nil and defines?(h.using) end)
-      |> MapSet.new(fn {m, _} -> m end)
-
     dynamic =
       parsed.modules
       |> Enum.filter(&MapSet.member?(dyn_files, &1.file))
       |> MapSet.new(& &1.name)
-      |> MapSet.union(
-        parsed.uses
-        |> Enum.filter(&MapSet.member?(defining, &1.use))
-        |> MapSet.new(& &1.module)
-      )
+      |> MapSet.union(computed)
 
     %{
       project: project,
@@ -569,14 +581,33 @@ defmodule Cartographer.ElixirFacts do
       Enum.any?(Map.keys(c.imports), &MapSet.member?(ctx.dynamic, &1))
   end
 
-  defp defines?(forms) do
-    {_, hit} =
-      Macro.prewalk(forms, false, fn
-        {kind, _, _} = node, _acc when kind in [:def, :defp, :defmacro, :defmacrop] -> {node, true}
-        node, acc -> {node, acc}
+  # The {name, arity} of each def in a quote, or :computed for a def whose
+  # name isn't a literal.
+  defp quote_defs(forms) do
+    {_, found} =
+      Macro.prewalk(forms, [], fn
+        {kind, _, [head | _]} = node, acc when kind in [:def, :defp, :defmacro, :defmacrop] ->
+          {node, [def_head(head) | acc]}
+
+        node, acc ->
+          {node, acc}
       end)
 
-    hit
+    Enum.uniq(found)
+  end
+
+  defp def_head({:when, _, [head | _]}), do: def_head(head)
+  defp def_head({name, _, args}) when is_atom(name) and name != :unquote and is_list(args), do: {Atom.to_string(name), length(args)}
+  defp def_head({name, _, ctx}) when is_atom(name) and name != :unquote and is_atom(ctx), do: {Atom.to_string(name), 0}
+  defp def_head({%{__atom__: name}, _, args}) when is_list(args), do: {name, length(args)}
+  defp def_head({%{__atom__: name}, _, ctx}) when is_atom(ctx), do: {name, 0}
+  defp def_head(_), do: :computed
+
+  defp quoted_for(uses, quoted, module) do
+    uses
+    |> Enum.filter(&(&1.module == module))
+    |> Enum.flat_map(&Map.get(quoted, &1.use, []))
+    |> Enum.reject(&(&1 == :computed))
   end
 
   defp external_kind("capture"), do: "capture"
