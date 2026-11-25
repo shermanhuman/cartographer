@@ -107,8 +107,14 @@ defmodule Cartographer.ElixirDeps do
   def exports(%__MODULE__{} = ev, lock, module) do
     cached(ev, {:exports, lock, module}, fn ->
       case get_in(ev.locks, [lock, module]) do
-        %{exports: ex} -> ex
-        nil -> runtime_exports(ev, module)
+        # Its own definitions, and what its own top-level `use`s generate
+        # into it (`use Comeonin` in Pbkdf2).
+        %{exports: ex} = m ->
+          generated = Enum.flat_map(Map.get(m, :uses, []), &reach(ev, lock, &1, []).defs)
+          Enum.uniq(ex ++ generated)
+
+        nil ->
+          runtime_exports(ev, module)
       end
     end)
   end
@@ -259,7 +265,8 @@ defmodule Cartographer.ElixirDeps do
     {_, acc} =
       Macro.prewalk(ast, [], fn
         {kw, _, [{:__aliases__, _, parts}, [{do_key, body}]]}, acc ->
-          if s(kw) == "defmodule" and s(do_key) == "do" do
+          # A protocol is a module whose defs are its functions.
+          if s(kw) in ["defmodule", "defprotocol"] and s(do_key) == "do" do
             name = Enum.join(Enum.reject([outer | Enum.map(parts, &s/1)], &is_nil/1), ".")
             {nil, [{name, module_facts(name, body)} | modules(body, name) ++ acc]}
           else
@@ -296,7 +303,11 @@ defmodule Cartographer.ElixirDeps do
           {n, acc}
       end)
 
-    %{exports: Enum.uniq(exports), quotes: %{defs: Enum.uniq(q.defs), refs: Enum.uniq(q.refs), imports: Enum.uniq(q.imports)}}
+    %{
+      exports: Enum.uniq(exports),
+      uses: Enum.uniq(top_uses),
+      quotes: %{defs: Enum.uniq(q.defs), refs: Enum.uniq(q.refs), imports: Enum.uniq(q.imports)}
+    }
   end
 
   @defs ~w(def defmacro defdelegate defguard)
@@ -308,11 +319,26 @@ defmodule Cartographer.ElixirDeps do
     cond do
       k in @defs and args != [] -> List.wrap(head(hd(args), binds))
       k == "for" -> for_exports(args, attrs)
+      # Definitions under a module-level `if Code.ensure_loaded?(...)`
+      # count, in either branch (a superset, decision 16).
+      k in ["if", "unless"] -> args |> List.last() |> branches() |> Enum.flat_map(&top_exports(&1, binds, attrs))
+      # defexception generates exception/1 and message/1; defstruct the struct.
+      k == "defexception" -> [{"exception", 1, 1}, {"message", 1, 1}, {"__struct__", 0, 1}]
+      k == "defstruct" -> [{"__struct__", 0, 1}]
       true -> []
     end
   end
 
   defp top_exports(_, _, _), do: []
+
+  defp branches(kw) when is_list(kw) do
+    Enum.flat_map(kw, fn
+      {k, v} -> if s(k) in ["do", "else"], do: block_forms(v), else: []
+      _ -> []
+    end)
+  end
+
+  defp branches(_), do: []
 
   # `for m <- [:get, :post], do: defmacro unquote(m)(conn, path) ...`
   defp for_exports(args, attrs) do

@@ -51,6 +51,29 @@ defmodule Cartographer.ElixirDepsTest do
       end
     end
   end
+  defmodule Lib.Cond do
+    if Code.ensure_loaded?(Plug.Test) do
+      def json(conn, data), do: {conn, data}
+    else
+      def json(_conn, _data), do: :no_plug
+    end
+  end
+  defmodule Lib.Error do
+    defexception [:message]
+  end
+  defprotocol Lib.Proto do
+    def to_form(data, opts)
+  end
+  defmodule Lib.Behaviour do
+    defmacro __using__(_) do
+      quote do
+        def no_user_verify(opts \\ []), do: opts
+      end
+    end
+  end
+  defmodule Lib.Hasher do
+    use Lib.Behaviour
+  end
   defmodule Lib.Verbs do
     @verbs [:get, :post]
     for v <- @verbs do
@@ -77,6 +100,12 @@ defmodule Cartographer.ElixirDepsTest do
 
     assert ElixirDeps.exported?(ElixirDeps.exports(ev, lock, "Lib.Query"), "from", 1)
     assert ElixirDeps.exported?(ElixirDeps.exports(ev, lock, "Lib.Query"), "where", 2)
+    # Under a module-level `if` (a superset).
+    assert ElixirDeps.exported?(ElixirDeps.exports(ev, lock, "Lib.Cond"), "json", 2)
+    assert ElixirDeps.exported?(ElixirDeps.exports(ev, lock, "Lib.Error"), "exception", 1)
+    assert ElixirDeps.exported?(ElixirDeps.exports(ev, lock, "Lib.Proto"), "to_form", 2)
+    # What a library module's own top-level `use` generates into it.
+    assert ElixirDeps.exported?(ElixirDeps.exports(ev, lock, "Lib.Hasher"), "no_user_verify", 0)
     # A top-level `for` over a literal list attribute.
     assert ElixirDeps.exported?(ElixirDeps.exports(ev, lock, "Lib.Verbs"), "post", 2)
 
