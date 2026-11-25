@@ -554,6 +554,12 @@ defmodule Cartographer.ElixirSource do
     {env, acc}
   end
 
+  # The pipe placeholder below: its left side was walked already. Without
+  # this clause the tuple fallback walks the left side again through the
+  # placeholder's metadata, doubling the work at every step of a pipe chain
+  # (2^n calls for n pipes).
+  defp walk({:__pipe_arg__, _, nil}, env, acc), do: {env, acc}
+
   defp walk({:|>, _, [left, right]}, env, acc) do
     {_, acc} = walk(left, env, acc)
     # The piped value stands first in the call's arguments as a placeholder

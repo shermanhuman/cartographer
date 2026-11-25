@@ -383,6 +383,15 @@ defmodule Cartographer.ElixirExtractTest do
       refute Map.has_key?(doc, :routes)
     end
 
+    test "a long pipe chain records each call once" do
+      # Raw walker output, before the document de-duplicates: one record
+      # per call site, not 2^n.
+      steps = Enum.map_join(1..12, "\n", &"    |> assign(:k#{&1}, #{&1})")
+      text = "defmodule P do\n  def m(s) do\n    s\n#{steps}\n  end\nend\n"
+      parsed = Cartographer.ElixirSource.parse(Cartographer.ElixirSource.new(), text, "lib/p.ex", "fixture")
+      assert Enum.count(parsed.calls, &(&1.name == "assign")) == 12
+    end
+
     test "a request's base is the host behind its base_url literal" do
       doc =
         extract(~S"""
