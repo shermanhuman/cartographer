@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS http_refs (
   method TEXT NOT NULL DEFAULT '',
   path TEXT NOT NULL,
   base TEXT NOT NULL DEFAULT '',
-  origin TEXT NOT NULL DEFAULT '', -- 'same': a browser request to its own repo
+  origin TEXT NOT NULL DEFAULT '', -- 'same': a browser request to its own repo; 'external': to an outside service (set by link)
   file TEXT NOT NULL DEFAULT '',
   line INTEGER NOT NULL DEFAULT 0
 );

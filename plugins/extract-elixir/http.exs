@@ -40,7 +40,7 @@ defmodule Cartographer.ElixirHTTP do
   the merged functions. Returns `{refs, skipped}`, where each skipped site is
   `%{file, line, from, reason}`.
   """
-  def refs(clauses, calls, functions) do
+  def refs(clauses, calls, functions, attrs) do
     defs =
       Enum.group_by(
         functions,
@@ -54,11 +54,13 @@ defmodule Cartographer.ElixirHTTP do
       |> Enum.group_by(& &1.module)
       |> Enum.map(fn {module, cs} -> analyze(module, cs, defs) end)
 
+    bases = bases(clauses, attrs)
+
     carriers =
       for a <- analyses,
           {fid, positions} <- a.carriers,
           into: %{},
-          do: {fid, %{positions: positions, method: a.methods[fid], module: a.module}}
+          do: {fid, %{positions: positions, method: a.methods[fid], module: a.module, fid: fid}}
 
     pass = Enum.reduce(analyses, MapSet.new(), &MapSet.union(&2, &1.pass))
     direct = Enum.flat_map(analyses, & &1.direct)
@@ -72,8 +74,10 @@ defmodule Cartographer.ElixirHTTP do
              false <- MapSet.member?(pass, {c.from, c.line, c.name, c.arity}) do
           case origin(c, carrier) do
             {:ok, path, method} ->
+              {base, path} = with_base(bases, carrier.fid, carrier.module, path)
+
               ref =
-                %{from: c.from, path: path, base: carrier.module, file: c.file, line: c.line}
+                %{from: c.from, path: path, base: base, file: c.file, line: c.line}
                 |> then(&if(method, do: Map.put(&1, :method, method), else: &1))
 
               {[ref | refs], skipped}
@@ -87,11 +91,270 @@ defmodule Cartographer.ElixirHTTP do
       end)
 
     refs =
-      (refs ++ Enum.flat_map(analyses, & &1.direct_refs))
+      (refs ++ Enum.map(Enum.flat_map(analyses, & &1.direct_refs), &direct_base(&1, bases)))
       |> Enum.uniq()
       |> Enum.sort_by(&{&1.file, &1.line, &1.from, &1.path, &1[:method] || ""})
 
     {refs, Enum.sort_by(skipped ++ direct, &{&1.file, &1.line})}
+  end
+
+  # A request made in the function itself takes its function's base.
+  defp direct_base(%{from: fid, path: path, base: base} = ref, bases) do
+    {base, path} = with_base(bases, fid, base, path)
+    %{ref | base: base, path: path}
+  end
+
+  defp direct_base(ref, _bases), do: ref
+
+  # The base URL a function's requests go to (decision 17): the literal
+  # behind a `base_url:` option in that function's own clauses, read from a
+  # string, a module attribute (`@api "https://..."`), the literal default
+  # of a local function it calls (`base_url(opts)`) or the literals bound to
+  # a variable (`{base, _} = case ...`). An interpolated string is never
+  # read. Returns `%{fid => {scheme://host, path prefix}}`; with several
+  # hosts the first in source order is used and no path is joined.
+  defp bases(clauses, attrs) do
+    cs = Enum.filter(clauses, &Map.has_key?(&1, :http))
+    by_module = Enum.group_by(cs, & &1.module)
+    attr = Map.new(attrs, &{{&1.module, &1.name}, &1.values})
+
+    # A module whose every base_url value reads as a literal URL, all
+    # naming one host: a function with none of its own (the Req is built in
+    # a helper) takes that one. A value that isn't a literal (config, an
+    # interpolated string, a parameter) leaves the module with no base, so
+    # no function is given a host it can't be shown to use (decision 29).
+    module_base =
+      Map.new(by_module, fn {module, mcs} ->
+        values =
+          for c <- mcs, v <- base_url_values(c.http.body), do: resolve_base(v, c, module, mcs, attr)
+
+        urls = List.flatten(values)
+
+        {module,
+         if(values != [] and Enum.all?(values, &(base_of(&1) != nil)) and single_host?(urls),
+           do: base_of(urls)
+         )}
+      end)
+
+    cs
+    |> Enum.group_by(& &1.id)
+    |> Enum.map(fn {fid, own} ->
+      module = hd(own).module
+      urls = Enum.flat_map(own, &clause_urls(&1, module, by_module[module], attr))
+      {fid, base_of(urls) || module_base[module]}
+    end)
+    |> Enum.reject(fn {_, b} -> b == nil end)
+    |> Map.new()
+  end
+
+  defp single_host?(urls) do
+    urls
+    |> Enum.filter(&is_binary/1)
+    |> Enum.filter(&String.match?(&1, ~r/\Ahttps?:\/\/[^\/{#$]+/i))
+    |> Enum.map(&String.downcase(URI.parse(&1).host))
+    |> Enum.uniq()
+    |> length() == 1
+  end
+
+  # The base a ref from `fid` takes, joining the base URL's path prefix.
+  defp with_base(bases, fid, fallback, path) do
+    case Map.get(bases, fid) do
+      {origin, prefix} -> {origin, prefix <> path}
+      nil -> {fallback, path}
+    end
+  end
+
+  defp clause_urls(c, module, cs, attr) do
+    c.http.body
+    |> base_url_values()
+    |> Enum.flat_map(&resolve_base(&1, c, module, cs, attr))
+  end
+
+  defp base_of(urls) do
+    if :unknown in urls, do: nil, else: literal_base(urls)
+  end
+
+  defp literal_base(urls) do
+    urls =
+      urls
+      |> Enum.filter(&String.match?(&1, ~r/\Ahttps?:\/\/[^\/{#$]+/i))
+      # A loopback URL is a development default (the deployment's config
+      # gives the real one): it names no outside service and sets no base.
+      |> Enum.reject(&String.match?(&1, ~r/\Ahttps?:\/\/(localhost|127\.|\[::1\]|0\.0\.0\.0)/i))
+      |> Enum.uniq()
+
+    case urls do
+      [] -> nil
+      [one] -> {origin_of(URI.parse(one)), String.trim_trailing(URI.parse(one).path || "", "/")}
+      [first | _] -> {origin_of(URI.parse(first)), ""}
+    end
+  end
+
+  defp origin_of(%URI{scheme: s, host: h} = u) do
+    h = String.downcase(h)
+    host = if String.contains?(h, ":"), do: "[#{h}]", else: h
+    "#{String.downcase(s)}://#{host}#{port(u)}"
+  end
+
+  defp port(%URI{port: p, scheme: s}) when (s == "https" and p == 443) or (s == "http" and p == 80),
+    do: ""
+
+  defp port(%URI{port: nil}), do: ""
+  defp port(%URI{port: p}), do: ":#{p}"
+
+  # Every `base_url:` value in a body (keyword pairs in any list).
+  defp base_url_values(body) do
+    {_, found} =
+      Macro.prewalk(body, [], fn
+        {k, v} = node, acc when is_atom(k) or (is_map(k) and is_map_key(k, :__atom__)) ->
+          if ElixirSource.str(k) == "base_url", do: {node, [v | acc]}, else: {node, acc}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    Enum.reverse(found)
+  end
+
+  defp resolve_base(v, _clause, _module, _cs, _attr) when is_binary(v), do: [v]
+
+  defp resolve_base({:@, _, [{name, _, _}]}, _clause, module, _cs, attr),
+    do: Map.get(attr, {module, ElixirSource.str(name)}, [])
+
+  # A variable: every value its matches in this clause can give it
+  # (decision 31). Each must be a literal URL; anything else (a call, a
+  # parameter, an interpolation) makes the base unknown.
+  defp resolve_base({name, _, ctx}, clause, module, _cs, attr) when is_atom(ctx) do
+    stmts =
+      case do_block(clause.http.body) do
+        {:__block__, _, es} when is_list(es) -> es
+        e -> [e]
+      end
+
+    found = for {:=, _, [lhs, rhs]} <- stmts, binds?(lhs, name), do: {lhs, rhs}
+
+    # Every place the clause binds the name: its parameters, and any `=`,
+    # `->` or `<-` pattern. Only top-level `=` matches are read; a name
+    # also bound anywhere else may not be what the request sees.
+    {_, sites} =
+      Macro.prewalk(clause.http.body, 0, fn
+        {op, _, [lhs, _]} = node, n when op in [:=, :<-, :->] ->
+          {node, if(binds?(lhs, name), do: n + 1, else: n)}
+
+        node, n ->
+          {node, n}
+      end)
+
+    sites = sites + if(binds?(clause.http.params, name), do: 1, else: 0)
+
+    values =
+      Enum.flat_map(found, fn {lhs, rhs} ->
+        rhs |> leaf_values(module, attr) |> Enum.flat_map(&project(&1, lhs, name, module, attr))
+      end)
+
+    if values == [] or sites != length(found) or Enum.any?(values, &(not is_binary(&1))),
+      do: [:unknown],
+      else: values
+  end
+
+  # A local function (`base_url(opts)`): the literals in its body.
+  defp resolve_base({fun, _, args} = v, _clause, _module, cs, _attr) when is_list(args) do
+    name = if is_atom(fun) or is_map(fun), do: ElixirSource.str(fun)
+    local = Enum.filter(cs || [], &(&1.name == name))
+
+    if local != [],
+      do: Enum.flat_map(local, &strings(&1.http.body)),
+      else: strings(v)
+  end
+
+  defp resolve_base(_v, _clause, _module, _cs, _attr), do: []
+
+  # A def's `do` body (the clause keeps `[[do: ...]]`).
+  defp do_block([kw]) when is_list(kw) do
+    Enum.find_value(kw, fn {k, v} -> if ElixirSource.str(k) == "do", do: v end)
+  end
+
+  defp do_block(_), do: nil
+
+  # The values an expression can evaluate to: literals, {:tuple, elems}, or
+  # :unknown.
+  defp leaf_values(s, _m, _a) when is_binary(s), do: [s]
+  defp leaf_values({:__block__, _, [_ | _] = es}, m, a), do: leaf_values(List.last(es), m, a)
+
+  defp leaf_values({kind, _, [_subject, [do: clauses]]}, m, a) when kind in [:case] and is_list(clauses),
+    do: Enum.flat_map(clauses, &branch(&1, m, a))
+
+  defp leaf_values({:cond, _, [[do: clauses]]}, m, a) when is_list(clauses),
+    do: Enum.flat_map(clauses, &branch(&1, m, a))
+
+  defp leaf_values({kind, _, [_cond, kw]}, m, a) when kind in [:if, :unless] and is_list(kw),
+    do: leaf_values(Keyword.get(kw, :do), m, a) ++ leaf_values(Keyword.get(kw, :else), m, a)
+
+  defp leaf_values({:||, _, [x, y]}, m, a), do: leaf_values(x, m, a) ++ leaf_values(y, m, a)
+
+  defp leaf_values({:<>, _, [x, y]}, m, a) do
+    case {leaf_values(x, m, a), leaf_values(y, m, a)} do
+      {[l], [r]} when is_binary(l) and is_binary(r) -> [l <> r]
+      _ -> [:unknown]
+    end
+  end
+
+  defp leaf_values({:@, _, [{n, _, _}]}, m, a) do
+    case Map.get(a, {m, ElixirSource.str(n)}) do
+      [_ | _] = vs -> vs
+      _ -> [:unknown]
+    end
+  end
+
+  defp leaf_values({x, y}, _m, _a), do: [{:tuple, [x, y]}]
+  defp leaf_values({:{}, _, es}, _m, _a) when is_list(es), do: [{:tuple, es}]
+  defp leaf_values(_, _m, _a), do: [:unknown]
+
+  defp branch({:->, _, [_, body]}, m, a), do: leaf_values(body, m, a)
+  defp branch(_, _m, _a), do: [:unknown]
+
+  # The part of a value a pattern gives the variable.
+  defp project(v, {name, _, ctx}, name, _m, _a) when is_atom(ctx), do: [v]
+
+  defp project({:tuple, es}, lhs, name, m, a) do
+    pats =
+      case lhs do
+        {x, y} -> [x, y]
+        {:{}, _, ps} when is_list(ps) -> ps
+        _ -> nil
+      end
+
+    case pats && Enum.find_index(pats, &binds?(&1, name)) do
+      i when is_integer(i) and length(pats) == length(es) ->
+        es |> Enum.at(i) |> leaf_values(m, a) |> Enum.flat_map(&project(&1, Enum.at(pats, i), name, m, a))
+
+      _ ->
+        [:unknown]
+    end
+  end
+
+  defp project(_v, _lhs, _name, _m, _a), do: [:unknown]
+
+  defp binds?(lhs, name) do
+    {_, hit} =
+      Macro.prewalk(lhs, false, fn
+        {^name, _, ctx} = node, _ when is_atom(ctx) -> {node, true}
+        node, acc -> {node, acc}
+      end)
+
+    hit
+  end
+
+  # String literals, never the fragments of an interpolated string.
+  defp strings(ast) do
+    {_, found} =
+      Macro.prewalk(ast, [], fn
+        {:<<>>, _, _}, acc -> {nil, acc}
+        s, acc when is_binary(s) -> {s, [s | acc]}
+        node, acc -> {node, acc}
+      end)
+
+    Enum.reverse(found)
   end
 
   defp lookup(defs, module, name, arity) do

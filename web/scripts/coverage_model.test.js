@@ -27,3 +27,12 @@ test('event and http rows show sends and requests linked', () => {
   assert.match(html, /events<\/td><td>—<\/td><td>278 of 288 sends \(97%\)<br><small>dynamic 2 · unlinked 8<\/small><\/td><td>96% of handle_event clauses/);
   assert.match(html, /54 of 101 requests linked to a route \(53%\)<br><small>no path 8/);
 });
+
+test('dynamic calls and outside services get their own counts', () => {
+  const html = coverageHTML([
+    {repo: 'breakdown-admin', language: 'elixir', files_extracted: 900, files_tracked: 900, call_sites: 40000, in_repo: 9000, external: 30000, unresolved: 226, dynamic: 490, functions: 10, functions_linked: 9},
+    {repo: 'breakdown-admin', language: 'http', files_extracted: 0, files_tracked: 0, http_refs: 1, http_linked: 0, http_external: 34},
+  ]);
+  assert.match(html, /external 30,000 · unresolved 226 · dynamic 490/);
+  assert.match(html, /0 of 1 requests linked to a route \(0%\)<br><small>external 34<\/small>/);
+});

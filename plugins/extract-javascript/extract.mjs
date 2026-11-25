@@ -8,7 +8,7 @@ import {createRequire} from 'node:module';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 
-export const VERSION = '0.3.0';
+export const VERSION = '0.5.0';
 // The compiler version every machine must run: a different one could resolve
 // differently and change the map.
 export const TYPESCRIPT_VERSION = '6.0.3';
@@ -410,6 +410,10 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
   // LiveView hooks: the names each hook object is registered under, and
   // the pushEvent calls inside hook objects.
   const hooks = {registry: new Map(), pushes: []};
+  // Values from packages (decision 16): resolved calls by target function
+  // (for one level of parameters), and the unresolved member calls to
+  // re-check once a program's files are walked.
+  const taint = {callers: new Map(), pending: [], dropped: new Set(), memo: new Map(), memoParams: new Map()};
   const stat = (lang) => { if (!stats.has(lang)) stats.set(lang, {language: lang, call_sites: 0, in_repo: 0, dispatch: 0, external: 0, unresolved: 0, refs: 0, not_extracted: 0}); return stats.get(lang); };
   const extracted = new Set(files.filter(f => !hidden.has(fs.realpathSync.native(path.join(rootReal, f)))));
   for (const {file} of deep) extracted.add(file);
@@ -444,12 +448,24 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
         notes.push({kind: 'parse_error', file, message: where + (d ? ts.flattenDiagnosticMessageText(d.messageText, ' ') : 'not read')});
         continue;
       }
-      walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat, http, hooks});
+      walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat, http, hooks, taint});
     }
+    // A call on a value that comes from a package is a call into that
+    // package: external, not unresolved.
+    for (const p of taint.pending) {
+      if (!tainted(ts, K, checker, p.expr, taint, 0, new Set(), true)) continue;
+      p.s.unresolved--;
+      p.s.external++;
+      taint.dropped.add(p.call);
+    }
+    taint.pending = [];
+    taint.callers = new Map();
+    taint.memo = new Map();
+    taint.memoParams = new Map();
   }
 
   for (const {file, sf} of deep) {
-    walkFile({ts, K, N, sf, file, lang: languageOf(file), repo, checker: null, relOf: null, extracted, modules, functions, calls, stat, http, hooks});
+    walkFile({ts, K, N, sf, file, lang: languageOf(file), repo, checker: null, relOf: null, extracted, modules, functions, calls, stat, http, hooks, taint});
   }
 
   // One level of wrapper: a call to api("GET", "/dial/me") is a request
@@ -496,7 +512,7 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
     for (const k of keys) { const x = k(a), y = k(b); if (x < y) return -1; if (x > y) return 1; }
     return 0;
   };
-  const uniqueCalls = [...new Map(calls.map(c => [JSON.stringify(c), c])).values()];
+  const uniqueCalls = [...new Map(calls.filter(c => !taint.dropped.has(c)).map(c => [JSON.stringify(c), c])).values()];
   return {
     facts_version: 3,
     producer: {name: 'extract-javascript', version: VERSION, call_precision: 'heuristic'},
@@ -568,7 +584,7 @@ function fnIndex(ts, N, sf, moduleId) {
   return out;
 }
 
-function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat, http, hooks}) {
+function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, modules, functions, calls, stat, http, hooks, taint}) {
   const moduleId = `${repo}:${file}`;
   modules.push({id: moduleId, name: file, namespace: file.replace(/\.[^./]+$/, '').split('/'), file, line: 1, language: lang});
   const idx = fnIndex(ts, N, sf, moduleId);
@@ -646,6 +662,10 @@ function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, mo
     if (checker && !jsx && node.kind === K.CallExpression && isFetch(K, callee)) {
       fetchRef({ts, K, N, checker, node, encl, from, file, line, http});
     }
+    if (r.to && r.target && node.kind === K.CallExpression) {
+      if (!taint.callers.has(r.target)) taint.callers.set(r.target, []);
+      taint.callers.get(r.target).push(node.arguments);
+    }
     if (r.to) {
       // Every resolved call, with or without arguments: a wrapper's
       // defaulted parameter is still a request from the caller.
@@ -668,7 +688,11 @@ function walkFile({ts, K, N, sf, file, lang, repo, checker, relOf, extracted, mo
     if (r.outcome === 'external') { s.external++; continue; }
     if (r.outcome === 'not_extracted') { s.not_extracted++; continue; }
     s.unresolved++;
-    calls.push({from, target: {name: calleeName(K, N, callee), arity}, kind: 'unresolved', file, line});
+    const call = {from, target: {name: calleeName(K, N, callee), arity}, kind: 'unresolved', file, line};
+    calls.push(call);
+    if (checker && callee.kind === K.PropertyAccessExpression && callee.expression.kind !== K.ThisKeyword) {
+      taint.pending.push({s, call, expr: callee.expression});
+    }
   }
 
   if (topUsed) {
@@ -988,7 +1012,91 @@ function resolve({ts, K, N, node, callee, jsx, checker, relOf, extracted, repo})
   const entry = idx.byNode.get(target);
   if (!entry) return {outcome: 'unresolved'};
   const direct = (callee.kind === K.Identifier && stableBinding(ts, K, checker, callee)) || jsx || N.isFn(callee) || isNamespaceMember(ts, K, callee, checker);
-  return {to: entry.id, precision: direct ? 'precise' : 'heuristic'};
+  return {to: entry.id, precision: direct ? 'precise' : 'heuristic', target};
+}
+
+// tainted: the value comes from a package (decision 16). Taint starts at an
+// identifier imported from a bare specifier (or required) and follows
+// await, parentheses and casts, member access, calls and `new` on a
+// tainted value, a declaration's initializer, destructuring, the parameters
+// of a callback handed to a tainted call (page.on('response', r => …)),
+// and one level of parameters: every in-repo call of the function passes a
+// tainted value there. A standard-library value never taints: items.forEach
+// on a project array stays the project's.
+//
+// Results are cached per node (and per whether parameters may be followed)
+// for the program; a node already being evaluated answers false only to
+// break a real cycle (round 1, H1-M5).
+function tainted(ts, K, checker, n, taint, depth, onStack, params) {
+  if (!n || depth > 64) return false;
+  const memo = params ? taint.memoParams : taint.memo;
+  if (memo.has(n)) return memo.get(n);
+  if (onStack.has(n)) return false;
+  onStack.add(n);
+  const result = evaluate();
+  onStack.delete(n);
+  memo.set(n, result);
+  return result;
+
+  function evaluate() {
+  // require('pkg') with a bare specifier is a package value too.
+  if (n.kind === K.CallExpression && n.expression.kind === K.Identifier && n.expression.text === 'require' &&
+      n.arguments[0]?.kind === K.StringLiteral && !/^[./]/.test(n.arguments[0].text)) return true;
+  switch (n.kind) {
+    case K.ParenthesizedExpression: case K.AsExpression: case K.NonNullExpression:
+    case K.AwaitExpression: case K.TypeAssertionExpression: case K.SatisfiesExpression:
+    case K.PropertyAccessExpression: case K.ElementAccessExpression:
+    case K.CallExpression: case K.NewExpression:
+      return next(n.expression);
+    case K.Identifier: {
+      if (importedFromPackage(ts, K, n, checker)) return true;
+      let sym;
+      try { sym = checker.getSymbolAtLocation(n); } catch { return false; }
+      const d = sym?.valueDeclaration ?? sym?.declarations?.[0];
+      if (!d) return false;
+      return declTainted(d);
+    }
+    default:
+      return false;
+  }
+  }
+  function next(x, p = params) { return tainted(ts, K, checker, x, taint, depth + 1, onStack, p); }
+  function declTainted(d) {
+    if (d.kind === K.VariableDeclaration) return !!d.initializer && next(d.initializer);
+    if (d.kind === K.BindingElement) {
+      let p = d.parent;
+      while (p && (p.kind === K.ObjectBindingPattern || p.kind === K.ArrayBindingPattern || p.kind === K.BindingElement)) p = p.parent;
+      if (p?.kind === K.VariableDeclaration) return !!p.initializer && next(p.initializer);
+      if (p?.kind === K.Parameter) return paramTainted(p);
+      return false;
+    }
+    if (d.kind === K.Parameter) return paramTainted(d);
+    return false;
+  }
+  function paramTainted(param) {
+    const fn = param.parent;
+    const i = fn.parameters?.indexOf(param) ?? -1;
+    if (i < 0) return false;
+    // A callback handed to a method of a package *value*
+    // (page.on('response', r => ...)), never to a function the package
+    // exports itself (_.each(items, i => ...)), whose callbacks take the
+    // caller's own values (round 1, H1-M6; decision 28).
+    const call = fn.parent;
+    if ((fn.kind === K.ArrowFunction || fn.kind === K.FunctionExpression) && call?.kind === K.CallExpression &&
+        call.arguments.includes(fn) && call.expression.kind === K.PropertyAccessExpression) {
+      const owner = call.expression.expression;
+      // The package's own namespace, reached through members only
+      // (_.each, _.fp.map, Rx.operators.map): its functions, not a value.
+      let root = owner;
+      while (root.kind === K.PropertyAccessExpression) root = root.expression;
+      const exported = root.kind === K.Identifier && importedFromPackage(ts, K, root, checker);
+      if (!exported && next(owner)) return true;
+    }
+    if (!params) return false;
+    // One level: every in-repo call passes a package value here.
+    const callers = taint.callers.get(fn) ?? [];
+    return callers.length > 0 && callers.every(args => args[i] && next(args[i], false));
+  }
 }
 
 const isClassLike = (K, n) => n.kind === K.ClassDeclaration || n.kind === K.ClassExpression;

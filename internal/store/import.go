@@ -393,9 +393,11 @@ func (im *importer) calls(d *facts.Doc, idx *targetIndex) error {
 // resolvable reports whether a call of this kind may be resolved by name.
 // dynamic and js_* calls lack lexical binding; unresolved is a producer's
 // explicit "no target" (SCIP: call syntax the indexer gave no symbol), so a
-// same-named local function must not become its precise callee.
+// same-named local function must not become its precise callee; external
+// is a call into a library or a use-generated function, never a project
+// function of the same name.
 func resolvable(kind string) bool {
-	return kind != "dynamic" && kind != "unresolved" && !strings.HasPrefix(kind, "js_")
+	return kind != "dynamic" && kind != "unresolved" && kind != "external" && !strings.HasPrefix(kind, "js_")
 }
 
 func (im *importer) callerModule(fnID string) string {

@@ -66,7 +66,7 @@ defmodule Cartographer.ElixirExtractTest do
 
       assert doc.producer == %{
                name: "extract-elixir",
-               version: "0.3.0",
+               version: "0.5.0",
                call_precision: "precise"
              }
 
@@ -145,8 +145,9 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{target: %{module: "Kernel"}, kind: "import"}] =
                calls_from(doc, "Shop.Orders.label/1", "to_string")
 
-      # Imports from dependencies cannot be attributed: no module.
-      assert [%{target: t, kind: "local_or_import"}] =
+      # A dependency's function is external. Its scope has two library
+      # owners (use Ecto.Schema, import Ecto.Query), so none is named.
+      assert [%{target: t, kind: "external"}] =
                calls_from(doc, "Shop.Orders.Order.recent_query/0", "from")
 
       refute Map.has_key?(t, :module)
@@ -380,6 +381,220 @@ defmodule Cartographer.ElixirExtractTest do
       assert %{not_extracted: 1} = stats(doc)
       assert skips(web("rosearch")) == [{19, "not a literal path"}]
       refute Map.has_key?(doc, :routes)
+    end
+
+    test "a long pipe chain records each call once" do
+      # Raw walker output, before the document de-duplicates: one record
+      # per call site, not 2^n.
+      steps = Enum.map_join(1..12, "\n", &"    |> assign(:k#{&1}, #{&1})")
+      text = "defmodule P do\n  def m(s) do\n    s\n#{steps}\n  end\nend\n"
+      parsed = Cartographer.ElixirSource.parse(Cartographer.ElixirSource.new(), text, "lib/p.ex", "fixture")
+      assert Enum.count(parsed.calls, &(&1.name == "assign")) == 12
+    end
+
+    test "a request's base is the host behind its base_url literal" do
+      doc =
+        extract(~S"""
+        defmodule Pay do
+          @api "https://api.stripe.com/v1"
+          def charge(id), do: post("/charges/#{id}")
+          defp post(path), do: Req.post(Req.new(base_url: @api), url: path)
+        end
+        defmodule Llm do
+          def ask(opts), do: call("/chat/completions", opts)
+          defp call(path, opts), do: Req.post(Req.new(base_url: base_url(opts)), url: path)
+          defp base_url(opts), do: Keyword.get(opts, :base_url, "https://api.openai.com/v1")
+        end
+        defmodule Bank do
+          def list(kind), do: get("/accounts", kind)
+          defp get(path, kind) do
+            {base, _key} =
+              case kind do
+                :a -> {"https://api.stripe.com/v1", :k1}
+                :b -> {"https://api.mercury.com/api/v1", :k2}
+              end
+            Req.get(Req.new(base_url: base), url: path)
+          end
+        end
+        defmodule Conf do
+          def get_it(id), do: get("/things/#{id}")
+          defp get(path), do: Req.get(Req.new(base_url: Conf.Config.base_url(:x)), url: path)
+        end
+        """)
+
+      refs = Map.new(doc.http_refs, &{&1.from, {&1.base, &1.path}})
+      assert refs["fixture:Pay.charge/1"] == {"https://api.stripe.com", "/v1/charges/:p1"}
+      assert refs["fixture:Llm.ask/1"] == {"https://api.openai.com", "/v1/chat/completions"}
+      # Two hosts: the first, and no path joined.
+      assert refs["fixture:Bank.list/1"] == {"https://api.stripe.com", "/accounts"}
+      # Nothing literal: the module, as before.
+      assert refs["fixture:Conf.get_it/1"] == {"Conf", "/things/:p1"}
+    end
+
+    # Round 1, H1-M3 and H1-M4.
+    test "a base is read per function, never from interpolation or unrelated literals" do
+      doc =
+        extract(~S"""
+        defmodule Mixed do
+          def pay(id), do: stripe("/charges/#{id}")
+          def check(id), do: admin("/api/check/#{id}")
+          defp stripe(path), do: Req.post(Req.new(base_url: "https://api.stripe.com/v1"), url: path)
+          defp admin(path), do: Req.post(Req.new(base_url: "http://admin.breakdown.svc:4000"), url: path)
+        end
+        defmodule Interp do
+          def go(ns), do: get("/x", ns)
+          defp get(path, ns), do: Req.get(Req.new(base_url: "http://admin.#{ns}.svc:4000"), url: path)
+        end
+        defmodule Header do
+          def go, do: get("/check")
+          defp get(path) do
+            base = Application.get_env(:app, :url)
+            Req.get(Req.new(base_url: base, headers: [{"referer", "https://docs.example.com/help"}]), url: path)
+          end
+        end
+        defmodule Direct do
+          @api "https://api.stripe.com/v1"
+          def charges, do: Req.get!(base_url: @api, url: "/charges")
+          def refunds, do: Req.post(Req.new(base_url: "https://api.stripe.com/v1"), url: "/refunds")
+        end
+        """)
+
+      refs = Map.new(doc.http_refs, &{&1.from, {&1.base, &1.path}})
+      assert refs["fixture:Mixed.pay/1"] == {"https://api.stripe.com", "/v1/charges/:p1"}
+      assert refs["fixture:Mixed.check/1"] == {"http://admin.breakdown.svc:4000", "/api/check/:p1"}
+      assert refs["fixture:Interp.go/1"] == {"Interp", "/x"}
+      assert refs["fixture:Header.go/0"] == {"Header", "/check"}
+      assert refs["fixture:Direct.charges/0"] == {"https://api.stripe.com", "/v1/charges"}
+      assert refs["fixture:Direct.refunds/0"] == {"https://api.stripe.com", "/v1/refunds"}
+    end
+
+    # A Req built in a helper: the module's one host.
+    test "a function with no base_url of its own takes its module's one host" do
+      doc =
+        extract(~S"""
+        defmodule Helper do
+          @api "https://api.stripe.com/v1"
+          def charge(id), do: post("/charges/#{id}")
+          defp post(path), do: Req.post(client(), url: path)
+          defp client, do: Req.new(base_url: @api)
+        end
+        """)
+
+      assert [%{base: "https://api.stripe.com", path: "/v1/charges/:p1"}] = doc.http_refs
+    end
+
+    # Round 2, H2-M7: a function's own non-literal base never takes the
+    # module's host.
+    test "a base that isn't a literal never takes the module's one host" do
+      doc =
+        extract(~S"""
+        defmodule Two do
+          @stripe "https://api.stripe.com/v1"
+          def pay(id), do: stripe("/charges/#{id}")
+          def check(id), do: admin("/api/check/#{id}")
+          def ping(ns), do: interp("/ping", ns)
+          defp stripe(path), do: Req.post(Req.new(base_url: @stripe), url: path)
+          defp admin(path), do: Req.get(Req.new(base_url: Application.fetch_env!(:app, :admin_url)), url: path)
+          defp interp(path, ns), do: Req.get(Req.new(base_url: "http://admin.#{ns}.svc:4000"), url: path)
+          def either(kind), do: mixed("/e", kind)
+          def param(url), do: from_param("/p", url)
+          def lit_case, do: lc("/c")
+          def concat, do: cc("/k")
+          def pair, do: tp("/t")
+          def by_param(base), do: bp("/bp", base)
+          def by_case(x), do: bc("/bc", x)
+          def by_with(x), do: bw("/bw", x)
+          def by_fn(base), do: bf("/bf", base)
+
+          defp bp(path, base) do
+            Req.get(Req.new(base_url: base), url: path)
+            base = "https://api.stripe.com/v1"
+            Req.get(Req.new(base_url: base), url: path)
+          end
+
+          defp bc(path, x) do
+            base = "https://api.stripe.com/v1"
+            case x do
+              {:ok, base} -> Req.get(Req.new(base_url: base, headers: [{"a", "https://api.stripe.com"}]), url: path)
+            end
+          end
+
+          defp bw(path, x) do
+            with {:ok, base} <- x, do: Req.get(Req.new(base_url: base, headers: [{"a", "https://api.stripe.com"}]), url: path)
+          end
+
+          defp bf(path, base) do
+            f = fn -> base = "https://api.stripe.com/v1"; base end
+            _ = f
+            Req.get(Req.new(base_url: base), url: path)
+          end
+
+          defp from_param(path, url) do
+            base = if url, do: url, else: "https://api.stripe.com/v1"
+            Req.get(Req.new(base_url: base), url: path)
+          end
+
+          defp lc(path) do
+            base =
+              case Application.get_env(:app, :mode) do
+                :live -> "https://api.stripe.com/v1"
+                _ -> "https://api.stripe.com/v1"
+              end
+
+            Req.get(Req.new(base_url: base), url: path)
+          end
+
+          defp cc(path) do
+            base = "https://api.stripe.com" <> "/v1"
+            Req.get(Req.new(base_url: base), url: path)
+          end
+
+          defp tp(path) do
+            {base, _key} = {"https://api.stripe.com/v1", Application.fetch_env!(:app, :key)}
+            Req.get(Req.new(base_url: base), url: path)
+          end
+
+          defp mixed(path, kind) do
+            base =
+              case kind do
+                :pay -> "https://api.stripe.com/v1"
+                _ -> Application.fetch_env!(:app, :admin_url)
+              end
+
+            Req.get(Req.new(base_url: base), url: path)
+          end
+        end
+        """)
+
+      refs = Map.new(doc.http_refs, &{&1.from, {&1.base, &1.path}})
+      assert refs["fixture:Two.pay/1"] == {"https://api.stripe.com", "/v1/charges/:p1"}
+      assert refs["fixture:Two.check/1"] == {"Two", "/api/check/:p1"}
+      assert refs["fixture:Two.ping/1"] == {"Two", "/ping"}
+      # A binding with a literal branch and a config branch (H3-m12).
+      assert refs["fixture:Two.either/1"] == {"Two", "/e"}
+      # Decision 31 (H4-m13): a variable branch is unknown; literal-only
+      # branches, literal concatenation and a tuple position are read.
+      assert refs["fixture:Two.param/1"] == {"Two", "/p"}
+      assert refs["fixture:Two.lit_case/0"] == {"https://api.stripe.com", "/v1/c"}
+      assert refs["fixture:Two.concat/0"] == {"https://api.stripe.com", "/v1/k"}
+      assert refs["fixture:Two.pair/0"] == {"https://api.stripe.com", "/v1/t"}
+      # H5-M11: a name bound other than by a top-level `=` has no base.
+      for f <- ~w(by_param/1 by_case/1 by_with/1 by_fn/1) do
+        assert {"Two", _} = refs["fixture:Two.#{f}"], f
+      end
+    end
+
+    # Decision 26.
+    test "a loopback base_url sets no base" do
+      doc =
+        extract(~S"""
+        defmodule Local do
+          def go, do: get("/check")
+          defp get(path), do: Req.get(Req.new(base_url: "http://localhost:4000/api/v1"), url: path)
+        end
+        """)
+
+      assert [%{base: "Local", path: "/check"}] = doc.http_refs
     end
 
     test "a url: that reaches Req.new through a pipe is counted, not extracted" do
@@ -934,4 +1149,363 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{kind: "local_or_import"}] = from(doc, "Dyn.run/1", "length")
     end
   end
+
+  describe "external calls (library imports, use-generated functions)" do
+    test "a library import is external; one owner is named, several are not" do
+      doc =
+        extract(~S"""
+        defmodule One do
+          import Ecto.Query
+          def q, do: from(x in "t", select: x)
+        end
+        defmodule Two do
+          use Phoenix.LiveView
+          import Phoenix.HTML
+          def m(s), do: assign(s, :a, 1)
+        end
+        defmodule Bare do
+          def n(x), do: not_anywhere(x)
+        end
+        """)
+
+      assert [%{target: %{module: "Ecto.Query"}, kind: "external"}] = from(doc, "One.q/0", "from")
+      assert [%{target: t, kind: "external"}] = from(doc, "Two.m/1", "assign")
+      refute Map.has_key?(t, :module)
+      # No library in scope: still unresolved.
+      assert [%{kind: "local_or_import"}] = from(doc, "Bare.n/1", "not_anywhere")
+      assert doc.stats |> hd() |> Map.fetch!(:external) >= 2
+    end
+
+    test "bitstring type modifiers are not calls" do
+      doc =
+        extract(~S"""
+        defmodule Bits do
+          import Bitwise
+          def take(<<id::binary-size(32), rest::binary>>), do: {id, rest, byte_size(rest)}
+          def head(n, bin), do: (<<h::binary-size(len(n)), _::binary>> = bin; h)
+          defp len(n), do: n
+        end
+        """)
+
+      assert from(doc, "Bits.take/1", "size") == []
+      assert [%{kind: "import"}] = from(doc, "Bits.take/1", "byte_size")
+      # A size expression is code (H1-n4).
+      assert [_] = from(doc, "Bits.head/2", "len")
+    end
+
+    # Round 1, H1-M2: a standalone template sees its module's `use`s.
+    test "a template's library call has the module's uses as owners" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/page_html.ex" => ~S"""
+              defmodule PageHTML do
+                use Phoenix.Component
+                import Phoenix.HTML
+                embed_templates "page_html/*"
+              end
+              """,
+              "lib/page_html/home.html.heex" => ~S"""
+              <div>{lib_only(1)}</div>
+              """
+            })
+        )
+
+      [call] = Enum.filter(doc.calls, &(&1.target.name == "lib_only"))
+      assert call.kind == "external"
+      refute Map.has_key?(call.target, :module)
+    end
+
+    test "a name a project module defines publicly is never external" do
+      doc =
+        extract(~S"""
+        defmodule Mine do
+          def count(x), do: x
+        end
+        defmodule Uses do
+          import Ecto.Query
+          def c(x), do: count(x)
+        end
+        """)
+
+      assert [%{kind: "local_or_import"}] = from(doc, "Uses.c/1", "count")
+    end
+
+    test "case templates expand: helpers resolve, library calls name no wrong owner" do
+      doc =
+        extract(~S"""
+        defmodule App.ConnCase do
+          use ExUnit.CaseTemplate
+          using do
+            quote do
+              import Plug.Conn
+              import App.ConnCase
+            end
+          end
+          def log_in_user(conn, user), do: {conn, user}
+        end
+        defmodule App.PageTest do
+          use App.ConnCase
+          def t(c), do: {log_in_user(c, 1), put_req_header(c, "a", "b")}
+        end
+        """)
+
+      assert [%{target: %{module: "App.ConnCase"}, kind: "import"}] =
+               from(doc, "App.PageTest.t/1", "log_in_user")
+
+      # Owners: Plug.Conn (imported) and ExUnit.Case (the template's own use).
+      assert [%{target: t, kind: "external"}] = from(doc, "App.PageTest.t/1", "put_req_header")
+      refute Map.has_key?(t, :module)
+    end
+
+    test "a project use the walk can't expand names no owner" do
+      doc =
+        extract(~S"""
+        defmodule App.Opaque do
+          defmacro __using__(opts), do: build(opts)
+          def build(_), do: nil
+        end
+        defmodule User do
+          use App.Opaque
+          import Ecto.Query
+          def q, do: from(x in "t", select: x)
+        end
+        """)
+
+      assert [%{target: t, kind: "external"}] = from(doc, "User.q/0", "from")
+      refute Map.has_key?(t, :module)
+    end
+
+    test "functions a library's use generated are external, keeping their target" do
+      # One module per file, as in a real repo: a dynamic_definition note
+      # covers the modules of its file.
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/repo.ex" => "defmodule App.Repo do\n  use Ecto.Repo, otp_app: :app\nend\n",
+              "lib/plain.ex" => "defmodule App.Plain do\n  def here, do: 1\nend\n",
+              "lib/settings.ex" =>
+                "defmodule App.Settings do\n  use Ecto.Schema\n  for n <- [:a, :b] do\n    def unquote(n)(), do: 1\n  end\nend\n",
+              "lib/worker.ex" =>
+                "defmodule App.Worker do\n  use Oban.Worker\n  def go(x), do: {App.Repo.get_by(x, id: 1), App.Plain.gone(), App.Settings.a(), new(x)}\nend\n"
+            })
+        )
+
+      assert [%{target: %{module: "App.Repo", name: "get_by"}, kind: "external"}] =
+               from(doc, "App.Worker.go/1", "get_by")
+
+      assert [%{target: %{module: "App.Plain"}, kind: "remote"}] = from(doc, "App.Worker.go/1", "gone")
+      assert [%{target: %{module: "App.Settings"}, kind: "remote"}] = from(doc, "App.Worker.go/1", "a")
+      # The same generated function called bare inside the using module.
+      assert [%{target: %{module: "Oban.Worker"}, kind: "external"}] =
+               from(doc, "App.Worker.go/1", "new")
+    end
+
+    # Round 2, H2-M8: the definitions a `use` applies, from the expansion.
+    test "a quote's definitions are the using module's, through dispatch, helpers and defaults" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/app_web.ex" => ~S"""
+              defmodule AppWeb do
+                def live_view do
+                  quote do
+                    use Phoenix.LiveView
+                    def ok(socket), do: {:ok, socket}
+                    unquote(helpers())
+                  end
+                end
+
+                defp helpers do
+                  quote do
+                    def touch(x, opts \\ []), do: {x, opts}
+                    defdelegate fmt(x), to: App.Format
+                  end
+                end
+
+                defmacro __using__(which) when is_atom(which), do: apply(__MODULE__, which, [])
+              end
+              """,
+              "lib/page.ex" => ~S"""
+              defmodule App.Page do
+                use AppWeb, :live_view
+                import Ecto.Changeset
+                def mount(_, _, s), do: {ok(s), touch(s), fmt(s), cast(s, %{}, [])}
+              end
+              """,
+              "lib/other.ex" => ~S"""
+              defmodule App.Other do
+                def go(x), do: App.Page.touch(x)
+              end
+              """
+            })
+        )
+
+      for name <- ~w(ok touch fmt) do
+        assert [%{kind: "local_or_import"}] = from(doc, "App.Page.mount/3", name), name
+      end
+
+      assert [%{kind: "external"}] = from(doc, "App.Page.mount/3", "cast")
+      assert [%{kind: "remote"}] = from(doc, "App.Other.go/1", "touch")
+    end
+
+    # Round 3, H3-M9: a definition the reader can't place marks the
+    # module dynamic rather than being ignored.
+    test "a quoted def inside if or for keeps the using module's calls unresolved" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/cond.ex" => ~S"""
+              defmodule App.Cond do
+                defmacro __using__(_) do
+                  quote do
+                    if true do
+                      def touch(x), do: x
+                    end
+                  end
+                end
+              end
+              """,
+              "lib/loop.ex" => ~S"""
+              defmodule App.Loop do
+                defmacro __using__(_) do
+                  quote do
+                    for n <- [:a, :b], do: def unquote(n)(), do: 1
+                  end
+                end
+              end
+              """,
+              "lib/user.ex" => ~S"""
+              defmodule App.User do
+                use App.Cond
+                use App.Loop
+                import Ecto.Changeset
+                def go(x), do: {touch(x), a()}
+              end
+              """
+            })
+        )
+
+      assert [%{kind: "local_or_import"}] = from(doc, "App.User.go/1", "touch")
+      assert [%{kind: "local_or_import"}] = from(doc, "App.User.go/1", "a")
+    end
+
+    test "a use chain past the expansion depth marks the module dynamic" do
+      chain =
+        for i <- 1..4, into: %{} do
+          next = if i < 4, do: "use App.U#{i + 1}", else: "def touch(x), do: x"
+          {"lib/u#{i}.ex",
+           "defmodule App.U#{i} do\n  defmacro __using__(_) do\n    quote do\n      #{next}\n    end\n  end\nend\n"}
+        end
+
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(
+              Map.put(chain, "lib/deep.ex", "defmodule App.Deep do\n  use App.U1\n  import Ecto.Changeset\n  def go(x), do: touch(x)\nend\n")
+            )
+        )
+
+      assert [%{kind: "local_or_import"}] = from(doc, "App.Deep.go/1", "touch")
+    end
+
+    # Round 4, H4-M10 and H4-n10.
+    test "a private function a use defines is the caller's own; defimpl in a quote isn't a def" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/priv.ex" => ~S"""
+              defmodule App.Priv do
+                defmacro __using__(_) do
+                  quote do
+                    defp touch(x), do: x
+                    defimpl String.Chars do
+                      def to_string(_), do: "x"
+                    end
+                  end
+                end
+              end
+              """,
+              "lib/user.ex" => ~S"""
+              defmodule App.User do
+                use App.Priv
+                import Ecto.Changeset
+                def go(x), do: {touch(x), cast(x, %{}, [])}
+              end
+              """
+            })
+        )
+
+      assert [%{kind: "local_or_import"}] = from(doc, "App.User.go/1", "touch")
+      assert [%{kind: "external"}] = from(doc, "App.User.go/1", "cast")
+    end
+
+    # Round 1, H1-m1 and H1-m2.
+    test "owners respect only:, project imports that pass a library on, and captures" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/only.ex" =>
+                "defmodule App.Only do\n  import Ecto.Query, only: [from: 2]\n  import Ecto.Changeset\n  def c(x), do: cast(x, %{}, [])\nend\n",
+              "lib/gettext.ex" => "defmodule App.Gettext do\n  use Gettext.Backend, otp_app: :app\nend\n",
+              "lib/view.ex" =>
+                "defmodule App.View do\n  import Phoenix.Component\n  import App.Gettext\n  def t, do: gettext(\"hi\")\nend\n",
+              "lib/repo.ex" => "defmodule App.Repo do\n  use Ecto.Repo, otp_app: :app\nend\n",
+              "lib/w.ex" =>
+                "defmodule App.W do\n  def go(x), do: {&App.Repo.insert/1, apply(App.Repo, :get, [x, 1])}\nend\n"
+            })
+        )
+
+      assert [%{kind: "external", target: %{module: "Ecto.Changeset"}}] = from(doc, "App.Only.c/1", "cast")
+      assert [%{kind: "external", target: t}] = from(doc, "App.View.t/0", "gettext")
+      refute Map.has_key?(t, :module)
+      assert [%{kind: "capture", target: %{module: "App.Repo"}}] = from(doc, "App.W.go/1", "insert")
+      assert [%{kind: "apply", target: %{module: "App.Repo"}}] = from(doc, "App.W.go/1", "get")
+
+      stats = Enum.find(doc.stats, &(&1.language == "elixir"))
+      assert stats.unresolved == 0
+    end
+
+    # Round 1, H1-M1: functions the inventory can't list stay unresolved.
+    test "a function defined at runtime or in a project quote is never external" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/settings.ex" =>
+                "defmodule App.Settings do\n  use Ecto.Schema\n  for n <- [:a, :b] do\n    def unquote(n)(), do: 1\n  end\n  def both, do: {a(), b()}\nend\n",
+              "lib/reader.ex" =>
+                "defmodule App.Reader do\n  import Ecto.Query\n  import App.Settings\n  def r, do: a()\nend\n",
+              "lib/helper.ex" =>
+                "defmodule App.Helper do\n  defmacro __using__(_) do\n    quote do\n      use Ecto.Schema\n      def touch(x), do: x\n    end\n  end\nend\n",
+              "lib/thing.ex" =>
+                "defmodule App.Thing do\n  use App.Helper\n  import Ecto.Changeset\n  def go(x), do: {touch(x), cast(x, %{}, [])}\nend\n",
+              "lib/caller.ex" =>
+                "defmodule App.Caller do\n  def go(x), do: App.Thing.touch(x)\nend\n"
+            })
+        )
+
+      assert [%{kind: "local_or_import"}] = from(doc, "App.Settings.both/0", "a")
+      assert [%{kind: "local_or_import"}] = from(doc, "App.Reader.r/0", "a")
+      assert [%{kind: "local_or_import"}] = from(doc, "App.Thing.go/1", "touch")
+      assert [%{kind: "remote"}] = from(doc, "App.Caller.go/1", "touch")
+      # The helper's quoted defs don't hide the module's library calls.
+      assert [%{kind: "external"}] = from(doc, "App.Thing.go/1", "cast")
+    end
+  end
+
 end

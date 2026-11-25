@@ -9,7 +9,7 @@ defmodule Cartographer.ElixirFacts do
 
   alias Cartographer.{ElixirHTTP, ElixirSource}
 
-  @version "0.3.0"
+  @version "0.5.0"
   @public ~w(def defmacro defdelegate defguard)
   # defguard defines a macro; defdelegate a function.
   @macro_kinds ~w(defmacro defmacrop defguard defguardp)
@@ -79,13 +79,13 @@ defmodule Cartographer.ElixirFacts do
 
     {modules, module_notes} = modules(parsed.modules, repo)
     {functions, clauses, function_notes} = functions(parsed.clauses, repo)
-    {calls, classified, defined} = calls(parsed.calls, functions)
+    {calls, classified, defined, marked} = calls(parsed, functions, helpers)
     {routes, route_notes} = routes(parsed.routes, functions, repo)
-    {http_refs, http_skipped} = ElixirHTTP.refs(parsed.clauses, classified, functions)
+    {http_refs, http_skipped} = ElixirHTTP.refs(parsed.clauses, classified, functions, parsed.attrs)
     browser = events(parsed, classified, functions, repo)
 
     stats =
-      calls
+      marked
       |> call_stats(defined, MapSet.new(modules, & &1.name))
       |> Map.merge(%{
         language: "elixir",
@@ -371,9 +371,12 @@ defmodule Cartographer.ElixirFacts do
 
   # --- calls -----------------------------------------------------------------
 
-  # Returns the output calls, the raw calls with `:target_module` and `:kind`
-  # classified (for the HTTP analysis), and the definitions index.
-  defp calls(raw, functions) do
+  # Returns the output calls (without `ext`), the raw calls classified with
+  # `:target_module`, `:kind` and `:external` (for the HTTP analysis), the
+  # definitions index, and the output calls with `ext` (for stats).
+  defp calls(parsed, functions, helpers) do
+    raw = parsed.calls
+
     defined =
       Enum.reduce(functions, %{}, fn f, acc ->
         [_, module] = String.split(f.module, ":", parts: 2)
@@ -382,10 +385,13 @@ defmodule Cartographer.ElixirFacts do
         Map.update(acc, {module, f.name}, [entry], &[entry | &1])
       end)
 
+    ctx = external_context(parsed, defined, helpers)
+
     classified =
       Enum.map(raw, fn c ->
         {module, kind} = classify(c, defined)
-        %{c | kind: kind} |> Map.put(:target_module, module)
+        {module, kind, ext} = external(c, module, kind, ctx)
+        %{c | kind: kind} |> Map.put(:target_module, module) |> Map.put(:external, ext)
       end)
 
     calls =
@@ -396,12 +402,19 @@ defmodule Cartographer.ElixirFacts do
             do: %{module: c.target_module, name: c.name, arity: c.arity},
             else: %{name: c.name, arity: c.arity}
 
+        # A component call keeps its kind even when it's external
+        # (decision 21): the HEEx and event analysis reads `component`.
         kind =
-          if Map.get(c, :component, false) and c.kind in ~w(local import remote local_or_import),
-            do: "component",
-            else: c.kind
+          cond do
+            Map.get(c, :component, false) and
+                c.kind in ~w(local import remote local_or_import external) ->
+              "component"
 
-        %{from: c.from, target: target, kind: kind, file: c.file, line: c.line}
+            true ->
+              c.kind
+          end
+
+        %{from: c.from, target: target, kind: kind, file: c.file, line: c.line, ext: c.external}
       end)
       |> Enum.uniq()
       |> Enum.sort_by(
@@ -409,8 +422,161 @@ defmodule Cartographer.ElixirFacts do
          &1.kind}
       )
 
-    {calls, classified, defined}
+    # The facts document has no field for the outcome: stats read `ext`
+    # here, and the emitted calls leave it out.
+    {Enum.map(calls, &Map.delete(&1, :ext)), classified, defined, calls}
   end
+
+  # What the external rules need, worked out once per repo.
+  defp external_context(parsed, defined, helpers) do
+    project = MapSet.new(parsed.modules, & &1.name)
+
+    # Functions a project `use` puts in the using module, as the
+    # use-expansion applied them (decision 30): definitions of that module,
+    # one per arity a default allows. A name the walk can't read makes the
+    # module dynamic.
+    quoted = Map.get(parsed, :quoted_defs, [])
+
+    computed =
+      quoted |> Enum.filter(&Map.get(&1, :computed, false)) |> MapSet.new(& &1.module)
+
+    defined =
+      quoted
+      |> Enum.reject(&Map.get(&1, :computed, false))
+      |> Enum.reduce(defined, fn d, acc ->
+        entry = {d.min, d.max, Map.get(d, :public, true), :functions}
+        Map.update(acc, {d.module, d.name}, [entry], &[entry | &1])
+      end)
+
+    # Every {name, arity} some project module defines publicly (decision 15).
+    public =
+      Enum.reduce(defined, MapSet.new(), fn {{_module, name}, entries}, acc ->
+        Enum.reduce(entries, acc, fn {min, max, pub, _}, acc ->
+          if pub, do: Enum.reduce(min..max, acc, &MapSet.put(&2, {name, &1})), else: acc
+        end)
+      end)
+
+    # A project helper the walk could expand (its __using__, a CaseTemplate
+    # `using` block, or Phoenix's dispatch).
+    expandable =
+      helpers
+      |> Enum.filter(fn {_m, h} -> h.using != nil end)
+      |> MapSet.new(fn {m, _} -> m end)
+
+    # Each project module's non-project `use`s (decision 4), and whether it
+    # also uses a project module the walk can't expand (decision 21).
+    uses =
+      Enum.group_by(parsed.uses, & &1.module, & &1.use)
+      |> Map.new(fn {m, us} -> {m, Enum.uniq(us)} end)
+
+    # Modules defined in a file with a dynamic_definition note keep their
+    # missing functions unresolved (decision 21, P1-12).
+    dyn_files =
+      parsed.notes
+      |> Enum.filter(&(&1.kind == "dynamic_definition"))
+      |> MapSet.new(& &1.file)
+
+    dynamic =
+      parsed.modules
+      |> Enum.filter(&MapSet.member?(dyn_files, &1.file))
+      |> MapSet.new(& &1.name)
+      |> MapSet.union(computed)
+
+    %{
+      project: project,
+      public: public,
+      expandable: expandable,
+      uses: uses,
+      dynamic: dynamic,
+      defined: defined
+    }
+  end
+
+  # The library owners of a call's scope: its non-project imports and
+  # non-project `use`s (decision 14). `opaque` when the scope uses a project
+  # module the walk couldn't expand: then no owner is named (decision 21).
+  defp owners(c, ctx) do
+    fa = {c.name, c.arity}
+
+    # Only imports that admit the name (`only:`/`except:`, H1-m1); an entry
+    # the walk couldn't read admits everything.
+    imported =
+      for {m, entry} <- c.imports,
+          m != "Kernel",
+          not is_map(entry) or ElixirSource.imports?(entry, :functions, fa) or
+            ElixirSource.imports?(entry, :macros, fa),
+          do: m
+
+    used = Map.get(c, :uses, [])
+
+    set =
+      (imported ++ used)
+      |> Enum.reject(&MapSet.member?(ctx.project, &1))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    # A project import whose module uses a library may pass that library's
+    # functions on (`import AppWeb.Gettext`): no owner is named then either.
+    opaque =
+      Enum.any?(used, &(MapSet.member?(ctx.project, &1) and not MapSet.member?(ctx.expandable, &1))) or
+        Enum.any?(imported, fn m ->
+          MapSet.member?(ctx.project, m) and
+            Enum.any?(Map.get(ctx.uses, m, []), &(not MapSet.member?(ctx.project, &1)))
+        end)
+
+    {set, opaque}
+  end
+
+  # Decisions 2, 4, 14, 15, 21: a call nothing in the project defines goes
+  # to a library when its scope imports or uses one. Returns the target
+  # module, the kind and whether it's external.
+  defp external(c, module, kind, ctx) do
+    fa = {c.name, c.arity}
+
+    cond do
+      # A bare call (or capture) left unresolved: the scope's library owners.
+      # Unless the caller, or a project module it imports, has functions
+      # the inventory can't list (H1-M1): then the call may be theirs.
+      module == nil and kind in ["local_or_import", "capture"] and
+        not MapSet.member?(ctx.public, fa) and not reaches_dynamic?(c, ctx) and
+          not defined?(ctx.defined, c.caller_module, c.name, c.arity, false) ->
+        case owners(c, ctx) do
+          {[], _} -> {nil, kind, false}
+          {[owner], false} -> {owner, external_kind(kind), true}
+          {_, _} -> {nil, external_kind(kind), true}
+        end
+
+      # Mod.f/a to a project module that doesn't define it but uses a
+      # library: a function that library generated (`use Ecto.Repo`).
+      # Captures and apply/3 of such a function too, keeping their kinds
+      # (H1-m2).
+      module != nil and kind in ["remote", "capture", "apply"] and MapSet.member?(ctx.project, module) and
+          not MapSet.member?(ctx.dynamic, module) ->
+        libs =
+          ctx.uses
+          |> Map.get(module, [])
+          |> Enum.reject(&MapSet.member?(ctx.project, &1))
+
+        if libs != [] and not defined?(ctx.defined, module, c.name, c.arity, false),
+          do: {module, if(kind == "remote", do: "external", else: kind), true},
+          else: {module, kind, false}
+
+      # Already a library module (Enum.map/2): external, as before.
+      module != nil and not MapSet.member?(ctx.project, module) ->
+        {module, kind, true}
+
+      true ->
+        {module, kind, false}
+    end
+  end
+
+  defp reaches_dynamic?(c, ctx) do
+    MapSet.member?(ctx.dynamic, Map.get(c, :caller_module)) or
+      Enum.any?(Map.keys(c.imports), &MapSet.member?(ctx.dynamic, &1))
+  end
+
+  defp external_kind("capture"), do: "capture"
+  defp external_kind(_), do: "external"
 
   # Call sites by outcome: in-repo when the target names a function in this
   # document, external when it names a module outside it, else unresolved.
@@ -421,6 +587,7 @@ defmodule Cartographer.ElixirFacts do
       outcome =
         cond do
           module && defined?(defined, module, c.target.name, c.target.arity, false) -> :in_repo
+          Map.get(c, :ext, false) -> :external
           module && not MapSet.member?(modules, module) -> :external
           true -> :unresolved
         end
@@ -558,7 +725,11 @@ defmodule Cartographer.ElixirFacts do
                 _ -> :error
               end) do
         Map.merge(acc, ElixirSource.helpers(ast), fn _, a, b ->
-          %{funs: Map.merge(a.funs, b.funs), using: b.using || a.using}
+          %{
+            funs: Map.merge(a.funs, b.funs),
+            using: b.using || a.using,
+            template: Map.get(b, :template, false) or Map.get(a, :template, false)
+          }
         end)
       else
         _ -> acc
@@ -624,6 +795,9 @@ defmodule Cartographer.ElixirFacts do
             module: env0.module,
             aliases: env0.aliases,
             imports: env0.imports,
+            # The module's `use`s: a template's library calls get their
+            # owners as the module's own code does (decision 14).
+            uses: Map.get(env0, :uses, []),
             file: rel,
             repo: repo,
             caller: fid,

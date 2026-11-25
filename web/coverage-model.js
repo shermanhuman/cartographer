@@ -18,7 +18,11 @@ export function coverageHTML(rows) {
       return `<tr><td>${esc(r.repo)}</td><td>events</td><td>—</td><td>${(r.sends_linked || 0).toLocaleString()} of ${(r.sends || 0).toLocaleString()} sends (${pct(r.sends_linked, r.sends)})<br><small>${esc(extra)}</small></td><td>${pct(r.handler_clauses_linked, r.handler_clauses)} of handle_event clauses</td></tr>`;
     }
     if (r.language === 'http') {
-      const extra = r.not_extracted ? `<br><small>no path ${r.not_extracted}</small>` : '';
+      const notes = [
+        r.http_external ? `external ${r.http_external.toLocaleString()}` : '',
+        r.not_extracted ? `no path ${r.not_extracted}` : '',
+      ].filter(Boolean).join(' · ');
+      const extra = notes ? `<br><small>${esc(notes)}</small>` : '';
       return `<tr><td>${esc(r.repo)}</td><td>http</td><td>—</td><td>${(r.http_linked || 0).toLocaleString()} of ${(r.http_refs || 0).toLocaleString()} requests linked to a route (${pct(r.http_linked, r.http_refs)})${extra}</td><td>—</td></tr>`;
     }
     const calls = r.note ? esc(r.note) : r.call_sites
@@ -28,10 +32,11 @@ export function coverageHTML(rows) {
       r.dispatch ? `dispatch ${r.dispatch}` : '',
       r.external ? `external ${r.external.toLocaleString()}` : '',
       r.unresolved ? `unresolved ${r.unresolved}` : '',
+      r.dynamic ? `dynamic ${r.dynamic}` : '',
       r.not_extracted ? `not extracted ${r.not_extracted}` : '',
     ].filter(Boolean).join(' · ');
     return `<tr><td>${esc(r.repo)}</td><td>${esc(r.language)}</td><td>${r.files_extracted}/${r.files_tracked}</td><td>${calls}${extra ? `<br><small>${esc(extra)}</small>` : ''}</td><td>${r.note ? '—' : pct(r.functions_linked, r.functions)}</td></tr>`;
   }).join('');
   return `<table class="coverage"><thead><tr><th>Repository</th><th>Language</th><th>Files</th><th>Call sites in repo</th><th>Functions linked</th></tr></thead><tbody>${body}</tbody></table>` +
-    '<p class="subtext">Files: extracted of those tracked with the language\'s extensions. Call sites in repo: calls that resolve to a function in the same repository; calls into libraries are counted as external. Functions linked: functions with at least one resolved call in or out. Events: LiveView sends (phx-* attributes, JS.push, a hook\'s pushEvent) linked to a handle_event, and the handle_event clauses some send reaches. HTTP: requests whose path links to a route.</p>';
+    '<p class="subtext">Files: extracted of those tracked with the language\'s extensions. Call sites in repo: calls that resolve to a function in the same repository; calls into libraries are counted as external. Functions linked: functions with at least one resolved call in or out. Events: LiveView sends (phx-* attributes, JS.push, a hook\'s pushEvent) linked to a handle_event, and the handle_event clauses some send reaches. Dynamic: Elixir calls through a value (fun.(x), apply/3), which no map can follow. HTTP: requests whose path links to a route; requests to an outside service are counted as external.</p>';
 }

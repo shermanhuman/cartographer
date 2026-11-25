@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strings"
@@ -145,7 +146,28 @@ func (im *importer) link() error {
 		return im.exec(`INSERT INTO http_links(snapshot_id, from_id, route_id, repo, precision, provenance, file, line) VALUES (?,?,?,?,?,?,?,?)`,
 			im.sid, ref.From, r.ID, ref.repo, precision, prov, ref.File, ref.Line)
 	}
+	// The project's own hosts: every host its config files and its
+	// deployments' env name. A request to one of them is never external.
+	own := map[string]bool{}
+	namespaces := map[string]bool{"default": true}
+	for _, sv := range im.services {
+		namespaces[ns(sv.Namespace)] = true
+	}
+	for _, list := range callerURLs {
+		for _, ev := range list {
+			own[strings.ToLower(ev.u.Hostname())] = true
+		}
+	}
 	for _, ref := range im.refs {
+		// A request to an outside service (decision 17) is external: it is
+		// never matched against the project's routes.
+		if ref.Origin != "same" && externalBase(ref.Base, own, namespaces) {
+			if err := im.exec(`UPDATE http_refs SET origin = 'external' WHERE snapshot_id = ? AND repo = ? AND from_id = ? AND file = ? AND line = ? AND path = ?`,
+				im.sid, ref.repo, ref.From, ref.File, ref.Line, ref.Path); err != nil {
+				return err
+			}
+			continue
+		}
 		// A browser request with no host goes to the server that served
 		// the page: the caller's own repo, and only it.
 		if ref.Origin == "same" {
@@ -269,3 +291,41 @@ func pathMatch(route, req string, subtree bool) bool {
 
 // goSubtree reports a Go route, whose pattern ending in / is a subtree.
 func goSubtree(r facts.Route) bool { return strings.HasSuffix(r.File, ".go") }
+
+// sharedSpace is 100.64.0.0/10 (RFC 6598), the carrier-grade NAT range
+// Tailscale addresses come from: the project's own network.
+var sharedSpace = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// externalBase reports whether a request's base names an outside service:
+// an absolute http(s) URL with a literal host that is not loopback, not a
+// cluster service name (one label, name.namespace for a namespace the
+// project deploys to, or name.namespace.svc…), and not a host the
+// project's own config or deployment env names.
+func externalBase(base string, own, namespaces map[string]bool) bool {
+	if strings.ContainsAny(base, "{}$#") {
+		return false // interpolated: the host isn't known
+	}
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "localhost" || host == "" {
+		return false
+	}
+	// An IP address: loopback, private and link-local ones are the
+	// project's own network, never an outside service.
+	if ip := net.ParseIP(host); ip != nil {
+		return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || sharedSpace.Contains(ip)) && !own[host]
+	}
+	parts := strings.Split(host, ".")
+	switch {
+	case len(parts) == 1:
+		return false
+	case len(parts) == 2 && namespaces[parts[1]]:
+		return false
+	case len(parts) >= 3 && parts[2] == "svc":
+		return false
+	}
+	return !own[host]
+}

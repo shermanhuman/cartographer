@@ -13,10 +13,16 @@ entities: `map_entity` shows a route's handler and its HTTP callers, and
 Not traced: dynamic dispatch in Elixir (`apply/3` with variables,
 `var.fun()`), behaviour callbacks invoked by a framework, macro-generated
 functions (including handlers injected by `__using__` and `attach_hook`),
-calls into dependencies (counted as external), requests whose path is built
-across functions or piped, JavaScript calls on untyped values (`this.el`,
-Playwright's `page`), and LiveView event names built at runtime (counted as
-dynamic, never guessed).
+calls into dependencies and the functions a library's `use` generates
+(`Repo.all/1`; counted as external), requests to outside services (counted
+as external on the `http` row), requests whose path is built across
+functions or piped, JavaScript calls on untyped values (`this.el`), and
+LiveView event names built at runtime (counted as dynamic, never guessed).
+Elixir dynamic calls are counted as `dynamic` on their own, not as
+unresolved; `show` and `callees` still give one "unresolved or external"
+figure per function. A calls target that names a module for an external
+call names the module the function arrives through, not where it is
+defined.
 `map_status` shows coverage per repository and language (files, call sites
 resolved in the repo, functions linked), plus an `events` row (sends linked,
 `handle_event` clauses reached) and an `http` row (requests linked to a

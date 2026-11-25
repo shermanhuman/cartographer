@@ -40,7 +40,7 @@ test('function ids match the v0.2.0 (Acorn) extractor on every naming rule', () 
 
 test('inventories functions with arity and min_arity', () => {
   const doc = run({repo: 'shop', root: fixture});
-  assert.deepEqual(doc.producer, {name: 'extract-javascript', version: '0.3.0', call_precision: 'heuristic'});
+  assert.deepEqual(doc.producer, {name: 'extract-javascript', version: '0.5.0', call_precision: 'heuristic'});
   assert.equal(doc.facts_version, 3);
   assert.deepEqual(doc.modules.map(m => m.id), ['shop:assets/js/app.js', 'shop:assets/js/util.mjs']);
   assert.deepEqual(doc.notes, []);
@@ -522,4 +522,90 @@ export function go() { joined("orders"); slash("api/x"); req("one"); req(); }
       ['src/w.js:json/1', '/users/:id.json', 'same'],
     ]);
   } finally { fs.rmSync(root, {recursive: true}); }
+});
+
+// Decision 16: a call on a value that comes from a package is external.
+test('values from packages are external: chromium pages, helpers, callbacks', () => {
+  const root = write({
+    'e2e/smoke.mjs': `import { chromium } from 'playwright';
+async function login(page) { await page.fill('#email', 'a'); await page.click('button'); }
+async function main() {
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  await page.locator('a').click();
+  await login(page);
+  page.on('response', (r) => r.url());
+  const { request } = page;
+  await request.get('/x');
+  await browser.close();
+}
+main();
+`,
+  });
+  const doc = run({repo: 'shop', root, sourceRoots: ['e2e']});
+  const unresolved = doc.calls.filter(c => c.kind === 'unresolved').map(c => c.target.name);
+  assert.deepEqual(unresolved, []);
+  const js = doc.stats.find(s => s.language === 'javascript');
+  assert.equal(js.unresolved, 0);
+  // launch, newPage, locator, click, fill, click, on, url, get, close.
+  assert.equal(js.external, 10);
+});
+
+test('standard-library callbacks and project values never taint', () => {
+  const root = write({
+    'assets/js/app.js': `import { thing } from 'some-pkg';
+function make() { return { render() {} }; }
+function fetchX() { return new Promise(r => r({ x() {} })); }
+function helper(v) { v.go(); }
+export function run(items) {
+  items.forEach(i => i.render());
+  fetchX().then(r => r.x());
+  helper(make());
+  helper(thing);
+}
+`,
+  });
+  const doc = run({repo: 'shop', root});
+  const unresolved = doc.calls.filter(c => c.kind === 'unresolved').map(c => c.target.name).sort();
+  // render and x are on project values, forEach on an untyped parameter;
+  // go is reached once with a project value, so the helper's parameter
+  // isn't a package value.
+  assert.deepEqual(unresolved, ['forEach', 'go', 'render', 'x']);
+});
+
+// Round 1: H1-M5 (a helper reached twice), H1-m4 (require), H1-M6 (a
+// package function's callbacks take the caller's values).
+test('a helper called twice with package values, and require(), are external', () => {
+  const root = write({
+    'e2e/twice.cjs': `const { chromium } = require('playwright');
+async function login(page) { await page.fill('#email', 'a'); }
+async function main() {
+  const browser = await chromium.launch();
+  const a = await browser.newPage();
+  const b = await browser.newPage();
+  await login(a);
+  await login(a);
+  await login(b);
+}
+main();
+`,
+  });
+  const doc = run({repo: 'shop', root, sourceRoots: ['e2e']});
+  // require() itself has no declaration without Node's types: unresolved,
+  // as before; what it returns is the package.
+  assert.deepEqual(doc.calls.filter(c => c.kind === 'unresolved').map(c => c.target.name), ['require']);
+});
+
+test("a package function's callbacks take the caller's values", () => {
+  const root = write({
+    'assets/js/app.js': `import _ from 'lodash';
+function make() { return [{ render() {} }]; }
+export function run() {
+  _.each(make(), (i) => i.render());
+  _.fp.forEach(make(), (j) => j.draw());
+}
+`,
+  });
+  const doc = run({repo: 'shop', root});
+  assert.deepEqual(doc.calls.filter(c => c.kind === 'unresolved').map(c => c.target.name).sort(), ['draw', 'render']);
 });

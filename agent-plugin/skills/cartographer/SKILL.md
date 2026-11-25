@@ -51,8 +51,10 @@ lists with `limit`/`offset`.
   links), not proven reads, writes or calls.
 - `callers` on a `handle_event` lists the templates and JS hooks that send
   to it, with the event names (`[precise event: phx-click "save"]`).
-- Not traced: unresolved and external calls, Elixir dynamic calls (`apply`,
-  `var.fun()`), JavaScript calls on untyped values, event names built at
+- Not traced: unresolved and external calls (library calls, functions a
+  library's `use` generates, requests to outside services), Elixir dynamic
+  calls (`apply`, `var.fun()`, counted apart as `dynamic` in `status`),
+  JavaScript calls on untyped values, event names built at
   runtime, and HTTP requests whose path the extractors couldn't read. An
   empty caller list is not proof that nothing calls X; say so when it
   matters. Details: `references/precision.md`.

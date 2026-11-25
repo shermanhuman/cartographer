@@ -90,6 +90,10 @@ defmodule Cartographer.ElixirSource do
       hook_mounts: [],
       passthrough: [],
       uses: [],
+      # Functions a project `use` defines in the using module (its quote's
+      # def, defp, defmacro and defdelegate forms): %{module, name, min, max},
+      # or %{module, computed: true} for a name the walk can't read.
+      quoted_defs: [],
       module_envs: [],
       embeds: [],
       attrs: []
@@ -124,6 +128,9 @@ defmodule Cartographer.ElixirSource do
       module: nil,
       aliases: %{},
       imports: %{},
+      # the modules `use`d in this lexical scope, directly or through an
+      # expanded helper (newest first): a bare call's library owners
+      uses: [],
       file: relative,
       repo: repo,
       caller: nil,
@@ -291,7 +298,13 @@ defmodule Cartographer.ElixirSource do
     acc = %{
       acc
       | module_envs: [
-          %{module: module, aliases: inner.aliases, imports: inner.imports, file: env.file}
+          %{
+            module: module,
+            aliases: inner.aliases,
+            imports: inner.imports,
+            uses: Map.get(inner, :uses, []),
+            file: env.file
+          }
           | acc.module_envs
         ]
     }
@@ -367,9 +380,10 @@ defmodule Cartographer.ElixirSource do
     {env, template(acc, env, text, first)}
   end
 
-  # `use X, :kind` and `use X`: the imports and aliases X's __using__ quote
-  # brings in (one level of an in-repo helper, as Phoenix's `html_helpers`),
-  # so template components resolve per app.
+  # `use X, :kind` and `use X`: what X's __using__ quote applies (imports,
+  # aliases and the functions it defines), up to three levels through
+  # helpers and nested uses, as Phoenix's `html_helpers`, so template
+  # components resolve per app.
   defp walk({:use, _, [mod | rest]}, %{module: m, caller: nil} = env, acc) when m != nil do
     kind =
       case rest do
@@ -409,9 +423,15 @@ defmodule Cartographer.ElixirSource do
   # handle_event guard may name.
   defp walk({:@, _, [{attr, _, [value]}]}, %{module: m, caller: nil} = env, acc)
        when m != nil and ident?(attr) do
+    # A single string (`@api "https://..."`) is kept too: an HTTP base URL.
     acc =
       case literal_strings(value) do
         {:ok, list} -> %{acc | attrs: [%{module: m, name: str(attr), values: list} | acc.attrs]}
+        # Only a URL: @doc and @moduledoc strings stay out of memory.
+        :error when is_binary(value) ->
+          if String.match?(value, ~r/\Ahttps?:\/\//i),
+            do: %{acc | attrs: [%{module: m, name: str(attr), values: [value]} | acc.attrs]},
+            else: acc
         :error -> acc
       end
 
@@ -454,6 +474,20 @@ defmodule Cartographer.ElixirSource do
     prior = Map.get(env.imports, module, if(module == "Kernel", do: kernel_import()))
     entry = import_entry(List.first(opts) || [], prior)
     {%{env | imports: Map.put(env.imports, module, entry)}, acc}
+  end
+
+  # A bitstring segment's type (`binary-size(32)`, `integer-little`) names
+  # modifiers, not calls: its value is code, and so is a size expression
+  # (`size(byte_size(x))`).
+  defp walk({:"::", _, [value, type]}, env, acc) do
+    {_, acc} = walk(value, env, acc)
+    {_, sizes} =
+      Macro.prewalk(type, [], fn
+        {:size, _, [expr]} = node, sizes -> {node, [expr | sizes]}
+        node, sizes -> {node, sizes}
+      end)
+
+    walk(sizes, env, acc)
   end
 
   defp walk({kind, meta, [head | body]} = clause, env, acc) when kind in @defs do
@@ -544,6 +578,12 @@ defmodule Cartographer.ElixirSource do
     {_, acc} = walk(body, %{env | caller: nil}, acc)
     {env, acc}
   end
+
+  # The pipe placeholder below: its left side was walked already. Without
+  # this clause the tuple fallback walks the left side again through the
+  # placeholder's metadata, doubling the work at every step of a pipe chain
+  # (2^n calls for n pipes).
+  defp walk({:__pipe_arg__, _, nil}, env, acc), do: {env, acc}
 
   defp walk({:|>, _, [left, right]}, env, acc) do
     {_, acc} = walk(left, env, acc)
@@ -1067,6 +1107,19 @@ defmodule Cartographer.ElixirSource do
   defp expand_use(module, kind, env, acc, depth) do
     acc = %{acc | uses: [%{module: env.module, use: module, kind: kind} | acc.uses]}
     h = Map.get(env.helpers, module)
+    env = %{env | uses: [module | Map.get(env, :uses, [])]}
+
+    # An ExUnit.CaseTemplate's `using` block runs inside `use ExUnit.Case`,
+    # which the block itself doesn't name.
+    env =
+      if h && Map.get(h, :template, false),
+        do: %{env | uses: ["ExUnit.Case" | env.uses]},
+        else: env
+
+    acc =
+      if h != nil and depth >= 3 and (h.using != nil or h.funs != %{}),
+        do: %{acc | quoted_defs: [%{module: env.module, computed: true} | acc.quoted_defs]},
+        else: acc
 
     forms =
       cond do
@@ -1110,7 +1163,49 @@ defmodule Cartographer.ElixirSource do
         expand_form(form, module, h, e, a, depth)
       end)
 
-  defp expand_form(_, _module, _h, env, acc, _depth), do: {env, acc}
+  # A definition the quote puts in the using module (decision 30).
+  defp expand_form({kind, _, [head | _]}, _module, _h, env, acc, _depth)
+       when kind in [:def, :defp, :defmacro, :defmacrop, :defdelegate] do
+    record =
+      case quoted_head(head) do
+        {name, min, max} ->
+          %{module: env.module, name: name, min: min, max: max, public: kind not in [:defp, :defmacrop]}
+        :computed -> %{module: env.module, computed: true}
+      end
+
+    {env, %{acc | quoted_defs: [record | acc.quoted_defs]}}
+  end
+
+  # Any other form that holds a definition (`if ... do def ...`, a `for`
+  # over computed names): the walk can't say which, so the module's
+  # functions can't be listed (decision 30, H3).
+  defp expand_form(form, _module, _h, env, acc, _depth) do
+    if holds_def?(form),
+      do: {env, %{acc | quoted_defs: [%{module: env.module, computed: true} | acc.quoted_defs]}},
+      else: {env, acc}
+  end
+
+  defp holds_def?(form) do
+    {_, found} =
+      Macro.prewalk(form, false, fn
+        {kind, _, _}, acc when kind in [:defmodule, :defimpl, :defprotocol] -> {nil, acc}
+        {kind, _, [_ | _]} = node, _ when kind in [:def, :defp, :defmacro, :defmacrop, :defdelegate] -> {node, true}
+        node, acc -> {node, acc}
+      end)
+
+    found
+  end
+
+  defp quoted_head({:when, _, [head | _]}), do: quoted_head(head)
+  defp quoted_head({:unquote, _, _}), do: :computed
+
+  defp quoted_head({name, _, args}) when ident?(name) and is_list(args) do
+    defaults = Enum.count(args, &match?({:\\, _, _}, &1))
+    {str(name), length(args) - defaults, length(args)}
+  end
+
+  defp quoted_head({name, _, ctx}) when ident?(name) and is_atom(ctx), do: {str(name), 0, 0}
+  defp quoted_head(_), do: :computed
 
   @doc """
   The `use` helpers of one parsed file: `%{module => %{funs: %{name =>
@@ -1141,6 +1236,23 @@ defmodule Cartographer.ElixirSource do
       case form do
         {:defmodule, _, _} ->
           helpers(form, module, acc)
+
+        # ExUnit.CaseTemplate: `using do quote do ... end end` is the
+        # template's __using__ (decision 20).
+        {:using, _, args} when is_list(args) ->
+          quoted =
+            case args do
+              [[{:do, q}]] -> q
+              [_opts, [{:do, q}]] -> q
+              _ -> nil
+            end
+
+          entry = Map.get(acc, module, %{funs: %{}, using: nil})
+
+          case quoted && quote_forms(quoted) do
+            nil -> acc
+            fs -> Map.put(acc, module, Map.merge(entry, %{using: fs, template: true}))
+          end
 
         {kind, _, [head, [{:do, quoted}]]} when kind in [:def, :defp, :defmacro] ->
           {fun, args} =
@@ -1412,6 +1524,7 @@ defmodule Cartographer.ElixirSource do
       line: line(meta),
       kind: kind,
       imports: env.imports,
+      uses: Map.get(env, :uses, []),
       file: env.file
     }
 

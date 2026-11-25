@@ -80,7 +80,7 @@ throwaway PostgreSQL), `[rust] build_scripts` and `contexts_depth`.
 
 ```sh
 cartographer project add ~/src/my-app     # or my-org/my-app; any member works
-cartographer status                       # map id, freshness, coverage, your work
+cartographer status                       # map id, freshness, coverage (in repo, external, unresolved, dynamic), your work
 cartographer status sengastudio           # one project's newest map, from anywhere
 cartographer refresh                      # fetch and rebuild now
 cartographer project init ~/src/my-worker # a starter .cartographer/repo.toml, plus the git commands to commit it

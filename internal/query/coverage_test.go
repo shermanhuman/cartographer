@@ -78,3 +78,74 @@ func TestStatusSaysCoverageUnavailable(t *testing.T) {
 		t.Errorf("status:\n%s", got)
 	}
 }
+
+func TestHTTPCoverageLineShowsExternal(t *testing.T) {
+	c := Coverage{Repo: "admin", Language: "http", HTTPRefs: 1, HTTPLinked: 0, HTTPExternal: 34}
+	if got := c.Line(); !strings.Contains(got, "0 of 1 requests linked") || !strings.Contains(got, "external 34") {
+		t.Errorf("line = %q", got)
+	}
+}
+
+func TestElixirLineShowsDynamic(t *testing.T) {
+	c := Coverage{Repo: "admin", Language: "elixir", FilesExtracted: 1, FilesTracked: 1, CallSites: 10, InRepo: 2, External: 3, Unresolved: 1, Dynamic: 4}
+	if got := c.Line(); !strings.Contains(got, "external 3 · unresolved 1 · dynamic 4") {
+		t.Errorf("line = %q", got)
+	}
+}
+
+// Decision 22: Elixir dynamic calls are their own count, out of unresolved.
+func TestCoverageDynamicLeavesUnresolved(t *testing.T) {
+	q, ctx := newQV2(t), context.Background()
+	db := q.S.DB
+	if _, err := db.ExecContext(ctx, `INSERT INTO stats (snapshot_id, repo, language, call_sites, in_repo, dispatch, external, unresolved, refs, not_extracted) VALUES (?, 'dynrepo', 'elixir', 10, 2, 0, 3, 6, 0, 0)`, q.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO files (snapshot_id, repo, path) VALUES (?, 'dynrepo', 'lib/a.ex')`, q.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"lib/a.ex", "test/b.exs", "lib/c.html.heex", "assets/c.js"} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO calls (snapshot_id, from_id, kind, repo, file, line) VALUES (?, 'dynrepo:M.f/0', 'dynamic', 'dynrepo', ?, 1)`, q.Snapshot, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cov, err := q.Coverage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cov {
+		if c.Repo == "dynrepo" && c.Language == "elixir" {
+			if c.Dynamic != 3 || c.Unresolved != 3 {
+				t.Errorf("dynamic %d unresolved %d, want 3 and 3", c.Dynamic, c.Unresolved)
+			}
+			return
+		}
+	}
+	t.Fatal("no dynrepo elixir row")
+}
+
+// HTTP coverage counts external refs apart, out of refs and linked.
+func TestCoverageHTTPExternal(t *testing.T) {
+	q, ctx := newQV2(t), context.Background()
+	db := q.S.DB
+	for i, origin := range []string{"external", "external", "", "same"} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO http_refs (snapshot_id, repo, from_id, method, path, base, origin, file, line) VALUES (?, 'httprepo', 'httprepo:M.f/0', 'GET', '/x', '', ?, 'm.ex', ?)`, q.Snapshot, origin, i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO http_links (snapshot_id, from_id, route_id, repo, file, line, precision) VALUES (?, 'httprepo:M.f/0', 'r', 'httprepo', 'm.ex', 3, 'candidate')`, q.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	cov, err := q.Coverage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cov {
+		if c.Repo == "httprepo" && c.Language == "http" {
+			if c.HTTPRefs != 2 || c.HTTPLinked != 1 || c.HTTPExternal != 2 {
+				t.Errorf("refs %d linked %d external %d, want 2, 1 and 2", c.HTTPRefs, c.HTTPLinked, c.HTTPExternal)
+			}
+			return
+		}
+	}
+	t.Fatal("no httprepo http row")
+}

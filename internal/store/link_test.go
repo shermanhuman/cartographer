@@ -62,7 +62,7 @@ func TestPathMatch(t *testing.T) {
 type linkCase struct {
 	name, url, ns      string
 	refPath, file, svc string
-	origin             string
+	origin, base       string
 	routes             map[string][]string
 	want               []string
 }
@@ -89,7 +89,7 @@ func linksOf(t *testing.T, c linkCase) []string {
 	sales := doc("sales")
 	sales.Modules = []facts.Module{{ID: "sales:M", Name: "M", File: "m.go"}}
 	sales.Functions = []facts.Function{{ID: "sales:M.f/0", Module: "sales:M", Name: "f", File: "m.go", Line: 1}}
-	sales.HTTPRefs = []facts.HTTPRef{{From: "sales:M.f/0", Method: "POST", Path: refPath, Origin: c.origin, File: "m.go", Line: 2}}
+	sales.HTTPRefs = []facts.HTTPRef{{From: "sales:M.f/0", Method: "POST", Path: refPath, Base: c.base, Origin: c.origin, File: "m.go", Line: 2}}
 	if salesURL != "" {
 		sales.ConfigURLs = []facts.ConfigURL{{Key: "cold.admin_url", Value: salesURL, File: "config.yaml", Line: 1}}
 	}
@@ -155,6 +155,13 @@ func TestLinkChoices(t *testing.T) {
 			want:   []string{"sales:M.f/0 -> sales:route:R:POST /check heuristic"}},
 		{name: "same-origin: never another repo", ns: "shop", origin: "same",
 			routes: map[string][]string{"admin": {"/check"}}},
+		// Decision 17: a request to an outside host is never matched, even
+		// when exactly one repo has the path; the project's own host is.
+		{name: "an outside host: never linked", ns: "shop", base: "https://api.stripe.com",
+			routes: map[string][]string{"admin": {"/check"}}},
+		{name: "the project's own host: linked as before", url: "https://app.shop.io", ns: "shop", base: "https://app.shop.io",
+			routes: map[string][]string{"admin": {"/check"}},
+			want:   []string{"sales:M.f/0 -> admin:route:R:POST /check candidate"}},
 	} {
 		if got := linksOf(t, c); !slices.Equal(got, c.want) {
 			t.Errorf("%s: links %q, want %q", c.name, got, c.want)

@@ -119,11 +119,12 @@ Exit status 2 means bad arguments; nothing is written to stdout.
     `<%= %>` is walked as code. An event attribute whose value is a call
     (`phx-click={show_modal("x")}`) counts as a dynamic send: what it returns
     isn't known.
-  - `use X, :kind` (and `use X`) brings in the `import` and `alias` forms of
-    X's helper quote, as Phoenix's `html_helpers` does. Only one level is
-    followed, through `unquote(helper())` and a nested `use`. So `<.button>`
-    resolves to the CoreComponents of its own app, and other calls through
-    those imports resolve too.
+  - `use X, :kind` (and `use X`) applies X's helper quote, as Phoenix's
+    `html_helpers` does: its `import` and `alias` forms, and the functions
+    it defines (see library calls below). Up to three levels are followed,
+    through `unquote(helper())` and nested `use`s. So `<.button>` resolves
+    to the CoreComponents of its own app, and other calls through those
+    imports resolve too.
   - A syntax error is a `heex_parse_error` note; the rest of the file still
     counts.
 - `events`: LiveView sends.
@@ -148,11 +149,48 @@ Exit status 2 means bad arguments; nothing is written to stdout.
 - `hook_mounts`: each `phx-hook` (a colocated `.Name` as `<Module>.Name`), with
   the `handle_event` functions of the LiveViews that render it as
   `receivers`. The core links a JavaScript hook's `pushEvent` through these.
+- Library calls are `external` (kind `external`). An unqualified call is
+  external when no project module defines that name and arity publicly,
+  its own module doesn't define it, and a library is imported (admitting
+  the name under `only:`/`except:`) or `use`d in scope. The target names
+  the library only when it is the one candidate and the scope has no
+  project `use` the walk can't expand and no project import that passes a
+  library on. A call to a project module that `use`s a library and doesn't
+  define the function (`Repo.all/1` from `use Ecto.Repo`) is external and
+  keeps its module; so are its captures and `apply/3`, keeping their
+  kinds. Component calls keep their kind and count as external.
+- What a project `use` defines: the walk that applies a `use` (through
+  Phoenix's `use AppWeb, :kind`, `unquote(helpers())` and nested uses,
+  three levels deep) records each `def`, `defp`, `defmacro` and
+  `defdelegate` it puts in the module, with the arities its defaults
+  allow; those are the module's own. A definition it can't place (inside
+  an `if` or `for`, a computed name, a chain past the depth limit) marks
+  the module dynamic, as does a `dynamic_definition` note: bare calls in
+  such a module, or in one importing it, stay unresolved rather than being
+  named after a library. ExUnit.CaseTemplate `using` blocks are expanded
+  the same way.
+- Requests: a request's base comes from a `base_url:` in its own function:
+  a string, a module attribute, the literals of a local function it calls
+  (`base_url(opts)`), or a variable whose every possible value (each
+  branch of a `case`/`cond`/`if`, a tuple position, `||` alternatives,
+  `<>` of literals) is a literal URL, bound only by `=` at the top of the
+  function. It sets `base` to `scheme://host` and joins the URL's path;
+  with several hosts the first in source order is used and no path joined.
+  A function with no `base_url:` takes its module's host when every
+  `base_url:` in the module is a literal naming one host. An interpolated
+  string, a loopback URL or a variable with a computed value sets none
+  (an expression written in `base_url:` itself, such as
+  `Application.get_env(:app, :api, "https://…")`, takes the literal
+  default inside it), and a base joined
+  into the URL itself (`url: base <> path`) isn't read: such a request
+  keeps its module as its base.
 - `stats`: one entry, language `elixir`. `call_sites` counts `calls`;
   `in_repo` those whose target is a function in this document, `external`
-  those naming a module outside it (Kernel and Erlang included),
-  `unresolved` the rest (dynamic calls, unattributed unqualified calls, a
-  function missing from a module that is here). `not_extracted` counts the
+  those naming a module outside it (Kernel and Erlang included) and the
+  library calls above, `unresolved` the rest (dynamic calls, unattributed
+  unqualified calls, a function missing from a module that is here).
+  Coverage shows dynamic calls (`kind` `dynamic`) on their own and leaves
+  them out of unresolved. `not_extracted` counts the
   routes and refs above that were not extracted; only the count is kept in
   the document, not which sites they were. `dispatch` and `refs` are 0. A
   second entry, `heex`, counts the event sends: `in_repo` linked,
