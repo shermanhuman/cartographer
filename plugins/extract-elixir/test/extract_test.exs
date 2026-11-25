@@ -468,6 +468,21 @@ defmodule Cartographer.ElixirExtractTest do
       assert refs["fixture:Direct.refunds/0"] == {"https://api.stripe.com", "/v1/refunds"}
     end
 
+    # A Req built in a helper: the module's one host.
+    test "a function with no base_url of its own takes its module's one host" do
+      doc =
+        extract(~S"""
+        defmodule Helper do
+          @api "https://api.stripe.com/v1"
+          def charge(id), do: post("/charges/#{id}")
+          defp post(path), do: Req.post(client(), url: path)
+          defp client, do: Req.new(base_url: @api)
+        end
+        """)
+
+      assert [%{base: "https://api.stripe.com", path: "/v1/charges/:p1"}] = doc.http_refs
+    end
+
     # Decision 26.
     test "a loopback base_url sets no base" do
       doc =

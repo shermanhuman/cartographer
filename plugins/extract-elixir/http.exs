@@ -91,7 +91,7 @@ defmodule Cartographer.ElixirHTTP do
       end)
 
     refs =
-      (refs ++ Enum.flat_map(analyses, & &1.direct_refs) |> Enum.map(&direct_base(&1, bases)))
+      (refs ++ Enum.map(Enum.flat_map(analyses, & &1.direct_refs), &direct_base(&1, bases)))
       |> Enum.uniq()
       |> Enum.sort_by(&{&1.file, &1.line, &1.from, &1.path, &1[:method] || ""})
 
@@ -118,15 +118,36 @@ defmodule Cartographer.ElixirHTTP do
     by_module = Enum.group_by(cs, & &1.module)
     attr = Map.new(attrs, &{{&1.module, &1.name}, &1.values})
 
+    # A module whose base_url literals all name one host: a function with
+    # none of its own (the Req is built in a helper) takes that one.
+    module_base =
+      Map.new(by_module, fn {module, mcs} ->
+        urls = Enum.flat_map(mcs, &clause_urls(&1, module, mcs, attr))
+
+        {module,
+         case base_of(urls) do
+           {_, _} = b -> if single_host?(urls), do: b
+           nil -> nil
+         end}
+      end)
+
     cs
     |> Enum.group_by(& &1.id)
     |> Enum.map(fn {fid, own} ->
       module = hd(own).module
       urls = Enum.flat_map(own, &clause_urls(&1, module, by_module[module], attr))
-      {fid, base_of(urls)}
+      {fid, base_of(urls) || module_base[module]}
     end)
     |> Enum.reject(fn {_, b} -> b == nil end)
     |> Map.new()
+  end
+
+  defp single_host?(urls) do
+    urls
+    |> Enum.filter(&String.match?(&1, ~r/\Ahttps?:\/\/[^\/{#$]+/i))
+    |> Enum.map(&URI.parse(&1).host)
+    |> Enum.uniq()
+    |> length() == 1
   end
 
   # The base a ref from `fid` takes, joining the base URL's path prefix.
