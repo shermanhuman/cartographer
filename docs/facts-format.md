@@ -123,7 +123,12 @@ which calls `X.render/1`); it resolves like any other call. Calls with `kind` `d
 kind starting with `js_`, are never resolved: name-only evidence without
 lexical binding is not enough. Nor are calls with `kind` `unresolved`: the
 producer says it found no target, so a same-named function in the caller's
-module is not one. See each plugin's README for its call kinds.
+module is not one. Nor are calls with `kind` `external`: a call into a
+library, or into a function a library's `use` generates. Its `target` may
+name a `module`; that module is the one the function **arrives through**
+(the single library import or `use` in scope, or the project module whose
+`use` generated it), not where it is defined. With no single such module
+the target has no `module`. See each plugin's README for its call kinds.
 
 ## Precision
 
@@ -179,6 +184,15 @@ the extractor knows), `file`, `line`, and, in version 3, `origin`.
 it goes to the server that served the page. The core links it to a matching
 route in the caller's **own** repository only, `heuristic`, provenance
 `same-origin`. A same-origin reference has no `base`.
+
+A reference whose `base` is an absolute `http(s)` URL with a literal host is
+**external** when that host is not loopback, not a cluster Service name (one
+label, `name.namespace` for a namespace the project's Services use, or
+`name.namespace.svc…`) and not a host named by the project's own
+`config_urls` or Deployment env. The core sets its stored origin to
+`external` and never links it. Coverage counts these apart: `N of M
+requests linked · external K`, with external left out of M. Extractors send
+only `""` or `"same"`.
 
 Every other reference links to routes in **other** repositories, after all
 documents are merged. A link is never `precise`:

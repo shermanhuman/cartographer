@@ -148,11 +148,26 @@ Exit status 2 means bad arguments; nothing is written to stdout.
 - `hook_mounts`: each `phx-hook` (a colocated `.Name` as `<Module>.Name`), with
   the `handle_event` functions of the LiveViews that render it as
   `receivers`. The core links a JavaScript hook's `pushEvent` through these.
+- Library calls are `external` (kind `external`): an unqualified call with
+  no public definition of that name and arity anywhere in the repository,
+  when a library is imported or `use`d in scope (the target names it when
+  it is the only one); a call to a project module that `use`s a library and
+  doesn't define the function (`Repo.all/1` from `use Ecto.Repo`), keeping
+  its module. ExUnit.CaseTemplate `using` blocks are expanded like a
+  helper quote, so a test's imports through its case template are seen.
+  Component and capture calls keep their kinds and count as external.
+- Requests: a `base_url:` literal (a string, a module attribute, a local
+  function's literal default, or the literals of the clause that binds a
+  variable) sets the ref's `base` to `scheme://host` and joins the URL's
+  path; with several hosts the first is used and no path joined. A loopback
+  URL sets none.
 - `stats`: one entry, language `elixir`. `call_sites` counts `calls`;
   `in_repo` those whose target is a function in this document, `external`
-  those naming a module outside it (Kernel and Erlang included),
-  `unresolved` the rest (dynamic calls, unattributed unqualified calls, a
-  function missing from a module that is here). `not_extracted` counts the
+  those naming a module outside it (Kernel and Erlang included) and the
+  library calls above, `unresolved` the rest (dynamic calls, unattributed
+  unqualified calls, a function missing from a module that is here).
+  Coverage shows dynamic calls (`kind` `dynamic`) on their own and leaves
+  them out of unresolved. `not_extracted` counts the
   routes and refs above that were not extracted; only the count is kept in
   the document, not which sites they were. `dispatch` and `refs` are 0. A
   second entry, `heex`, counts the event sends: `in_repo` linked,

@@ -25,3 +25,13 @@ func TestExternalBase(t *testing.T) {
 		}
 	}
 }
+
+// P3-3: an external call is never looked up by name.
+func TestExternalKindIsNotResolvable(t *testing.T) {
+	if resolvable("external") {
+		t.Error("external is resolvable")
+	}
+	if !resolvable("local_or_import") {
+		t.Error("local_or_import is not resolvable")
+	}
+}

@@ -32,7 +32,7 @@ Exit status 2 means bad arguments, and 1 any other failure (the compiler couldn'
 - A config that can't be read whole keeps the options it could read, on top of the defaults, with a `config_fallback` note. The usual cause is an `extends` naming a package that isn't installed. A config's `include` patterns are never followed, so no directory is listed for the compiler.
 - The defaults are: `allowJs`, bundler resolution, ESNext, JSX preserved, and no ambient `@types`.
 
-**Dependencies.** No dependencies are installed. A call into a package import that doesn't resolve counts as `external`.
+**Dependencies.** No dependencies are installed. A call into a package import that doesn't resolve counts as `external`. So does a call on a value that comes from a package: taint starts at an identifier imported from a bare specifier (or required) and follows `await`, casts, member access, calls and `new`, declarations, destructuring, the parameters of a callback handed to such a call (`page.on('response', r => r.url())`), and one level of parameters when every in-repo call passes such a value (`login(page)`). Standard-library and project values never taint.
 
 **Skipped files.**
 - A file with a line over 10,000 characters is treated as generated (a vendored SDK) and skipped, with a `minified_skipped` note.
