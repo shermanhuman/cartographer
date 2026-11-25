@@ -40,7 +40,7 @@ defmodule Cartographer.ElixirHTTP do
   the merged functions. Returns `{refs, skipped}`, where each skipped site is
   `%{file, line, from, reason}`.
   """
-  def refs(clauses, calls, functions, attrs \\ []) do
+  def refs(clauses, calls, functions, attrs) do
     defs =
       Enum.group_by(
         functions,

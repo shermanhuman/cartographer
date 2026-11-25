@@ -371,8 +371,9 @@ defmodule Cartographer.ElixirFacts do
 
   # --- calls -----------------------------------------------------------------
 
-  # Returns the output calls, the raw calls with `:target_module` and `:kind`
-  # classified (for the HTTP analysis), and the definitions index.
+  # Returns the output calls (without `ext`), the raw calls classified with
+  # `:target_module`, `:kind` and `:external` (for the HTTP analysis), the
+  # definitions index, and the output calls with `ext` (for stats).
   defp calls(parsed, functions, helpers) do
     raw = parsed.calls
 
@@ -490,7 +491,17 @@ defmodule Cartographer.ElixirFacts do
   # non-project `use`s (decision 14). `opaque` when the scope uses a project
   # module the walk couldn't expand: then no owner is named (decision 21).
   defp owners(c, ctx) do
-    imported = c.imports |> Map.keys() |> Enum.reject(&(&1 == "Kernel"))
+    fa = {c.name, c.arity}
+
+    # Only imports that admit the name (`only:`/`except:`, H1-m1); an entry
+    # the walk couldn't read admits everything.
+    imported =
+      for {m, entry} <- c.imports,
+          m != "Kernel",
+          not is_map(entry) or ElixirSource.imports?(entry, :functions, fa) or
+            ElixirSource.imports?(entry, :macros, fa),
+          do: m
+
     used = Map.get(c, :uses, [])
 
     set =
@@ -499,8 +510,14 @@ defmodule Cartographer.ElixirFacts do
       |> Enum.uniq()
       |> Enum.sort()
 
+    # A project import whose module uses a library may pass that library's
+    # functions on (`import AppWeb.Gettext`): no owner is named then either.
     opaque =
-      Enum.any?(used, &(MapSet.member?(ctx.project, &1) and not MapSet.member?(ctx.expandable, &1)))
+      Enum.any?(used, &(MapSet.member?(ctx.project, &1) and not MapSet.member?(ctx.expandable, &1))) or
+        Enum.any?(imported, fn m ->
+          MapSet.member?(ctx.project, m) and
+            Enum.any?(Map.get(ctx.uses, m, []), &(not MapSet.member?(ctx.project, &1)))
+        end)
 
     {set, opaque}
   end
@@ -525,7 +542,9 @@ defmodule Cartographer.ElixirFacts do
 
       # Mod.f/a to a project module that doesn't define it but uses a
       # library: a function that library generated (`use Ecto.Repo`).
-      module != nil and kind == "remote" and MapSet.member?(ctx.project, module) and
+      # Captures and apply/3 of such a function too, keeping their kinds
+      # (H1-m2).
+      module != nil and kind in ["remote", "capture", "apply"] and MapSet.member?(ctx.project, module) and
           not MapSet.member?(ctx.dynamic, module) ->
         libs =
           ctx.uses
@@ -533,7 +552,7 @@ defmodule Cartographer.ElixirFacts do
           |> Enum.reject(&MapSet.member?(ctx.project, &1))
 
         if libs != [] and not defined?(ctx.defined, module, c.name, c.arity, false),
-          do: {module, "external", true},
+          do: {module, if(kind == "remote", do: "external", else: kind), true},
           else: {module, kind, false}
 
       # Already a library module (Enum.map/2): external, as before.
@@ -553,7 +572,7 @@ defmodule Cartographer.ElixirFacts do
   defp defines?(forms) do
     {_, hit} =
       Macro.prewalk(forms, false, fn
-        {kind, _, _} = node, acc when kind in [:def, :defp, :defmacro, :defmacrop] -> {node, true}
+        {kind, _, _} = node, _acc when kind in [:def, :defp, :defmacro, :defmacrop] -> {node, true}
         node, acc -> {node, acc}
       end)
 
@@ -562,8 +581,6 @@ defmodule Cartographer.ElixirFacts do
 
   defp external_kind("capture"), do: "capture"
   defp external_kind(_), do: "external"
-
-
 
   # Call sites by outcome: in-repo when the target names a function in this
   # document, external when it names a module outside it, else unresolved.

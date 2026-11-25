@@ -468,6 +468,19 @@ defmodule Cartographer.ElixirExtractTest do
       assert refs["fixture:Direct.refunds/0"] == {"https://api.stripe.com", "/v1/refunds"}
     end
 
+    # Decision 26.
+    test "a loopback base_url sets no base" do
+      doc =
+        extract(~S"""
+        defmodule Local do
+          def go, do: get("/check")
+          defp get(path), do: Req.get(Req.new(base_url: "http://localhost:4000/api/v1"), url: path)
+        end
+        """)
+
+      assert [%{base: "Local", path: "/check"}] = doc.http_refs
+    end
+
     test "a url: that reaches Req.new through a pipe is counted, not extracted" do
       {doc, skipped} = web("sites", ["shared-libs/lib"])
       refute Map.has_key?(doc, :http_refs)
@@ -1053,11 +1066,15 @@ defmodule Cartographer.ElixirExtractTest do
         defmodule Bits do
           import Bitwise
           def take(<<id::binary-size(32), rest::binary>>), do: {id, rest, byte_size(rest)}
+          def head(n, bin), do: (<<h::binary-size(len(n)), _::binary>> = bin; h)
+          defp len(n), do: n
         end
         """)
 
       assert from(doc, "Bits.take/1", "size") == []
       assert [%{kind: "import"}] = from(doc, "Bits.take/1", "byte_size")
+      # A size expression is code (H1-n4).
+      assert [_] = from(doc, "Bits.head/2", "len")
     end
 
     # Round 1, H1-M2: a standalone template sees its module's `use`s.
@@ -1170,6 +1187,34 @@ defmodule Cartographer.ElixirExtractTest do
       # The same generated function called bare inside the using module.
       assert [%{target: %{module: "Oban.Worker"}, kind: "external"}] =
                from(doc, "App.Worker.go/1", "new")
+    end
+
+    # Round 1, H1-m1 and H1-m2.
+    test "owners respect only:, project imports that pass a library on, and captures" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/only.ex" =>
+                "defmodule App.Only do\n  import Ecto.Query, only: [from: 2]\n  import Ecto.Changeset\n  def c(x), do: cast(x, %{}, [])\nend\n",
+              "lib/gettext.ex" => "defmodule App.Gettext do\n  use Gettext.Backend, otp_app: :app\nend\n",
+              "lib/view.ex" =>
+                "defmodule App.View do\n  import Phoenix.Component\n  import App.Gettext\n  def t, do: gettext(\"hi\")\nend\n",
+              "lib/repo.ex" => "defmodule App.Repo do\n  use Ecto.Repo, otp_app: :app\nend\n",
+              "lib/w.ex" =>
+                "defmodule App.W do\n  def go(x), do: {&App.Repo.insert/1, apply(App.Repo, :get, [x, 1])}\nend\n"
+            })
+        )
+
+      assert [%{kind: "external", target: %{module: "Ecto.Changeset"}}] = from(doc, "App.Only.c/1", "cast")
+      assert [%{kind: "external", target: t}] = from(doc, "App.View.t/0", "gettext")
+      refute Map.has_key?(t, :module)
+      assert [%{kind: "capture", target: %{module: "App.Repo"}}] = from(doc, "App.W.go/1", "insert")
+      assert [%{kind: "apply", target: %{module: "App.Repo"}}] = from(doc, "App.W.go/1", "get")
+
+      stats = Enum.find(doc.stats, &(&1.language == "elixir"))
+      assert stats.unresolved == 0
     end
 
     # Round 1, H1-M1: functions the inventory can't list stay unresolved.

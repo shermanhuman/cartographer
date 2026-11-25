@@ -422,7 +422,11 @@ defmodule Cartographer.ElixirSource do
     acc =
       case literal_strings(value) do
         {:ok, list} -> %{acc | attrs: [%{module: m, name: str(attr), values: list} | acc.attrs]}
-        :error when is_binary(value) -> %{acc | attrs: [%{module: m, name: str(attr), values: [value]} | acc.attrs]}
+        # Only a URL: @doc and @moduledoc strings stay out of memory.
+        :error when is_binary(value) ->
+          if String.match?(value, ~r/\Ahttps?:\/\//i),
+            do: %{acc | attrs: [%{module: m, name: str(attr), values: [value]} | acc.attrs]},
+            else: acc
         :error -> acc
       end
 
@@ -468,8 +472,18 @@ defmodule Cartographer.ElixirSource do
   end
 
   # A bitstring segment's type (`binary-size(32)`, `integer-little`) names
-  # modifiers, not calls: only its value is code.
-  defp walk({:"::", _, [value, _type]}, env, acc), do: walk(value, env, acc)
+  # modifiers, not calls: its value is code, and so is a size expression
+  # (`size(byte_size(x))`).
+  defp walk({:"::", _, [value, type]}, env, acc) do
+    {_, acc} = walk(value, env, acc)
+    {_, sizes} =
+      Macro.prewalk(type, [], fn
+        {:size, _, [expr]} = node, sizes -> {node, [expr | sizes]}
+        node, sizes -> {node, sizes}
+      end)
+
+    walk(sizes, env, acc)
+  end
 
   defp walk({kind, meta, [head | body]} = clause, env, acc) when kind in @defs do
     {head, guards} =
