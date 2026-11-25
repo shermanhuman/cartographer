@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/shermanhuman/cartographer/internal/gitenv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,16 +45,7 @@ func gitEnv(stateDir string) ([]string, error) {
 	if err := os.Chmod(helper, 0o755); err != nil {
 		return nil, err
 	}
-	var env []string
-	for _, kv := range os.Environ() {
-		k, _, _ := strings.Cut(kv, "=")
-		switch k {
-		case "GIT_ASKPASS", "SSH_ASKPASS", "GIT_TERMINAL_PROMPT", "SSH_ASKPASS_REQUIRE":
-			continue
-		}
-		env = append(env, kv)
-	}
-	return append(env, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS="+helper, "SSH_ASKPASS="+helper), nil
+	return gitenv.Promptless(os.Environ(), helper), nil
 }
 
 // ghRetryEnv is env for a second try after the machine's own credential

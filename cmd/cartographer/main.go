@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/shermanhuman/cartographer/internal/gitenv"
 	"io"
 	"os"
 	"path/filepath"
@@ -271,6 +272,9 @@ func openStore(c *common) (*store.Store, error) {
 }
 
 func run(ctx context.Context, args []string, w io.Writer) error {
+	// No git or ssh prompt from this process or anything it starts: a
+	// background cartographer has no one to answer one (see internal/gitenv).
+	gitenv.Apply()
 	store.BinaryVersion = version // part of every map id
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprint(w, usage)

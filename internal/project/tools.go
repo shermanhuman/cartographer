@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shermanhuman/cartographer/internal/gitenv"
 	"io"
 	"os"
 	"os/exec"
@@ -368,7 +369,8 @@ func (m *Mise) Env(ctx context.Context, tools []Tool) ([]string, error) {
 			return nil, fmt.Errorf("%s: %w", t.Spec(), err)
 		}
 	}
-	return env, nil
+	// Last, so a variable mise's env output sets can't restore a prompt.
+	return gitenv.Promptless(env, ""), nil
 }
 
 // Install installs each tool mise doesn't have, in installOrder.

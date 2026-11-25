@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shermanhuman/cartographer/internal/gitenv"
 	"io"
 	"os"
 	"os/exec"
@@ -535,14 +536,16 @@ func runCmd(ctx context.Context, dir string, env, argv []string, stdout io.Write
 	return runCmdIn(ctx, dir, append(childEnv(os.Environ()), env...), argv, stdout)
 }
 
-// runCmdIn runs argv with exactly the environment env.
+// runCmdIn runs argv with the environment env, made promptless last so no
+// overlay (a plugin's or a repo's [schema] env) can restore a git or ssh
+// prompt.
 func runCmdIn(ctx context.Context, dir string, env, argv []string, stdout io.Writer) (string, error) {
 	if len(argv) == 0 {
 		return "", errors.New("empty command")
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = env
+	cmd.Env = gitenv.Promptless(env, "")
 	// Cancelling ends the command's whole process group (ownGroup); after
 	// WaitDelay the command is killed and its output pipes closed.
 	cmd.WaitDelay = 5 * time.Second
@@ -751,7 +754,7 @@ const extraHeaderKey = "http.https://github.com/.extraheader"
 // GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n so it never appears on argv. Every git
 // process (including lazy blob fetches of a partial clone) inherits it.
 func gitEnv() []string {
-	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	env := gitenv.Promptless(os.Environ(), "")
 	tok := githubToken()
 	if tok == "" {
 		return env
