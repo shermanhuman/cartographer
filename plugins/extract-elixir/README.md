@@ -149,16 +149,48 @@ Exit status 2 means bad arguments; nothing is written to stdout.
 - `hook_mounts`: each `phx-hook` (a colocated `.Name` as `<Module>.Name`), with
   the `handle_event` functions of the LiveViews that render it as
   `receivers`. The core links a JavaScript hook's `pushEvent` through these.
-- Library calls are `external` (kind `external`). An unqualified call is
-  external when no project module defines that name and arity publicly,
-  its own module doesn't define it, and a library is imported (admitting
-  the name under `only:`/`except:`) or `use`d in scope. The target names
-  the library only when it is the one candidate and the scope has no
-  project `use` the walk can't expand and no project import that passes a
-  library on. A call to a project module that `use`s a library and doesn't
-  define the function (`Repo.all/1` from `use Ecto.Repo`) is external and
-  keeps its module; so are its captures and `apply/3`, keeping their
-  kinds. Component calls keep their kind and count as external.
+- **Evidence for library calls** (0.6.0). A call counts as external only
+  when the evidence defines it and the call reaches it; otherwise it is
+  unresolved, never a guess. The evidence:
+  - the Hex packages the nearest `mix.lock` pins, read from the Hex cache
+    (`--hex-cache`, default `$HEX_HOME/packages/hexpm` or
+    `~/.hex/packages/hexpm`). A tarball counts only when its SHA-256
+    equals the lock's outer checksum; nothing is fetched, installed or
+    evaluated, and the lock is parsed as data. A missing or mismatched
+    package gives a `dependency_missing` note naming it (`file` is
+    `name-version`). A build with no Hex cache (a CI runner, a fresh
+    machine) has no dependency evidence: those calls are unresolved, with a
+    note per package. Running `mix deps.get` once in any checkout fills
+    the cache, and cartographer then rebuilds the map: the cache's state is
+    part of its inputs digest;
+  - the running Elixir and OTP: each module on the code path and its
+    exports, and Elixir's own `use` quotes from its bundled sources (a
+    runtime without them gives a `stdlib_sources_missing` note);
+  - a library module's exports: its definitions (under a module-level
+    `if` too), a top-level `for` over literal atoms, `defexception`,
+    `defprotocol`, and what its own top-level `use`s generate;
+  - what a library `use` applies (a superset reader): every definition in
+    any quote of each library module the `use` reaches through `use`,
+    `import`, `@before_compile` and module aliases passed as options
+    (`adapter: Ecto.Adapters.Postgres`), and the exports of the modules
+    those quotes import. A superset is sound here because the project's
+    own definitions are checked first.
+- **The rules**, in order:
+  1. a bare call inside the arguments of an `Ecto.Query` macro, not under
+     `^`, whose name `Ecto.Query.API` or `WindowAPI` exports, is that
+     module's query vocabulary;
+  2. the project's own definitions: the caller's module, a project module
+     it imports, and what a project `use` put there;
+  3. a bare call is external when an admitting import of a module that
+     exports it, a project module a library `use` generated it into, or a
+     library `use` in scope defines it. One candidate names the owner,
+     several none, none leaves it unresolved. A hole in scope (functions
+     the inventory can't list, an unexpandable project `use`, an
+     unreadable import, a library with no evidence) leaves it unresolved;
+  4. a remote call (or capture, or `apply/3`) is external when the
+     module's evidence holds the function, including a function a library
+     `use` generated into a project module (`Repo.all/1`, keeping its
+     module). Component calls keep their kind.
 - What a project `use` defines: the walk that applies a `use` (through
   Phoenix's `use AppWeb, :kind`, `unquote(helpers())` and nested uses,
   three levels deep) records each `def`, `defp`, `defmacro` and
@@ -170,15 +202,13 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   named after a library. ExUnit.CaseTemplate `using` blocks are expanded
   the same way.
 - Requests: a request's base comes from a `base_url:` in its own function:
-  a string, a module attribute, the literals of a local function it calls
-  (`base_url(opts)`), or a variable whose every possible value (each
-  branch of a `case`/`cond`/`if`, a tuple position, `||` alternatives,
-  `<>` of literals) is a literal URL, bound only by `=` at the top of the
-  function. It sets `base` to `scheme://host` and joins the URL's path;
+  a string, a module attribute, or the literals of a local function it
+  calls (`base_url(opts)`). A variable gives no base (0.6.0). It sets
+  `base` to `scheme://host` and joins the URL's path;
   with several hosts the first in source order is used and no path joined.
   A function with no `base_url:` takes its module's host when every
   `base_url:` in the module is a literal naming one host. An interpolated
-  string, a loopback URL or a variable with a computed value sets none
+  string, a loopback URL or a variable sets none
   (an expression written in `base_url:` itself, such as
   `Application.get_env(:app, :api, "https://…")`, takes the literal
   default inside it), and a base joined
@@ -186,8 +216,7 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   keeps its module as its base.
 - `stats`: one entry, language `elixir`. `call_sites` counts `calls`;
   `in_repo` those whose target is a function in this document, `external`
-  those naming a module outside it (Kernel and Erlang included) and the
-  library calls above, `unresolved` the rest (dynamic calls, unattributed
+  the calls the evidence above proves, `unresolved` the rest (dynamic calls, unattributed
   unqualified calls, a function missing from a module that is here).
   Coverage shows dynamic calls (`kind` `dynamic`) on their own and leaves
   them out of unresolved. `not_extracted` counts the
