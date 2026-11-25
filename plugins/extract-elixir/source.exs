@@ -294,7 +294,13 @@ defmodule Cartographer.ElixirSource do
     acc = %{
       acc
       | module_envs: [
-          %{module: module, aliases: inner.aliases, imports: inner.imports, file: env.file}
+          %{
+            module: module,
+            aliases: inner.aliases,
+            imports: inner.imports,
+            uses: Map.get(inner, :uses, []),
+            file: env.file
+          }
           | acc.module_envs
         ]
     }

@@ -458,10 +458,23 @@ defmodule Cartographer.ElixirFacts do
       |> Enum.filter(&(&1.kind == "dynamic_definition"))
       |> MapSet.new(& &1.file)
 
+    # A project helper whose quote defines functions (`def` inside
+    # `__using__`): the modules that use it have functions the inventory
+    # doesn't list, so they count as dynamic too (round 1, H1-M1).
+    defining =
+      helpers
+      |> Enum.filter(fn {_m, h} -> h.using != nil and defines?(h.using) end)
+      |> MapSet.new(fn {m, _} -> m end)
+
     dynamic =
       parsed.modules
       |> Enum.filter(&MapSet.member?(dyn_files, &1.file))
       |> MapSet.new(& &1.name)
+      |> MapSet.union(
+        parsed.uses
+        |> Enum.filter(&MapSet.member?(defining, &1.use))
+        |> MapSet.new(& &1.module)
+      )
 
     %{
       project: project,
@@ -500,8 +513,10 @@ defmodule Cartographer.ElixirFacts do
 
     cond do
       # A bare call (or capture) left unresolved: the scope's library owners.
+      # Unless the caller, or a project module it imports, has functions
+      # the inventory can't list (H1-M1): then the call may be theirs.
       module == nil and kind in ["local_or_import", "capture"] and
-          not MapSet.member?(ctx.public, fa) ->
+        not MapSet.member?(ctx.public, fa) and not reaches_dynamic?(c, ctx) ->
         case owners(c, ctx) do
           {[], _} -> {nil, kind, false}
           {[owner], false} -> {owner, external_kind(kind), true}
@@ -528,6 +543,21 @@ defmodule Cartographer.ElixirFacts do
       true ->
         {module, kind, false}
     end
+  end
+
+  defp reaches_dynamic?(c, ctx) do
+    MapSet.member?(ctx.dynamic, Map.get(c, :caller_module)) or
+      Enum.any?(Map.keys(c.imports), &MapSet.member?(ctx.dynamic, &1))
+  end
+
+  defp defines?(forms) do
+    {_, hit} =
+      Macro.prewalk(forms, false, fn
+        {kind, _, _} = node, acc when kind in [:def, :defp, :defmacro, :defmacrop] -> {node, true}
+        node, acc -> {node, acc}
+      end)
+
+    hit
   end
 
   defp external_kind("capture"), do: "capture"
@@ -752,6 +782,9 @@ defmodule Cartographer.ElixirFacts do
             module: env0.module,
             aliases: env0.aliases,
             imports: env0.imports,
+            # The module's `use`s: a template's library calls get their
+            # owners as the module's own code does (decision 14).
+            uses: Map.get(env0, :uses, []),
             file: rel,
             repo: repo,
             caller: fid,

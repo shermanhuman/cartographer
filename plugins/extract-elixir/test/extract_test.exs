@@ -431,6 +431,43 @@ defmodule Cartographer.ElixirExtractTest do
       assert refs["fixture:Conf.get_it/1"] == {"Conf", "/things/:p1"}
     end
 
+    # Round 1, H1-M3 and H1-M4.
+    test "a base is read per function, never from interpolation or unrelated literals" do
+      doc =
+        extract(~S"""
+        defmodule Mixed do
+          def pay(id), do: stripe("/charges/#{id}")
+          def check(id), do: admin("/api/check/#{id}")
+          defp stripe(path), do: Req.post(Req.new(base_url: "https://api.stripe.com/v1"), url: path)
+          defp admin(path), do: Req.post(Req.new(base_url: "http://admin.breakdown.svc:4000"), url: path)
+        end
+        defmodule Interp do
+          def go(ns), do: get("/x", ns)
+          defp get(path, ns), do: Req.get(Req.new(base_url: "http://admin.#{ns}.svc:4000"), url: path)
+        end
+        defmodule Header do
+          def go, do: get("/check")
+          defp get(path) do
+            base = Application.get_env(:app, :url)
+            Req.get(Req.new(base_url: base, headers: [{"referer", "https://docs.example.com/help"}]), url: path)
+          end
+        end
+        defmodule Direct do
+          @api "https://api.stripe.com/v1"
+          def charges, do: Req.get!(base_url: @api, url: "/charges")
+          def refunds, do: Req.post(Req.new(base_url: "https://api.stripe.com/v1"), url: "/refunds")
+        end
+        """)
+
+      refs = Map.new(doc.http_refs, &{&1.from, {&1.base, &1.path}})
+      assert refs["fixture:Mixed.pay/1"] == {"https://api.stripe.com", "/v1/charges/:p1"}
+      assert refs["fixture:Mixed.check/1"] == {"http://admin.breakdown.svc:4000", "/api/check/:p1"}
+      assert refs["fixture:Interp.go/1"] == {"Interp", "/x"}
+      assert refs["fixture:Header.go/0"] == {"Header", "/check"}
+      assert refs["fixture:Direct.charges/0"] == {"https://api.stripe.com", "/v1/charges"}
+      assert refs["fixture:Direct.refunds/0"] == {"https://api.stripe.com", "/v1/refunds"}
+    end
+
     test "a url: that reaches Req.new through a pipe is counted, not extracted" do
       {doc, skipped} = web("sites", ["shared-libs/lib"])
       refute Map.has_key?(doc, :http_refs)
@@ -1023,6 +1060,31 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{kind: "import"}] = from(doc, "Bits.take/1", "byte_size")
     end
 
+    # Round 1, H1-M2: a standalone template sees its module's `use`s.
+    test "a template's library call has the module's uses as owners" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/page_html.ex" => ~S"""
+              defmodule PageHTML do
+                use Phoenix.Component
+                import Phoenix.HTML
+                embed_templates "page_html/*"
+              end
+              """,
+              "lib/page_html/home.html.heex" => ~S"""
+              <div>{lib_only(1)}</div>
+              """
+            })
+        )
+
+      [call] = Enum.filter(doc.calls, &(&1.target.name == "lib_only"))
+      assert call.kind == "external"
+      refute Map.has_key?(call.target, :module)
+    end
+
     test "a name a project module defines publicly is never external" do
       doc =
         extract(~S"""
@@ -1108,6 +1170,32 @@ defmodule Cartographer.ElixirExtractTest do
       # The same generated function called bare inside the using module.
       assert [%{target: %{module: "Oban.Worker"}, kind: "external"}] =
                from(doc, "App.Worker.go/1", "new")
+    end
+
+    # Round 1, H1-M1: functions the inventory can't list stay unresolved.
+    test "a function defined at runtime or in a project quote is never external" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/settings.ex" =>
+                "defmodule App.Settings do\n  use Ecto.Schema\n  for n <- [:a, :b] do\n    def unquote(n)(), do: 1\n  end\n  def both, do: {a(), b()}\nend\n",
+              "lib/reader.ex" =>
+                "defmodule App.Reader do\n  import Ecto.Query\n  import App.Settings\n  def r, do: a()\nend\n",
+              "lib/helper.ex" =>
+                "defmodule App.Helper do\n  defmacro __using__(_) do\n    quote do\n      use Ecto.Schema\n      def touch(x), do: x\n    end\n  end\nend\n",
+              "lib/thing.ex" =>
+                "defmodule App.Thing do\n  use App.Helper\n  import Ecto.Changeset\n  def go(x), do: touch(x)\nend\n",
+              "lib/caller.ex" =>
+                "defmodule App.Caller do\n  def go(x), do: App.Thing.touch(x)\nend\n"
+            })
+        )
+
+      assert [%{kind: "local_or_import"}] = from(doc, "App.Settings.both/0", "a")
+      assert [%{kind: "local_or_import"}] = from(doc, "App.Reader.r/0", "a")
+      assert [%{kind: "local_or_import"}] = from(doc, "App.Thing.go/1", "touch")
+      assert [%{kind: "remote"}] = from(doc, "App.Caller.go/1", "touch")
     end
   end
 
