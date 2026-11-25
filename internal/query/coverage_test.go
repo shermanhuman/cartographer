@@ -78,3 +78,10 @@ func TestStatusSaysCoverageUnavailable(t *testing.T) {
 		t.Errorf("status:\n%s", got)
 	}
 }
+
+func TestHTTPCoverageLineShowsExternal(t *testing.T) {
+	c := Coverage{Repo: "admin", Language: "http", HTTPRefs: 1, HTTPLinked: 0, HTTPExternal: 34}
+	if got := c.Line(); !strings.Contains(got, "0 of 1 requests linked") || !strings.Contains(got, "external 34") {
+		t.Errorf("line = %q", got)
+	}
+}

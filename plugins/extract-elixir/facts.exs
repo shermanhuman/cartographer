@@ -81,7 +81,7 @@ defmodule Cartographer.ElixirFacts do
     {functions, clauses, function_notes} = functions(parsed.clauses, repo)
     {calls, classified, defined, marked} = calls(parsed, functions, helpers)
     {routes, route_notes} = routes(parsed.routes, functions, repo)
-    {http_refs, http_skipped} = ElixirHTTP.refs(parsed.clauses, classified, functions)
+    {http_refs, http_skipped} = ElixirHTTP.refs(parsed.clauses, classified, functions, parsed.attrs)
     browser = events(parsed, classified, functions, repo)
 
     stats =

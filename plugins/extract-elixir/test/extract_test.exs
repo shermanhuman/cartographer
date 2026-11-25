@@ -383,6 +383,45 @@ defmodule Cartographer.ElixirExtractTest do
       refute Map.has_key?(doc, :routes)
     end
 
+    test "a request's base is the host behind its base_url literal" do
+      doc =
+        extract(~S"""
+        defmodule Pay do
+          @api "https://api.stripe.com/v1"
+          def charge(id), do: post("/charges/#{id}")
+          defp post(path), do: Req.post(Req.new(base_url: @api), url: path)
+        end
+        defmodule Llm do
+          def ask(opts), do: call("/chat/completions", opts)
+          defp call(path, opts), do: Req.post(Req.new(base_url: base_url(opts)), url: path)
+          defp base_url(opts), do: Keyword.get(opts, :base_url, "https://api.openai.com/v1")
+        end
+        defmodule Bank do
+          def list(kind), do: get("/accounts", kind)
+          defp get(path, kind) do
+            {base, _key} =
+              case kind do
+                :a -> {"https://api.stripe.com/v1", :k1}
+                :b -> {"https://api.mercury.com/api/v1", :k2}
+              end
+            Req.get(Req.new(base_url: base), url: path)
+          end
+        end
+        defmodule Conf do
+          def get_it(id), do: get("/things/#{id}")
+          defp get(path), do: Req.get(Req.new(base_url: Conf.Config.base_url(:x)), url: path)
+        end
+        """)
+
+      refs = Map.new(doc.http_refs, &{&1.from, {&1.base, &1.path}})
+      assert refs["fixture:Pay.charge/1"] == {"https://api.stripe.com", "/v1/charges/:p1"}
+      assert refs["fixture:Llm.ask/1"] == {"https://api.openai.com", "/v1/chat/completions"}
+      # Two hosts: the first, and no path joined.
+      assert refs["fixture:Bank.list/1"] == {"https://api.stripe.com", "/accounts"}
+      # Nothing literal: the module, as before.
+      assert refs["fixture:Conf.get_it/1"] == {"Conf", "/things/:p1"}
+    end
+
     test "a url: that reaches Req.new through a pipe is counted, not extracted" do
       {doc, skipped} = web("sites", ["shared-libs/lib"])
       refute Map.has_key?(doc, :http_refs)

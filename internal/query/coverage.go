@@ -40,6 +40,9 @@ type Coverage struct {
 	SendsDynamic   int `json:"sends_dynamic,omitempty"`
 	Handlers       int `json:"handler_clauses,omitempty"`
 	HandlersLinked int `json:"handler_clauses_linked,omitempty"`
+	// HTTPExternal: refs to outside services (origin 'external'), left out
+	// of HTTPRefs and HTTPLinked.
+	HTTPExternal int `json:"http_external,omitempty"`
 	// Language "http": requests with a path (refs), those linked to a
 	// route, and requests with no path to link (NotExtracted).
 	HTTPRefs   int `json:"http_refs,omitempty"`
@@ -221,7 +224,7 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 
 	var out []Coverage
 	for k, r := range rowsBy {
-		if r.FilesTracked == 0 && r.FilesExtracted == 0 && r.Sends == 0 && r.Handlers == 0 && r.HTTPRefs == 0 && r.NotExtracted == 0 {
+		if r.FilesTracked == 0 && r.FilesExtracted == 0 && r.Sends == 0 && r.Handlers == 0 && r.HTTPRefs == 0 && r.HTTPExternal == 0 && r.NotExtracted == 0 {
 			continue
 		}
 		switch {
@@ -290,9 +293,10 @@ func (q *Q) eventCoverage(ctx context.Context, row func(string) *Coverage) error
 // httpCoverage counts each repo's HTTP refs, and those linked to a route.
 func (q *Q) httpCoverage(ctx context.Context, row func(string) *Coverage) error {
 	rows, err := q.S.DB.QueryContext(ctx, `
-	  SELECT r.repo, count(*),
-	         sum(EXISTS (SELECT 1 FROM http_links l WHERE l.snapshot_id = r.snapshot_id AND l.from_id = r.from_id
-	                     AND l.file = r.file AND l.line = r.line))
+	  SELECT r.repo, sum(r.origin != 'external'),
+	         sum(r.origin != 'external' AND EXISTS (SELECT 1 FROM http_links l WHERE l.snapshot_id = r.snapshot_id AND l.from_id = r.from_id
+	                     AND l.file = r.file AND l.line = r.line)),
+	         sum(r.origin = 'external')
 	    FROM http_refs r WHERE r.snapshot_id = ? GROUP BY r.repo`, q.Snapshot)
 	if err != nil {
 		return err
@@ -300,12 +304,12 @@ func (q *Q) httpCoverage(ctx context.Context, row func(string) *Coverage) error 
 	defer rows.Close()
 	for rows.Next() {
 		var repo string
-		var n, linked int
-		if err := rows.Scan(&repo, &n, &linked); err != nil {
+		var n, linked, external int
+		if err := rows.Scan(&repo, &n, &linked, &external); err != nil {
 			return err
 		}
 		r := row(repo)
-		r.HTTPRefs, r.HTTPLinked = n, linked
+		r.HTTPRefs, r.HTTPLinked, r.HTTPExternal = n, linked, external
 	}
 	return rows.Err()
 }
@@ -321,6 +325,9 @@ func (c Coverage) Line() string {
 			c.HandlersLinked, c.Handlers, pct(c.HandlersLinked, c.Handlers))
 	case "http":
 		s := fmt.Sprintf("%-26s %-10s %d of %d requests linked to a route (%s)", c.Repo, c.Language, c.HTTPLinked, c.HTTPRefs, pct(c.HTTPLinked, c.HTTPRefs))
+		if c.HTTPExternal > 0 {
+			s += fmt.Sprintf(" · external %d", c.HTTPExternal)
+		}
 		if c.NotExtracted > 0 {
 			s += fmt.Sprintf(" · no path %d", c.NotExtracted)
 		}

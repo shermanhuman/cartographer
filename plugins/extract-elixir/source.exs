@@ -412,9 +412,11 @@ defmodule Cartographer.ElixirSource do
   # handle_event guard may name.
   defp walk({:@, _, [{attr, _, [value]}]}, %{module: m, caller: nil} = env, acc)
        when m != nil and ident?(attr) do
+    # A single string (`@api "https://..."`) is kept too: an HTTP base URL.
     acc =
       case literal_strings(value) do
         {:ok, list} -> %{acc | attrs: [%{module: m, name: str(attr), values: list} | acc.attrs]}
+        :error when is_binary(value) -> %{acc | attrs: [%{module: m, name: str(attr), values: [value]} | acc.attrs]}
         :error -> acc
       end
 
