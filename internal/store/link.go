@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strings"
@@ -304,9 +305,14 @@ func externalBase(base string, own, namespaces map[string]bool) bool {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return false
 	}
-	host := strings.ToLower(u.Hostname())
-	if host == "localhost" || strings.HasPrefix(host, "127.") || host == "::1" || host == "0.0.0.0" {
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "localhost" || host == "" {
 		return false
+	}
+	// An IP address: loopback, private and link-local ones are the
+	// project's own network, never an outside service.
+	if ip := net.ParseIP(host); ip != nil {
+		return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) && !own[host]
 	}
 	parts := strings.Split(host, ".")
 	switch {

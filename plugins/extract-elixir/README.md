@@ -156,11 +156,14 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   its module. ExUnit.CaseTemplate `using` blocks are expanded like a
   helper quote, so a test's imports through its case template are seen.
   Component and capture calls keep their kinds and count as external.
-- Requests: a `base_url:` literal (a string, a module attribute, a local
-  function's literal default, or the literals of the clause that binds a
-  variable) sets the ref's `base` to `scheme://host` and joins the URL's
-  path; with several hosts the first is used and no path joined. A loopback
-  URL sets none.
+- Requests: a `base_url:` literal in the requesting function (a string, a
+  module attribute, the literal default of a local function it calls, or
+  the literals a match binds to a variable) sets the ref's `base` to
+  `scheme://host` and joins the URL's path; with several hosts the first in
+  source order is used and no path joined. An interpolated string and a
+  loopback URL set none. A base joined into the URL itself
+  (`url: base <> path`) isn't read: such a request keeps its module as its
+  base.
 - `stats`: one entry, language `elixir`. `call_sites` counts `calls`;
   `in_repo` those whose target is a function in this document, `external`
   those naming a module outside it (Kernel and Erlang included) and the

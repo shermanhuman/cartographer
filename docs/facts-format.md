@@ -236,7 +236,7 @@ without a port.
 
 `stats[]` has one entry per language the document covers: `call_sites` (each
 invocation once, however many edges it gets), `in_repo`, `dispatch`,
-`external` (into dependencies; counted, not stored), `unresolved`, `refs`
+`external` (into dependencies; a producer may also list them as calls of kind `external`), `unresolved`, `refs`
 (references that aren't invocations) and `not_extracted` (routes or requests
 the extractor saw but couldn't read: closures, computed paths, piped
 arguments). Two entries aren't languages: `heex` counts template event sends

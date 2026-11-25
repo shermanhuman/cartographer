@@ -241,6 +241,10 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 		r.Dynamic = n
 		r.Unresolved = max(0, r.Unresolved-n)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
 	rows.Close()
 
 	if err := q.eventCoverage(ctx, func(repo string) *Coverage { return row(repo, "events") }); err != nil {

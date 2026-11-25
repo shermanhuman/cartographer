@@ -8,7 +8,7 @@ limit = int(sys.argv[2]) if len(sys.argv) > 2 else 40
 S = os.environ.get('CARTO_SNAPSHOT') or db.execute(
     "select f.snapshot_id from files f join snapshots s on s.id=f.snapshot_id where f.repo=? order by s.created_at desc limit 1", (repo,)).fetchone()[0]
 rows = db.execute("""select kind, target, file, line from calls
-  where snapshot_id=? and repo=? and to_id is null and kind not in ('external','dynamic')""", (S, repo)).fetchall()
+  where snapshot_id=? and repo=? and to_id is null and kind not in ('external','dynamic','component')""", (S, repo)).fetchall()
 # Library calls keep kind 'remote' with a module outside the project: not
 # gaps. Keep bare targets and targets in a project module.
 project = {m for (m,) in db.execute("select name from modules where snapshot_id=? and repo=?", (S, repo))}

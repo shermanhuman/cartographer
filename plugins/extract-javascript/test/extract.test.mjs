@@ -547,7 +547,8 @@ main();
   assert.deepEqual(unresolved, []);
   const js = doc.stats.find(s => s.language === 'javascript');
   assert.equal(js.unresolved, 0);
-  assert.ok(js.external >= 9, `external ${js.external}`);
+  // launch, newPage, locator, click, fill, click, on, url, get, close.
+  assert.equal(js.external, 10);
 });
 
 test('standard-library callbacks and project values never taint', () => {
