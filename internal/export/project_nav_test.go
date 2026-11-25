@@ -102,6 +102,14 @@ func TestProjectLinkFollowsProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	sidebar(alpha)
+	// Boot resolves the build once (status), then loads the rest pinned to it.
+	mu.Lock()
+	for _, got := range seen {
+		if !strings.HasPrefix(got, "/api/status ") && !strings.HasSuffix(got, " alpha "+alpha) {
+			t.Errorf("boot call %q isn't pinned to the build status resolved", got)
+		}
+	}
+	mu.Unlock()
 	allCarry("alpha")
 
 	// Navigating inside the map keeps the project in the address.

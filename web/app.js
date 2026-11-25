@@ -301,13 +301,11 @@ function locationChanged(){if(location.hash===lastHash)return;lastHash=location.
 window.addEventListener('popstate',locationChanged);window.addEventListener('hashchange',locationChanged);new ResizeObserver(()=>requestAnimationFrame(fit)).observe($('#canvas'));
 const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 try{
-  let annotations;[overview,catalog,status,snapshots,annotations]=await Promise.all([getJSON(api('overview')),getJSON(api('catalog')),getJSON(api('status')),getJSON(api('snapshots')),getJSON(api('annotations'))]);
-  if(PROJECT&&!SNAPSHOT){
-    // The boot calls resolve the project each on their own: a rebuild that
-    // lands mid-boot gives data from two builds. Reload once to settle on one.
-    if(overview.manifest.snapshot!==status.snapshot&&sessionStorage.getItem('carto-reboot')!==status.snapshot){sessionStorage.setItem('carto-reboot',status.snapshot);location.reload();await new Promise(()=>{})}
-    PIN=status.snapshot;
-  }
+  // A project page resolves its build once (status), then loads everything
+  // else from that build (PIN): a rebuild landing mid-boot can't mix two.
+  status=await getJSON(api('status'));
+  if(PROJECT&&!SNAPSHOT)PIN=status.snapshot;
+  let annotations;[overview,catalog,snapshots,annotations]=await Promise.all([getJSON(api('overview')),getJSON(api('catalog')),getJSON(api('snapshots')),getJSON(api('annotations'))]);
   setJourneys(annotations);setDomains(annotations);setInvestigations(annotations);
   entities=new Map(catalog.map(e=>[e.id,e]));applyOverview(annotations.find(a=>a.kind==='overview'));state=parse();if(state.print)document.body.dataset.print=state.print;
   showFreshness();showSnapshots();showJourneyNav();
