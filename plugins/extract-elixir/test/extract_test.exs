@@ -436,8 +436,9 @@ defmodule Cartographer.ElixirExtractTest do
       refs = Map.new(doc.http_refs, &{&1.from, {&1.base, &1.path}})
       assert refs["fixture:Pay.charge/1"] == {"https://api.stripe.com", "/v1/charges/:p1"}
       assert refs["fixture:Llm.ask/1"] == {"https://api.openai.com", "/v1/chat/completions"}
-      # Two hosts: the first, and no path joined.
-      assert refs["fixture:Bank.list/1"] == {"https://api.stripe.com", "/accounts"}
+      # A base bound to a variable (here from a case of tuples) is not read
+      # (map-coverage-2 decision 2).
+      assert refs["fixture:Bank.list/1"] == {"Bank", "/accounts"}
       # Nothing literal: the module, as before.
       assert refs["fixture:Conf.get_it/1"] == {"Conf", "/things/:p1"}
     end
@@ -583,12 +584,11 @@ defmodule Cartographer.ElixirExtractTest do
       assert refs["fixture:Two.ping/1"] == {"Two", "/ping"}
       # A binding with a literal branch and a config branch (H3-m12).
       assert refs["fixture:Two.either/1"] == {"Two", "/e"}
-      # Decision 31 (H4-m13): a variable branch is unknown; literal-only
-      # branches, literal concatenation and a tuple position are read.
-      assert refs["fixture:Two.param/1"] == {"Two", "/p"}
-      assert refs["fixture:Two.lit_case/0"] == {"https://api.stripe.com", "/v1/c"}
-      assert refs["fixture:Two.concat/0"] == {"https://api.stripe.com", "/v1/k"}
-      assert refs["fixture:Two.pair/0"] == {"https://api.stripe.com", "/v1/t"}
+      # map-coverage-2 decision 2: a base held in a variable is never read,
+      # whatever it was bound to.
+      for f <- ~w(param/1 lit_case/0 concat/0 pair/0) do
+        assert {"Two", _} = refs["fixture:Two.#{f}"], f
+      end
       # H5-M11: a name bound other than by a top-level `=` has no base.
       for f <- ~w(by_param/1 by_case/1 by_with/1 by_fn/1) do
         assert {"Two", _} = refs["fixture:Two.#{f}"], f

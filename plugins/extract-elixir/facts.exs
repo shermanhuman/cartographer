@@ -554,7 +554,7 @@ defmodule Cartographer.ElixirFacts do
     cond do
       # A bare call (or capture) no project definition took.
       module == nil and kind in ["local_or_import", "capture"] ->
-        if hole?(c, ctx, lock) do
+        if project_defines?(c, ctx) or hole?(c, ctx, lock) do
           {nil, kind, false}
         else
           case candidates(c, ctx, lock) do
@@ -633,6 +633,18 @@ defmodule Cartographer.ElixirFacts do
       r = ElixirDeps.reach(ctx.ev, lock, u, Map.get(ctx.use_opts, {module, u}, []))
       ElixirDeps.exported?(r.defs, c.name, c.arity)
     end)
+  end
+
+  # Project first: a function the caller's module, or a project module it
+  # imports (admitting the name), defines, including what a project `use`
+  # put there (quoted definitions, which the inventory doesn't list).
+  defp project_defines?(c, ctx) do
+    fa = {c.name, c.arity}
+
+    defined?(ctx.defined, c.caller_module, c.name, c.arity, false) or
+      Enum.any?(c.imports, fn {m, entry} ->
+        MapSet.member?(ctx.project, m) and admits?(entry, fa) and defined?(ctx.defined, m, c.name, c.arity, true)
+      end)
   end
 
   # Decisions 22 and 27: a hole in scope, where a project function the
