@@ -175,6 +175,10 @@ func RunSchema(ctx context.Context, st SchemaStep) (string, error) {
 		env = WithoutPG(env)
 	}
 	env = append(env, mapEnv(envMap)...)
+	if st.Scratch != "" {
+		// Last: prepare's and capture's temp files go in the build's scratch.
+		env = append(env, "TMPDIR="+st.Scratch)
+	}
 	wrap := st.Wrap
 	if wrap == nil {
 		wrap = func(a []string) []string { return a }

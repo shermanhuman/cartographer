@@ -2,10 +2,10 @@ package export
 
 import (
 	"context"
+	"github.com/shermanhuman/cartographer/internal/testfixture"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -33,7 +33,7 @@ func TestProjectLinkFollowsProject(t *testing.T) {
 	t.Cleanup(func() { s.Close() })
 	ctx := context.Background()
 	for _, v := range [][2]string{{"alpha", alpha}, {"beta", beta}} {
-		if _, err := s.Import(ctx, v2Project(t, v[0], v[1])); err != nil {
+		if _, err := s.Import(ctx, testfixture.V2As(t, v[0], v[1], "main")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -138,7 +138,7 @@ func TestProjectLinkFollowsProject(t *testing.T) {
 
 	// A rebuild imported after the page loaded doesn't change it: later
 	// calls carry the build the page loaded (R2-n6).
-	if _, err := s.Import(ctx, v2Project(t, "alpha", "snapshot-20261122T000000Z")); err != nil {
+	if _, err := s.Import(ctx, testfixture.V2As(t, "alpha", "snapshot-20261122T000000Z", "main")); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
@@ -178,33 +178,4 @@ func evalStr(t *testing.T, ctx context.Context, expr string) string {
 		t.Fatalf("%s: %v", expr, err)
 	}
 	return v
-}
-
-// v2Project copies the format-2 fixture (source main) as workspace ws with
-// snapshot id.
-func v2Project(t *testing.T, ws, id string) string {
-	t.Helper()
-	const src = "../../testdata/workspace-v2/snapshot"
-	dir := t.TempDir()
-	err := filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, p)
-		if d.IsDir() {
-			return os.MkdirAll(filepath.Join(dir, rel), 0o755)
-		}
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		if rel == "manifest.json" {
-			raw = []byte(strings.NewReplacer(`"workspace": "v2"`, `"workspace": "`+ws+`"`, "snapshot-20261120T000000Z", id).Replace(string(raw)))
-		}
-		return os.WriteFile(filepath.Join(dir, rel), raw, 0o644)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return dir
 }

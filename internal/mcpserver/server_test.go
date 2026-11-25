@@ -103,7 +103,7 @@ func TestAgentCorrectableErrors(t *testing.T) {
 func TestNoSnapshot(t *testing.T) {
 	cs := session(t, false)
 	out, isErr := call(t, cs, "map_status", map[string]any{})
-	if !isErr || !strings.Contains(out, "cartographer pull") {
+	if !isErr || !strings.Contains(out, "cartographer project add") {
 		t.Errorf("got (%v) %s", isErr, out)
 	}
 }

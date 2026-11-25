@@ -337,7 +337,10 @@ func headStoreAllowed(db string) error {
 	if err != nil {
 		return err
 	}
-	if project.SamePath(abs, filepath.Join(session.DataDir(), "carto.db")) {
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real // a link to the default store is the default store
+	}
+	if store.IsDefaultStore(abs) {
 		return fmt.Errorf("refresh --head: %s is the default store; give it a scratch --db, so the map built from main stays as it is", abs)
 	}
 	regs, _ := project.List(project.StateDir())

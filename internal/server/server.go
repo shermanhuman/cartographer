@@ -250,7 +250,7 @@ func (a *api) snapshotQ(r *http.Request) (*query.Q, int, error) {
 	}
 	q, err := query.New(r.Context(), a.o.Store, id)
 	if errors.Is(err, store.ErrNoSnapshot) {
-		return nil, http.StatusNotFound, errors.New("no snapshot imported yet: run `cartographer pull` or `cartographer import <dir>`")
+		return nil, http.StatusNotFound, errors.New("no map yet: " + store.NoMapAdvice)
 	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, err

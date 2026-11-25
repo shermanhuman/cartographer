@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/shermanhuman/cartographer/internal/gitenv"
 )
 
 func cli(t *testing.T, db string, args ...string) string {
@@ -49,7 +51,7 @@ func TestCLIEndToEnd(t *testing.T) {
 func TestNoSnapshotMessage(t *testing.T) {
 	var out bytes.Buffer
 	err := run(context.Background(), []string{"status", "--db", filepath.Join(t.TempDir(), "x.db")}, &out)
-	if err == nil || !strings.Contains(err.Error(), "cartographer pull") {
+	if err == nil || !strings.Contains(err.Error(), "cartographer project add") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -68,6 +70,7 @@ func TestMain(m *testing.M) {
 	os.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 	os.Setenv("CARTOGRAPHER_STATE", filepath.Join(dir, "state"))
 	os.Setenv("CARTOGRAPHER_NO_REBUILD", "1") // tests opt in to rebuilds explicitly
+	gitenv.Apply()                            // as run() does, so no test depends on which ran first
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

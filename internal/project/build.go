@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -321,7 +322,9 @@ func Build(ctx context.Context, o BuildOptions) (*bundle.Manifest, error) {
 				}
 				// Extractors run in the scratch directory, never inside an
 				// archive, and with no repo or global mise config.
-				stderr, err := workspace.RunPlugin(ctx, o.Work, env, argv, filepath.Join(out, rel), name)
+				// Their temp files (scip's index, a tool's caches) go in the
+				// scratch too, removed with the build.
+				stderr, err := workspace.RunPlugin(ctx, o.Work, append(slices.Clip(env), "TMPDIR="+o.Work), argv, filepath.Join(out, rel), name)
 				if s := strings.TrimSpace(stderr); s != "" {
 					logf("%s: %s stderr:\n%s", name, step, workspace.Tail(s))
 				}

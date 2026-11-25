@@ -30,10 +30,92 @@ var schemaSQL string
 //	2: db_tables.kind
 //	4: http_refs.origin, LiveView events (event_sends, event_handlers,
 //	   hook_mounts, event_links), the edges view's 'event' kind
-const schemaVersion = 4
+var schemaVersion = 4 // a var only so tests can pose as a later schema (SetSchemaVersionForTest)
+
+// SchemaVersion is the schema this binary reads and writes.
+func SchemaVersion() int { return schemaVersion }
+
+// SetSchemaVersionForTest makes this binary act as schema v for a test and
+// returns the restore function. Production code never calls it.
+func SetSchemaVersionForTest(v int) (restore func()) {
+	old := schemaVersion
+	schemaVersion = v
+	return func() { schemaVersion = old }
+}
+
+// DefaultFile is the default store's file name for schema v. Each schema
+// after 4 gets its own file, so an older cartographer never opens a newer
+// store: it only knows its own name. Schema 4 keeps the name it always had.
+func DefaultFile(v int) string {
+	if v <= 4 {
+		return "carto.db"
+	}
+	return fmt.Sprintf("carto-v%d.db", v)
+}
+
+// IsDefaultFile reports whether name (a base name) is a default store's
+// file name for some schema.
+func IsDefaultFile(name string) bool {
+	if name == "carto.db" {
+		return true
+	}
+	var v int
+	n, err := fmt.Sscanf(name, "carto-v%d.db", &v)
+	return err == nil && n == 1 && v > 4 && name == DefaultFile(v)
+}
+
+// DataDir is $CARTOGRAPHER_DATA, else $XDG_DATA_HOME/cartographer or
+// ~/.local/share/cartographer: where the default store lives.
+func DataDir() string {
+	if d := os.Getenv("CARTOGRAPHER_DATA"); d != "" {
+		return d
+	}
+	dir := os.Getenv("XDG_DATA_HOME")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(dir, "cartographer")
+}
+
+// Resolve maps the default store recorded under any schema (a default file
+// name in the data directory) to this schema's file there. Any other path,
+// a carto.db elsewhere included, is the user's choice and is returned as
+// is. A registration recorded before a schema change then follows the
+// store.
+func Resolve(path string) string {
+	if path == "" || !IsDefaultFile(filepath.Base(path)) || !sameDir(filepath.Dir(path), DataDir()) {
+		return path
+	}
+	return filepath.Join(filepath.Dir(path), DefaultFile(schemaVersion))
+}
+
+// IsDefaultStore reports whether path is a default store file, for any
+// schema, in the data directory.
+func IsDefaultStore(path string) bool {
+	return IsDefaultFile(filepath.Base(path)) && sameDir(filepath.Dir(path), DataDir())
+}
+
+func sameDir(a, b string) bool {
+	clean := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			p = r
+		}
+		return filepath.Clean(p)
+	}
+	return clean(a) == clean(b)
+}
 
 // DefaultKeep is how many snapshots per workspace Prune keeps by default.
 const DefaultKeep = 10
+
+// NoMapAdvice is the one answer to "there's no map": maps come from
+// registered projects (0.3 and later), and registering one is the user's
+// call. session.NoMapAdvice names the project when the checkout declares one.
+const NoMapAdvice = "register a project with `cartographer project add owner/name` (registering is the user's call; `cartographer project list` shows what's registered)"
 
 // ErrNoSnapshot is returned when the store holds no snapshot.
 var ErrNoSnapshot = errors.New("store: no snapshot imported")

@@ -12,6 +12,8 @@
 
 When both parameters are given, `snapshot` wins.
 
+With no map at all, every snapshot-scoped endpoint is a 404 whose `error` starts `no map yet:` and tells the reader to register a project with `cartographer project add owner/name` (registering is the user's call).
+
 A `?project=` that resolves to nothing is a 404 that says why:
 
 - **`no project NAME`:** NAME isn't registered with this store, and the store holds no main build under that name.

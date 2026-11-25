@@ -16,6 +16,7 @@ import (
 	"github.com/shermanhuman/cartographer/internal/bundle"
 	"github.com/shermanhuman/cartographer/internal/extract"
 	"github.com/shermanhuman/cartographer/internal/facts"
+	"github.com/shermanhuman/cartographer/internal/gitenv"
 	"github.com/shermanhuman/cartographer/internal/hook"
 	"github.com/shermanhuman/cartographer/internal/mcpserver"
 	"github.com/shermanhuman/cartographer/internal/output"
@@ -39,7 +40,8 @@ const usage = `cartographer — multi-repository system map
 
 Queries (token-budgeted, ranked; --format json prints the rendered lines as
 {"header": [...], "body": [...], "footer": [...]} arrays, unbudgeted):
-  status                      snapshot, repos, coverage, annotation review state
+  status [project]            snapshot, repos, coverage, annotation review state
+                              (a project name shows its newest main map)
   find <words> [--limit N] [--offset N]
                               search functions, modules, tables, files, docs
   show <ref>                  explain one entity and its neighbours
@@ -179,7 +181,7 @@ func defaultDB() string {
 	if p := os.Getenv("CARTOGRAPHER_DB"); p != "" {
 		return p
 	}
-	return filepath.Join(session.DataDir(), "carto.db")
+	return filepath.Join(session.DataDir(), store.DefaultFile(store.SchemaVersion()))
 }
 
 func flags(name string, c *common) *flag.FlagSet {
@@ -271,6 +273,9 @@ func openStore(c *common) (*store.Store, error) {
 }
 
 func run(ctx context.Context, args []string, w io.Writer) error {
+	// No git or ssh prompt from this process or anything it starts: a
+	// background cartographer has no one to answer one (see internal/gitenv).
+	gitenv.Apply()
 	store.BinaryVersion = version // part of every map id
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprint(w, usage)
@@ -631,13 +636,32 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 	}
 	defer s.Close()
 	sess := newSession(&c, s, os.Stderr)
+	if cmd == "status" && len(pos) > 0 {
+		// status <name>: that project's newest main map, wherever this runs.
+		if len(pos) > 1 {
+			return fmt.Errorf("status takes at most one project name, got %d", len(pos))
+		}
+		if c.snapshot == "" {
+			id, err := sess.ProjectSnapshot(ctx, pos[0])
+			var unknown *session.ErrUnknownProject
+			if errors.As(err, &unknown) {
+				return fmt.Errorf("%w; registered projects: %s", err, registeredNames())
+			}
+			if err != nil {
+				return err
+			}
+			sess.Snapshot = id
+		}
+		pos = nil
+	}
 	q, rep, err := sess.Query(ctx)
 	var first *session.ErrFirstBuild
 	if errors.As(err, &first) {
 		return err
 	}
 	if errors.Is(err, store.ErrNoSnapshot) {
-		return errors.New("no snapshot yet: in your workspace run `cartographer build --local --import` (then `cartographer workspace add <dir>` keeps it fresh), or `cartographer pull <owner/name>`, or `cartographer import <dir>`")
+		cwd, _ := os.Getwd()
+		return errors.New("no map yet: " + session.NoMapAdvice(ctx, cwd, project.StateDir()))
 	}
 	if err != nil {
 		return err
@@ -680,6 +704,19 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 }
 
 var errNotMapped = errors.New("not in a mapped repository")
+
+// registeredNames lists the registered projects for an error message.
+func registeredNames() string {
+	regs, _ := project.List(project.StateDir())
+	if len(regs) == 0 {
+		return "none (cartographer project add owner/name registers one)"
+	}
+	names := make([]string, len(regs))
+	for i, r := range regs {
+		names[i] = r.Name
+	}
+	return strings.Join(names, ", ")
+}
 
 // newSession builds a session for cwd. A one-shot command rebuilds through
 // a detached child (spawnRebuild); long-lived ones replace that with

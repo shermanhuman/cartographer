@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -121,17 +119,7 @@ type memo struct {
 
 // DataDir is $CARTOGRAPHER_DATA, else $XDG_DATA_HOME/cartographer or
 // ~/.local/share/cartographer.
-func DataDir() string {
-	if d := os.Getenv("CARTOGRAPHER_DATA"); d != "" {
-		return d
-	}
-	dir := os.Getenv("XDG_DATA_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "share")
-	}
-	return filepath.Join(dir, "cartographer")
-}
+func DataDir() string { return store.DataDir() }
 
 func (s *Session) logf(format string, a ...any) {
 	if s.Log != nil {
@@ -598,10 +586,19 @@ func (s *Session) repos(ctx context.Context, id string) ([]fresh.Repo, error) {
 }
 
 // ErrNotMapped means the current repository isn't covered by any imported map.
-type ErrNotMapped struct{ Workspaces []string }
+type ErrNotMapped struct {
+	Workspaces []string
+	// Cwd and StateDir let Error() name the checkout's project; the advice is
+	// worked out only when the message is read (Mapped stays cheap).
+	Cwd, StateDir string
+}
 
 func (e *ErrNotMapped) Error() string {
-	return fmt.Sprintf("this repository isn't covered by any map (have: %s); build its workspace with `cartographer build --local --import` there (and `cartographer workspace add <dir>` to keep it fresh), pull it with `cartographer pull <owner/name>`, or pass --snapshot", strings.Join(e.Workspaces, ", "))
+	advice := store.NoMapAdvice
+	if e.Cwd != "" {
+		advice = NoMapAdvice(context.Background(), e.Cwd, e.StateDir)
+	}
+	return fmt.Sprintf("this repository isn't covered by any map (have: %s); %s, or pass --snapshot", strings.Join(e.Workspaces, ", "), advice)
 }
 
 // choose picks the newest snapshot of the workspace whose repositories
@@ -634,7 +631,7 @@ func (s *Session) chooseRepo(ctx context.Context, co fresh.Checkout) (string, st
 			}
 			return "", "", s.firstBuild(reg)
 		}
-		return "", "", store.ErrNoSnapshot
+		return "", "", &ErrNoMap{Cwd: s.Cwd, StateDir: s.StateDir}
 	}
 	latest := map[string]string{} // workspace -> newest snapshot (all is newest first)
 	var names []string
@@ -666,7 +663,7 @@ func (s *Session) chooseRepo(ctx context.Context, co fresh.Checkout) (string, st
 		if len(names) == 0 && len(regs) > 0 {
 			return "", "", s.firstBuild(regs[0])
 		}
-		return "", "", &ErrNotMapped{Workspaces: names}
+		return "", "", &ErrNotMapped{Workspaces: names, Cwd: s.Cwd, StateDir: s.StateDir}
 	}
 	// Evidence ranks origin, then a [checkouts] path, then directory name.
 	// An origin match anywhere wins, so a newer workspace with a same-named
@@ -698,7 +695,7 @@ func (s *Session) chooseRepo(ctx context.Context, co fresh.Checkout) (string, st
 			return latest[ws], name, nil
 		}
 	}
-	return "", "", &ErrNotMapped{Workspaces: names}
+	return "", "", &ErrNotMapped{Workspaces: names, Cwd: s.Cwd, StateDir: s.StateDir}
 }
 
 // Choose is the snapshot queries from cwd would use (see choose), cached

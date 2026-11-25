@@ -47,6 +47,7 @@ type Registration struct {
 
 // InStore reports whether db is the store the project builds into.
 func (r *Registration) InStore(db string) bool {
+	// r.Store is resolved by Load; db is the caller's explicit choice.
 	return r.Store != "" && SamePath(r.Store, db)
 }
 
@@ -125,6 +126,9 @@ func Load(stateDir, name string) (*Registration, error) {
 	if r.Name != name {
 		return nil, fmt.Errorf("project %s: %s names project %q", name, regPath(stateDir, name), r.Name)
 	}
+	// A default store recorded under an earlier schema means this schema's
+	// file now; resolving here gives every reader the same answer.
+	r.Store = store.Resolve(r.Store)
 	return &r, nil
 }
 

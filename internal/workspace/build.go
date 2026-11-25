@@ -25,6 +25,7 @@ import (
 	"github.com/shermanhuman/cartographer/internal/bundle"
 	"github.com/shermanhuman/cartographer/internal/facts"
 	"github.com/shermanhuman/cartographer/internal/fresh"
+	"github.com/shermanhuman/cartographer/internal/gitenv"
 )
 
 type BuildOptions struct {
@@ -291,7 +292,8 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 			logf("%s: plugin %s", co.repo.Name, pname)
 			// Plugins run in the workspace directory, never inside the archived
 			// repository: its tool config (e.g. mise.toml) is not trusted here.
-			stderr, err := runPlugin(ctx, c.dir, mapEnv(p.Env), expand(p.Command, v), filepath.Join(out, rel), co.repo.Name)
+			// Temp files go in the build's scratch, removed with it.
+			stderr, err := runPlugin(ctx, c.dir, append(mapEnv(p.Env), "TMPDIR="+work), expand(p.Command, v), filepath.Join(out, rel), co.repo.Name)
 			if err != nil {
 				return nil, fmt.Errorf("build: %s: plugin %s: %w", co.repo.Name, pname, err)
 			}
@@ -535,14 +537,16 @@ func runCmd(ctx context.Context, dir string, env, argv []string, stdout io.Write
 	return runCmdIn(ctx, dir, append(childEnv(os.Environ()), env...), argv, stdout)
 }
 
-// runCmdIn runs argv with exactly the environment env.
+// runCmdIn runs argv with the environment env, made promptless last so no
+// overlay (a plugin's or a repo's [schema] env) can restore a git or ssh
+// prompt.
 func runCmdIn(ctx context.Context, dir string, env, argv []string, stdout io.Writer) (string, error) {
 	if len(argv) == 0 {
 		return "", errors.New("empty command")
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = env
+	cmd.Env = gitenv.Promptless(env, "")
 	// Cancelling ends the command's whole process group (ownGroup); after
 	// WaitDelay the command is killed and its output pipes closed.
 	cmd.WaitDelay = 5 * time.Second
@@ -751,7 +755,7 @@ const extraHeaderKey = "http.https://github.com/.extraheader"
 // GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n so it never appears on argv. Every git
 // process (including lazy blob fetches of a partial clone) inherits it.
 func gitEnv() []string {
-	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	env := gitenv.Promptless(os.Environ(), "")
 	tok := githubToken()
 	if tok == "" {
 		return env
