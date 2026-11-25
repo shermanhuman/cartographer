@@ -2,12 +2,14 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/shermanhuman/cartographer/internal/project"
+	"github.com/shermanhuman/cartographer/internal/store"
 )
 
 func checkout(t *testing.T, repoToml string) string {
@@ -52,5 +54,35 @@ func TestNoMapAdvice(t *testing.T) {
 	e := &ErrNotMapped{Workspaces: []string{"other"}, Cwd: member, StateDir: t.TempDir()}
 	if msg := e.Error(); !strings.Contains(msg, "have: other") || !strings.Contains(msg, "project add acme/app-admin") {
 		t.Errorf("ErrNotMapped: %q", msg)
+	}
+}
+
+// A session over an empty store answers with ErrNoMap, which still is
+// store.ErrNoSnapshot and names the checkout's project (R1-M1's wiring).
+func TestEmptyStoreIsErrNoMap(t *testing.T) {
+	ctx := context.Background()
+	member := checkout(t, "project = \"app\"\nanchor = \"acme/app-admin\"\n")
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sess := &Session{Store: s, Cwd: member, StateDir: t.TempDir()}
+	_, _, err = sess.Query(ctx)
+	var nm *ErrNoMap
+	if !errors.Is(err, store.ErrNoSnapshot) || !errors.As(err, &nm) || !strings.Contains(nm.Advice(), "project add acme/app-admin") {
+		t.Fatalf("empty store: %v", err)
+	}
+}
+
+// A registration file that can't be read isn't "unregistered": the advice
+// stays generic rather than telling the user to register again.
+func TestNoMapAdviceUnreadableRegistration(t *testing.T) {
+	sd := t.TempDir()
+	os.MkdirAll(filepath.Join(sd, "projects"), 0o755)
+	os.WriteFile(filepath.Join(sd, "projects", "app.json"), []byte("{"), 0o644)
+	anchor := checkout(t, "project = \"app\"\nmembers = [{repo = \"acme/app\"}]\n")
+	if got := NoMapAdvice(context.Background(), anchor, sd); strings.Contains(got, "belongs to") {
+		t.Errorf("an unreadable registration read as unregistered: %q", got)
 	}
 }

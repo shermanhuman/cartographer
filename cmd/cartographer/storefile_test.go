@@ -31,7 +31,10 @@ func TestEachSchemaHasItsOwnStoreFile(t *testing.T) {
 	}
 	// refresh --head never writes any default store, this schema's or an
 	// older one's.
-	for _, db := range []string{v5, filepath.Join(data, "carto.db")} {
+	link := filepath.Join(t.TempDir(), "link.db")
+	os.WriteFile(v5, nil, 0o644)
+	os.Symlink(v5, link)
+	for _, db := range []string{v5, filepath.Join(data, "carto.db"), link} {
 		if err := headStoreAllowed(db); err == nil {
 			t.Errorf("refresh --head allowed into the default store %s", db)
 		}
