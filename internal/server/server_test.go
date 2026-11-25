@@ -361,7 +361,7 @@ func TestStaticUI(t *testing.T) {
 func TestNoSnapshot(t *testing.T) {
 	srv := newServer(t, false)
 	body, _ := get(t, srv, "/api/catalog", 404)
-	if !strings.Contains(body, "cartographer pull") {
+	if !strings.Contains(body, "cartographer project add") {
 		t.Errorf("no-snapshot message: %s", body)
 	}
 	if s := getJSON[[]obj](t, srv, "/api/snapshots"); len(s) != 0 {

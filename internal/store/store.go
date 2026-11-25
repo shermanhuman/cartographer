@@ -77,6 +77,11 @@ func Resolve(path string) string {
 // DefaultKeep is how many snapshots per workspace Prune keeps by default.
 const DefaultKeep = 10
 
+// NoMapAdvice is the one answer to "there's no map": maps come from
+// registered projects (0.3 and later), and registering one is the user's
+// call. session.NoMapAdvice names the project when the checkout declares one.
+const NoMapAdvice = "register a project with `cartographer project add owner/name` (registering is the user's call; `cartographer project list` shows what's registered)"
+
 // ErrNoSnapshot is returned when the store holds no snapshot.
 var ErrNoSnapshot = errors.New("store: no snapshot imported")
 

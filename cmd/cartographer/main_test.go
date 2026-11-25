@@ -49,7 +49,7 @@ func TestCLIEndToEnd(t *testing.T) {
 func TestNoSnapshotMessage(t *testing.T) {
 	var out bytes.Buffer
 	err := run(context.Background(), []string{"status", "--db", filepath.Join(t.TempDir(), "x.db")}, &out)
-	if err == nil || !strings.Contains(err.Error(), "cartographer pull") {
+	if err == nil || !strings.Contains(err.Error(), "cartographer project add") {
 		t.Fatalf("got %v", err)
 	}
 }

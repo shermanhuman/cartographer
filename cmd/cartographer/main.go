@@ -660,7 +660,8 @@ func run(ctx context.Context, args []string, w io.Writer) error {
 		return err
 	}
 	if errors.Is(err, store.ErrNoSnapshot) {
-		return errors.New("no snapshot yet: in your workspace run `cartographer build --local --import` (then `cartographer workspace add <dir>` keeps it fresh), or `cartographer pull <owner/name>`, or `cartographer import <dir>`")
+		cwd, _ := os.Getwd()
+		return errors.New("no map yet: " + session.NoMapAdvice(ctx, cwd, project.StateDir()))
 	}
 	if err != nil {
 		return err
