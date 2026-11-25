@@ -90,6 +90,10 @@ defmodule Cartographer.ElixirSource do
       hook_mounts: [],
       passthrough: [],
       uses: [],
+      # Functions a project `use` defines in the using module (its quote's
+      # def, defp, defmacro and defdelegate forms): %{module, name, min, max},
+      # or %{module, computed: true} for a name the walk can't read.
+      quoted_defs: [],
       module_envs: [],
       embeds: [],
       attrs: []
@@ -1153,7 +1157,30 @@ defmodule Cartographer.ElixirSource do
         expand_form(form, module, h, e, a, depth)
       end)
 
+  # A definition the quote puts in the using module (decision 30).
+  defp expand_form({kind, _, [head | _]}, _module, _h, env, acc, _depth)
+       when kind in [:def, :defp, :defmacro, :defmacrop, :defdelegate] do
+    record =
+      case quoted_head(head) do
+        {name, min, max} -> %{module: env.module, name: name, min: min, max: max}
+        :computed -> %{module: env.module, computed: true}
+      end
+
+    {env, %{acc | quoted_defs: [record | acc.quoted_defs]}}
+  end
+
   defp expand_form(_, _module, _h, env, acc, _depth), do: {env, acc}
+
+  defp quoted_head({:when, _, [head | _]}), do: quoted_head(head)
+  defp quoted_head({:unquote, _, _}), do: :computed
+
+  defp quoted_head({name, _, args}) when ident?(name) and is_list(args) do
+    defaults = Enum.count(args, &match?({:\\, _, _}, &1))
+    {str(name), length(args) - defaults, length(args)}
+  end
+
+  defp quoted_head({name, _, ctx}) when ident?(name) and is_atom(ctx), do: {str(name), 0, 0}
+  defp quoted_head(_), do: :computed
 
   @doc """
   The `use` helpers of one parsed file: `%{module => %{funs: %{name =>

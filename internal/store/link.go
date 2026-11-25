@@ -292,6 +292,10 @@ func pathMatch(route, req string, subtree bool) bool {
 // goSubtree reports a Go route, whose pattern ending in / is a subtree.
 func goSubtree(r facts.Route) bool { return strings.HasSuffix(r.File, ".go") }
 
+// sharedSpace is 100.64.0.0/10 (RFC 6598), the carrier-grade NAT range
+// Tailscale addresses come from: the project's own network.
+var sharedSpace = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
 // externalBase reports whether a request's base names an outside service:
 // an absolute http(s) URL with a literal host that is not loopback, not a
 // cluster service name (one label, name.namespace for a namespace the
@@ -312,7 +316,7 @@ func externalBase(base string, own, namespaces map[string]bool) bool {
 	// An IP address: loopback, private and link-local ones are the
 	// project's own network, never an outside service.
 	if ip := net.ParseIP(host); ip != nil {
-		return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) && !own[host]
+		return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || sharedSpace.Contains(ip)) && !own[host]
 	}
 	parts := strings.Split(host, ".")
 	switch {

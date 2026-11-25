@@ -118,17 +118,22 @@ defmodule Cartographer.ElixirHTTP do
     by_module = Enum.group_by(cs, & &1.module)
     attr = Map.new(attrs, &{{&1.module, &1.name}, &1.values})
 
-    # A module whose base_url literals all name one host: a function with
-    # none of its own (the Req is built in a helper) takes that one.
+    # A module whose every base_url value reads as a literal URL, all
+    # naming one host: a function with none of its own (the Req is built in
+    # a helper) takes that one. A value that isn't a literal (config, an
+    # interpolated string, a parameter) leaves the module with no base, so
+    # no function is given a host it can't be shown to use (decision 29).
     module_base =
       Map.new(by_module, fn {module, mcs} ->
-        urls = Enum.flat_map(mcs, &clause_urls(&1, module, mcs, attr))
+        values =
+          for c <- mcs, v <- base_url_values(c.http.body), do: resolve_base(v, c, module, mcs, attr)
+
+        urls = List.flatten(values)
 
         {module,
-         case base_of(urls) do
-           {_, _} = b -> if single_host?(urls), do: b
-           nil -> nil
-         end}
+         if(values != [] and Enum.all?(values, &(base_of(&1) != nil)) and single_host?(urls),
+           do: base_of(urls)
+         )}
       end)
 
     cs
@@ -181,6 +186,7 @@ defmodule Cartographer.ElixirHTTP do
   end
 
   defp origin_of(%URI{scheme: s, host: h} = u) do
+    h = String.downcase(h)
     host = if String.contains?(h, ":"), do: "[#{h}]", else: h
     "#{String.downcase(s)}://#{host}#{port(u)}"
   end

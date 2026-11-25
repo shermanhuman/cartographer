@@ -1,5 +1,9 @@
 # The calls a map still leaves unresolved in one repo, by target, with an
-# example site: the "real gaps" list. CARTO_DB and CARTO_SNAPSHOT as in
+# example site: the "real gaps" list. Component calls are left out
+# (coverage counts them external, though a project component that doesn't
+# resolve is a real gap), and so are calls of kind external and dynamic.
+# Captures and apply/3 of use-generated functions keep their kinds and
+# still appear here. CARTO_DB and CARTO_SNAPSHOT as in
 # bare.py. Usage: python3 unresolved.py <repo> [limit]
 import sqlite3, os, sys, collections
 db = sqlite3.connect('file:' + os.path.expanduser(os.environ.get('CARTO_DB', '~/.local/share/cartographer/carto.db')) + '?mode=ro', uri=True)

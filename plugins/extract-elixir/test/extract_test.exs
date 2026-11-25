@@ -483,6 +483,28 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{base: "https://api.stripe.com", path: "/v1/charges/:p1"}] = doc.http_refs
     end
 
+    # Round 2, H2-M7: a function's own non-literal base never takes the
+    # module's host.
+    test "a base that isn't a literal never takes the module's one host" do
+      doc =
+        extract(~S"""
+        defmodule Two do
+          @stripe "https://api.stripe.com/v1"
+          def pay(id), do: stripe("/charges/#{id}")
+          def check(id), do: admin("/api/check/#{id}")
+          def ping(ns), do: interp("/ping", ns)
+          defp stripe(path), do: Req.post(Req.new(base_url: @stripe), url: path)
+          defp admin(path), do: Req.get(Req.new(base_url: Application.fetch_env!(:app, :admin_url)), url: path)
+          defp interp(path, ns), do: Req.get(Req.new(base_url: "http://admin.#{ns}.svc:4000"), url: path)
+        end
+        """)
+
+      refs = Map.new(doc.http_refs, &{&1.from, {&1.base, &1.path}})
+      assert refs["fixture:Two.pay/1"] == {"https://api.stripe.com", "/v1/charges/:p1"}
+      assert refs["fixture:Two.check/1"] == {"Two", "/api/check/:p1"}
+      assert refs["fixture:Two.ping/1"] == {"Two", "/ping"}
+    end
+
     # Decision 26.
     test "a loopback base_url sets no base" do
       doc =
@@ -1202,6 +1224,56 @@ defmodule Cartographer.ElixirExtractTest do
       # The same generated function called bare inside the using module.
       assert [%{target: %{module: "Oban.Worker"}, kind: "external"}] =
                from(doc, "App.Worker.go/1", "new")
+    end
+
+    # Round 2, H2-M8: the definitions a `use` applies, from the expansion.
+    test "a quote's definitions are the using module's, through dispatch, helpers and defaults" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/app_web.ex" => ~S"""
+              defmodule AppWeb do
+                def live_view do
+                  quote do
+                    use Phoenix.LiveView
+                    def ok(socket), do: {:ok, socket}
+                    unquote(helpers())
+                  end
+                end
+
+                defp helpers do
+                  quote do
+                    def touch(x, opts \\ []), do: {x, opts}
+                    defdelegate fmt(x), to: App.Format
+                  end
+                end
+
+                defmacro __using__(which) when is_atom(which), do: apply(__MODULE__, which, [])
+              end
+              """,
+              "lib/page.ex" => ~S"""
+              defmodule App.Page do
+                use AppWeb, :live_view
+                import Ecto.Changeset
+                def mount(_, _, s), do: {ok(s), touch(s), fmt(s), cast(s, %{}, [])}
+              end
+              """,
+              "lib/other.ex" => ~S"""
+              defmodule App.Other do
+                def go(x), do: App.Page.touch(x)
+              end
+              """
+            })
+        )
+
+      for name <- ~w(ok touch fmt) do
+        assert [%{kind: "local_or_import"}] = from(doc, "App.Page.mount/3", name), name
+      end
+
+      assert [%{kind: "external"}] = from(doc, "App.Page.mount/3", "cast")
+      assert [%{kind: "remote"}] = from(doc, "App.Other.go/1", "touch")
     end
 
     # Round 1, H1-m1 and H1-m2.

@@ -431,29 +431,22 @@ defmodule Cartographer.ElixirFacts do
   defp external_context(parsed, defined, helpers) do
     project = MapSet.new(parsed.modules, & &1.name)
 
-    # A project helper whose quote defines functions (`def mount/3` inside
-    # `__using__`): the modules that use it define them too. When every
-    # quoted def has a literal name they're added as definitions; when a
-    # name is computed (`def unquote(n)()`), the using modules count as
-    # dynamic (round 1, H1-M1).
-    quoted =
-      for {m, h} <- helpers, h.using != nil, defs = quote_defs(h.using), defs != [], into: %{}, do: {m, defs}
+    # Functions a project `use` puts in the using module, as the
+    # use-expansion applied them (decision 30): definitions of that module,
+    # one per arity a default allows. A name the walk can't read makes the
+    # module dynamic.
+    quoted = Map.get(parsed, :quoted_defs, [])
 
-    users = fn pred ->
-      parsed.uses
-      |> Enum.filter(fn u -> pred.(Map.get(quoted, u.use)) end)
-      |> Enum.map(& &1.module)
-    end
-
-    computed = users.(&(&1 != nil and :computed in &1)) |> MapSet.new()
+    computed =
+      quoted |> Enum.filter(&Map.get(&1, :computed, false)) |> MapSet.new(& &1.module)
 
     defined =
-      for module <- users.(&(&1 != nil and :computed not in &1)),
-          {name, arity} <- Enum.flat_map([module], fn mod -> quoted_for(parsed.uses, quoted, mod) end),
-          reduce: defined do
-        acc ->
-          Map.update(acc, {module, name}, [{arity, arity, true, :functions}], &[{arity, arity, true, :functions} | &1])
-      end
+      quoted
+      |> Enum.reject(&Map.get(&1, :computed, false))
+      |> Enum.reduce(defined, fn d, acc ->
+        entry = {d.min, d.max, true, :functions}
+        Map.update(acc, {d.module, d.name}, [entry], &[entry | &1])
+      end)
 
     # Every {name, arity} some project module defines publicly (decision 15).
     public =
@@ -579,35 +572,6 @@ defmodule Cartographer.ElixirFacts do
   defp reaches_dynamic?(c, ctx) do
     MapSet.member?(ctx.dynamic, Map.get(c, :caller_module)) or
       Enum.any?(Map.keys(c.imports), &MapSet.member?(ctx.dynamic, &1))
-  end
-
-  # The {name, arity} of each def in a quote, or :computed for a def whose
-  # name isn't a literal.
-  defp quote_defs(forms) do
-    {_, found} =
-      Macro.prewalk(forms, [], fn
-        {kind, _, [head | _]} = node, acc when kind in [:def, :defp, :defmacro, :defmacrop] ->
-          {node, [def_head(head) | acc]}
-
-        node, acc ->
-          {node, acc}
-      end)
-
-    Enum.uniq(found)
-  end
-
-  defp def_head({:when, _, [head | _]}), do: def_head(head)
-  defp def_head({name, _, args}) when is_atom(name) and name != :unquote and is_list(args), do: {Atom.to_string(name), length(args)}
-  defp def_head({name, _, ctx}) when is_atom(name) and name != :unquote and is_atom(ctx), do: {Atom.to_string(name), 0}
-  defp def_head({%{__atom__: name}, _, args}) when is_list(args), do: {name, length(args)}
-  defp def_head({%{__atom__: name}, _, ctx}) when is_atom(ctx), do: {name, 0}
-  defp def_head(_), do: :computed
-
-  defp quoted_for(uses, quoted, module) do
-    uses
-    |> Enum.filter(&(&1.module == module))
-    |> Enum.flat_map(&Map.get(quoted, &1.use, []))
-    |> Enum.reject(&(&1 == :computed))
   end
 
   defp external_kind("capture"), do: "capture"

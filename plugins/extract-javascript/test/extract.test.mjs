@@ -602,9 +602,10 @@ test("a package function's callbacks take the caller's values", () => {
 function make() { return [{ render() {} }]; }
 export function run() {
   _.each(make(), (i) => i.render());
+  _.fp.forEach(make(), (j) => j.draw());
 }
 `,
   });
   const doc = run({repo: 'shop', root});
-  assert.deepEqual(doc.calls.filter(c => c.kind === 'unresolved').map(c => c.target.name), ['render']);
+  assert.deepEqual(doc.calls.filter(c => c.kind === 'unresolved').map(c => c.target.name).sort(), ['draw', 'render']);
 });

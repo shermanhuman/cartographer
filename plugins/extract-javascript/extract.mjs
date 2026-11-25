@@ -1085,7 +1085,11 @@ function tainted(ts, K, checker, n, taint, depth, onStack, params) {
     if ((fn.kind === K.ArrowFunction || fn.kind === K.FunctionExpression) && call?.kind === K.CallExpression &&
         call.arguments.includes(fn) && call.expression.kind === K.PropertyAccessExpression) {
       const owner = call.expression.expression;
-      const exported = owner.kind === K.Identifier && importedFromPackage(ts, K, owner, checker);
+      // The package's own namespace, reached through members only
+      // (_.each, _.fp.map, Rx.operators.map): its functions, not a value.
+      let root = owner;
+      while (root.kind === K.PropertyAccessExpression) root = root.expression;
+      const exported = root.kind === K.Identifier && importedFromPackage(ts, K, root, checker);
       if (!exported && next(owner)) return true;
     }
     if (!params) return false;

@@ -33,6 +33,7 @@ func TestExternalBase(t *testing.T) {
 		"http://[::1]:4000":             false,
 		"https://203.0.113.7":           true,
 		"HTTPS://API.STRIPE.COM":        true,
+		"http://100.101.102.103:4000":   false, // Tailscale
 	} {
 		if got := externalBase(base, own, namespaces); got != want {
 			t.Errorf("externalBase(%q) = %v, want %v", base, got, want)
