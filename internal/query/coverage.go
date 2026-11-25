@@ -28,6 +28,11 @@ type Coverage struct {
 	Refs         int `json:"refs"`
 	NotExtracted int `json:"not_extracted"`
 
+	// Dynamic: Elixir calls through a value (fun.(x), apply/3,
+	// mod.fun()), counted from the stored kind 'dynamic' rows and left out
+	// of Unresolved (decision 22).
+	Dynamic int `json:"dynamic,omitempty"`
+
 	Functions       int `json:"functions"`
 	FunctionsLinked int `json:"functions_linked"`
 
@@ -215,6 +220,29 @@ func (q *Q) Coverage(ctx context.Context) ([]Coverage, error) {
 	}
 	rows.Close()
 
+	// Elixir dynamic calls (in .ex, .exs and .heex files): their own count,
+	// out of unresolved.
+	rows, err = db.QueryContext(ctx, `
+	  SELECT repo, count(*) FROM calls
+	   WHERE snapshot_id = ? AND kind = 'dynamic'
+	     AND (file LIKE '%.ex' OR file LIKE '%.exs' OR file LIKE '%.heex')
+	   GROUP BY repo`, q.Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var repo string
+		var n int
+		if err := rows.Scan(&repo, &n); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		r := row(repo, "elixir")
+		r.Dynamic = n
+		r.Unresolved = max(0, r.Unresolved-n)
+	}
+	rows.Close()
+
 	if err := q.eventCoverage(ctx, func(repo string) *Coverage { return row(repo, "events") }); err != nil {
 		return nil, err
 	}
@@ -349,6 +377,9 @@ func (c Coverage) Line() string {
 		}
 		if c.Unresolved > 0 {
 			extra = append(extra, fmt.Sprintf("unresolved %d", c.Unresolved))
+		}
+		if c.Dynamic > 0 {
+			extra = append(extra, fmt.Sprintf("dynamic %d", c.Dynamic))
 		}
 		if c.NotExtracted > 0 {
 			extra = append(extra, fmt.Sprintf("not extracted %d", c.NotExtracted))
