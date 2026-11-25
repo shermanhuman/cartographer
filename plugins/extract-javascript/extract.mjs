@@ -413,7 +413,7 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
   // Values from packages (decision 16): resolved calls by target function
   // (for one level of parameters), and the unresolved member calls to
   // re-check once a program's files are walked.
-  const taint = {callers: new Map(), pending: [], dropped: new Set()};
+  const taint = {callers: new Map(), pending: [], dropped: new Set(), memo: new Map(), memoParams: new Map()};
   const stat = (lang) => { if (!stats.has(lang)) stats.set(lang, {language: lang, call_sites: 0, in_repo: 0, dispatch: 0, external: 0, unresolved: 0, refs: 0, not_extracted: 0}); return stats.get(lang); };
   const extracted = new Set(files.filter(f => !hidden.has(fs.realpathSync.native(path.join(rootReal, f)))));
   for (const {file} of deep) extracted.add(file);
@@ -460,6 +460,8 @@ export function extract({repo, root, revision, sourceRoots = ['assets/js'], type
     }
     taint.pending = [];
     taint.callers = new Map();
+    taint.memo = new Map();
+    taint.memoParams = new Map();
   }
 
   for (const {file, sf} of deep) {
@@ -1021,10 +1023,25 @@ function resolve({ts, K, N, node, callee, jsx, checker, relOf, extracted, repo})
 // and one level of parameters: every in-repo call of the function passes a
 // tainted value there. A standard-library value never taints: items.forEach
 // on a project array stays the project's.
-function tainted(ts, K, checker, n, taint, depth, seen, params) {
-  if (!n || depth > 16 || seen.has(n)) return false;
-  seen.add(n);
-  const next = (x, p = params) => tainted(ts, K, checker, x, taint, depth + 1, seen, p);
+//
+// Results are cached per node (and per whether parameters may be followed)
+// for the program; a node already being evaluated answers false only to
+// break a real cycle (round 1, H1-M5).
+function tainted(ts, K, checker, n, taint, depth, onStack, params) {
+  if (!n || depth > 64) return false;
+  const memo = params ? taint.memoParams : taint.memo;
+  if (memo.has(n)) return memo.get(n);
+  if (onStack.has(n)) return false;
+  onStack.add(n);
+  const result = evaluate();
+  onStack.delete(n);
+  memo.set(n, result);
+  return result;
+
+  function evaluate() {
+  // require('pkg') with a bare specifier is a package value too.
+  if (n.kind === K.CallExpression && n.expression.kind === K.Identifier && n.expression.text === 'require' &&
+      n.arguments[0]?.kind === K.StringLiteral && !/^[./]/.test(n.arguments[0].text)) return true;
   switch (n.kind) {
     case K.ParenthesizedExpression: case K.AsExpression: case K.NonNullExpression:
     case K.AwaitExpression: case K.TypeAssertionExpression: case K.SatisfiesExpression:
@@ -1042,6 +1059,8 @@ function tainted(ts, K, checker, n, taint, depth, seen, params) {
     default:
       return false;
   }
+  }
+  function next(x, p = params) { return tainted(ts, K, checker, x, taint, depth + 1, onStack, p); }
   function declTainted(d) {
     if (d.kind === K.VariableDeclaration) return !!d.initializer && next(d.initializer);
     if (d.kind === K.BindingElement) {
@@ -1058,9 +1077,17 @@ function tainted(ts, K, checker, n, taint, depth, seen, params) {
     const fn = param.parent;
     const i = fn.parameters?.indexOf(param) ?? -1;
     if (i < 0) return false;
-    // A callback handed to a call on a package value.
-    if ((fn.kind === K.ArrowFunction || fn.kind === K.FunctionExpression) && fn.parent?.kind === K.CallExpression &&
-        fn.parent.arguments.includes(fn) && next(fn.parent.expression)) return true;
+    // A callback handed to a method of a package *value*
+    // (page.on('response', r => ...)), never to a function the package
+    // exports itself (_.each(items, i => ...)), whose callbacks take the
+    // caller's own values (round 1, H1-M6; decision 28).
+    const call = fn.parent;
+    if ((fn.kind === K.ArrowFunction || fn.kind === K.FunctionExpression) && call?.kind === K.CallExpression &&
+        call.arguments.includes(fn) && call.expression.kind === K.PropertyAccessExpression) {
+      const owner = call.expression.expression;
+      const exported = owner.kind === K.Identifier && importedFromPackage(ts, K, owner, checker);
+      if (!exported && next(owner)) return true;
+    }
     if (!params) return false;
     // One level: every in-repo call passes a package value here.
     const callers = taint.callers.get(fn) ?? [];

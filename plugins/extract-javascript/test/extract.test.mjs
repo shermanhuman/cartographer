@@ -571,3 +571,39 @@ export function run(items) {
   // isn't a package value.
   assert.deepEqual(unresolved, ['forEach', 'go', 'render', 'x']);
 });
+
+// Round 1: H1-M5 (a helper reached twice), H1-m4 (require), H1-M6 (a
+// package function's callbacks take the caller's values).
+test('a helper called twice with package values, and require(), are external', () => {
+  const root = write({
+    'e2e/twice.cjs': `const { chromium } = require('playwright');
+async function login(page) { await page.fill('#email', 'a'); }
+async function main() {
+  const browser = await chromium.launch();
+  const a = await browser.newPage();
+  const b = await browser.newPage();
+  await login(a);
+  await login(a);
+  await login(b);
+}
+main();
+`,
+  });
+  const doc = run({repo: 'shop', root, sourceRoots: ['e2e']});
+  // require() itself has no declaration without Node's types: unresolved,
+  // as before; what it returns is the package.
+  assert.deepEqual(doc.calls.filter(c => c.kind === 'unresolved').map(c => c.target.name), ['require']);
+});
+
+test("a package function's callbacks take the caller's values", () => {
+  const root = write({
+    'assets/js/app.js': `import _ from 'lodash';
+function make() { return [{ render() {} }]; }
+export function run() {
+  _.each(make(), (i) => i.render());
+}
+`,
+  });
+  const doc = run({repo: 'shop', root});
+  assert.deepEqual(doc.calls.filter(c => c.kind === 'unresolved').map(c => c.target.name), ['render']);
+});
