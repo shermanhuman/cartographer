@@ -1115,6 +1115,11 @@ defmodule Cartographer.ElixirSource do
         do: %{env | uses: ["ExUnit.Case" | env.uses]},
         else: env
 
+    acc =
+      if h != nil and depth >= 3 and (h.using != nil or h.funs != %{}),
+        do: %{acc | quoted_defs: [%{module: env.module, computed: true} | acc.quoted_defs]},
+        else: acc
+
     forms =
       cond do
         h == nil or depth >= 3 -> []
@@ -1162,14 +1167,33 @@ defmodule Cartographer.ElixirSource do
        when kind in [:def, :defp, :defmacro, :defmacrop, :defdelegate] do
     record =
       case quoted_head(head) do
-        {name, min, max} -> %{module: env.module, name: name, min: min, max: max}
+        {name, min, max} ->
+          %{module: env.module, name: name, min: min, max: max, public: kind not in [:defp, :defmacrop]}
         :computed -> %{module: env.module, computed: true}
       end
 
     {env, %{acc | quoted_defs: [record | acc.quoted_defs]}}
   end
 
-  defp expand_form(_, _module, _h, env, acc, _depth), do: {env, acc}
+  # Any other form that holds a definition (`if ... do def ...`, a `for`
+  # over computed names): the walk can't say which, so the module's
+  # functions can't be listed (decision 30, H3).
+  defp expand_form(form, _module, _h, env, acc, _depth) do
+    if holds_def?(form),
+      do: {env, %{acc | quoted_defs: [%{module: env.module, computed: true} | acc.quoted_defs]}},
+      else: {env, acc}
+  end
+
+  defp holds_def?(form) do
+    {_, found} =
+      Macro.prewalk(form, false, fn
+        {:defmodule, _, _}, acc -> {nil, acc}
+        {kind, _, [_ | _]} = node, _ when kind in [:def, :defp, :defmacro, :defmacrop, :defdelegate] -> {node, true}
+        node, acc -> {node, acc}
+      end)
+
+    found
+  end
 
   defp quoted_head({:when, _, [head | _]}), do: quoted_head(head)
   defp quoted_head({:unquote, _, _}), do: :computed

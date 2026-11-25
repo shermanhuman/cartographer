@@ -496,6 +496,17 @@ defmodule Cartographer.ElixirExtractTest do
           defp stripe(path), do: Req.post(Req.new(base_url: @stripe), url: path)
           defp admin(path), do: Req.get(Req.new(base_url: Application.fetch_env!(:app, :admin_url)), url: path)
           defp interp(path, ns), do: Req.get(Req.new(base_url: "http://admin.#{ns}.svc:4000"), url: path)
+          def either(kind), do: mixed("/e", kind)
+
+          defp mixed(path, kind) do
+            base =
+              case kind do
+                :pay -> "https://api.stripe.com/v1"
+                _ -> Application.fetch_env!(:app, :admin_url)
+              end
+
+            Req.get(Req.new(base_url: base), url: path)
+          end
         end
         """)
 
@@ -503,6 +514,8 @@ defmodule Cartographer.ElixirExtractTest do
       assert refs["fixture:Two.pay/1"] == {"https://api.stripe.com", "/v1/charges/:p1"}
       assert refs["fixture:Two.check/1"] == {"Two", "/api/check/:p1"}
       assert refs["fixture:Two.ping/1"] == {"Two", "/ping"}
+      # A binding with a literal branch and a config branch (H3-m12).
+      assert refs["fixture:Two.either/1"] == {"Two", "/e"}
     end
 
     # Decision 26.
@@ -1274,6 +1287,49 @@ defmodule Cartographer.ElixirExtractTest do
 
       assert [%{kind: "external"}] = from(doc, "App.Page.mount/3", "cast")
       assert [%{kind: "remote"}] = from(doc, "App.Other.go/1", "touch")
+    end
+
+    # Round 3, H3-M9: a definition the reader can't place marks the
+    # module dynamic rather than being ignored.
+    test "a quoted def inside if or for keeps the using module's calls unresolved" do
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/cond.ex" => ~S"""
+              defmodule App.Cond do
+                defmacro __using__(_) do
+                  quote do
+                    if true do
+                      def touch(x), do: x
+                    end
+                  end
+                end
+              end
+              """,
+              "lib/loop.ex" => ~S"""
+              defmodule App.Loop do
+                defmacro __using__(_) do
+                  quote do
+                    for n <- [:a, :b], do: def unquote(n)(), do: 1
+                  end
+                end
+              end
+              """,
+              "lib/user.ex" => ~S"""
+              defmodule App.User do
+                use App.Cond
+                use App.Loop
+                import Ecto.Changeset
+                def go(x), do: {touch(x), a()}
+              end
+              """
+            })
+        )
+
+      assert [%{kind: "local_or_import"}] = from(doc, "App.User.go/1", "touch")
+      assert [%{kind: "local_or_import"}] = from(doc, "App.User.go/1", "a")
     end
 
     # Round 1, H1-m1 and H1-m2.

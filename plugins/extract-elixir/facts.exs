@@ -444,7 +444,7 @@ defmodule Cartographer.ElixirFacts do
       quoted
       |> Enum.reject(&Map.get(&1, :computed, false))
       |> Enum.reduce(defined, fn d, acc ->
-        entry = {d.min, d.max, true, :functions}
+        entry = {d.min, d.max, Map.get(d, :public, true), :functions}
         Map.update(acc, {d.module, d.name}, [entry], &[entry | &1])
       end)
 

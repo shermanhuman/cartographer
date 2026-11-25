@@ -149,8 +149,9 @@ defmodule Cartographer.ElixirHTTP do
 
   defp single_host?(urls) do
     urls
+    |> Enum.filter(&is_binary/1)
     |> Enum.filter(&String.match?(&1, ~r/\Ahttps?:\/\/[^\/{#$]+/i))
-    |> Enum.map(&URI.parse(&1).host)
+    |> Enum.map(&String.downcase(URI.parse(&1).host))
     |> Enum.uniq()
     |> length() == 1
   end
@@ -170,6 +171,10 @@ defmodule Cartographer.ElixirHTTP do
   end
 
   defp base_of(urls) do
+    if :unknown in urls, do: nil, else: literal_base(urls)
+  end
+
+  defp literal_base(urls) do
     urls =
       urls
       |> Enum.filter(&String.match?(&1, ~r/\Ahttps?:\/\/[^\/{#$]+/i))
@@ -222,7 +227,7 @@ defmodule Cartographer.ElixirHTTP do
     {_, found} =
       Macro.prewalk(clause.http.body, [], fn
         {:=, _, [lhs, rhs]} = node, acc ->
-          if binds?(lhs, name), do: {node, [strings(rhs) | acc]}, else: {node, acc}
+          if binds?(lhs, name), do: {node, [bound_literals(rhs) | acc]}, else: {node, acc}
 
         node, acc ->
           {node, acc}
@@ -242,6 +247,23 @@ defmodule Cartographer.ElixirHTTP do
   end
 
   defp resolve_base(_v, _clause, _module, _cs, _attr), do: []
+
+  # The literals a binding's right side can produce, or :unknown when some
+  # branch computes the value (a call: config, a parameter's function), so
+  # a literal in another branch isn't taken for the base (round 3, H3-m12).
+  @control [:case, :if, :cond, :unless, :->, :__block__, :{}, :%{}, :when, :=]
+  defp bound_literals(rhs) do
+    {_, computed} =
+      Macro.prewalk(rhs, false, fn
+        {:<<>>, _, _}, acc -> {nil, acc}
+        {f, _, args} = node, acc when is_list(args) and f not in @control -> {node, acc or call?(f)}
+        node, acc -> {node, acc}
+      end)
+
+    if computed, do: [:unknown], else: strings(rhs)
+  end
+
+  defp call?(f), do: is_atom(f) or is_map(f) or match?({:., _, _}, f)
 
   defp binds?(lhs, name) do
     {_, hit} =

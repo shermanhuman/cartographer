@@ -79,7 +79,9 @@ func TestLinkStoresExternalOrigin(t *testing.T) {
 	var got []string
 	for rows.Next() {
 		var p, o string
-		rows.Scan(&p, &o)
+		if err := rows.Scan(&p, &o); err != nil {
+			t.Fatal(err)
+		}
 		got = append(got, p+"="+o)
 	}
 	if want := []string{"/v1/charges=external", "/check="}; !slices.Equal(got, want) {
