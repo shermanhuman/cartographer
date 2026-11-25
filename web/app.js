@@ -302,7 +302,12 @@ window.addEventListener('popstate',locationChanged);window.addEventListener('has
 const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 try{
   let annotations;[overview,catalog,status,snapshots,annotations]=await Promise.all([getJSON(api('overview')),getJSON(api('catalog')),getJSON(api('status')),getJSON(api('snapshots')),getJSON(api('annotations'))]);
-  if(PROJECT&&!SNAPSHOT)PIN=status.snapshot;
+  if(PROJECT&&!SNAPSHOT){
+    // The boot calls resolve the project each on their own: a rebuild that
+    // lands mid-boot gives data from two builds. Reload once to settle on one.
+    if(overview.manifest.snapshot!==status.snapshot&&sessionStorage.getItem('carto-reboot')!==status.snapshot){sessionStorage.setItem('carto-reboot',status.snapshot);location.reload();await new Promise(()=>{})}
+    PIN=status.snapshot;
+  }
   setJourneys(annotations);setDomains(annotations);setInvestigations(annotations);
   entities=new Map(catalog.map(e=>[e.id,e]));applyOverview(annotations.find(a=>a.kind==='overview'));state=parse();if(state.print)document.body.dataset.print=state.print;
   showFreshness();showSnapshots();showJourneyNav();

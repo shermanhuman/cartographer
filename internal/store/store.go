@@ -85,7 +85,7 @@ func fileURI(path string) (string, error) {
 type ErrNewerStore struct{ Have, Want int }
 
 func (e *ErrNewerStore) Error() string {
-	return fmt.Sprintf("the store was written by a newer cartographer (schema %d; this binary, %s, reads %d), so it's left untouched: an older cartographer is running, often one first on a stale PATH (check `which -a cartographer`); run the newer one, or upgrade (mise use -g github:shermanhuman/cartographer@latest), or pass --db for a separate store", e.Have, exe(), e.Want)
+	return fmt.Sprintf("the store was written by a newer cartographer (schema %d; this binary, %s version %s, reads %d), so it's left untouched: an older cartographer is running, often one first on a stale PATH (check `which -a cartographer`); run the newer one, or upgrade (mise use -g github:shermanhuman/cartographer@latest), or pass --db for a separate store", e.Have, exe(), BinaryVersion, e.Want)
 }
 
 // migrate creates the schema, first dropping every table when the database

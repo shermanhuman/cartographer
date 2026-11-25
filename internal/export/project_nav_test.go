@@ -44,7 +44,7 @@ func TestProjectLinkFollowsProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			mu.Lock()
-			seen = append(seen, r.URL.Path+" "+r.URL.Query().Get("project"))
+			seen = append(seen, r.URL.Path+" "+r.URL.Query().Get("project")+" "+r.URL.Query().Get("snapshot"))
 			mu.Unlock()
 		}
 		h.ServeHTTP(w, r)
@@ -83,7 +83,8 @@ func TestProjectLinkFollowsProject(t *testing.T) {
 		}
 		snapshots := false
 		for _, got := range seen {
-			path, p, _ := strings.Cut(got, " ")
+			path, rest, _ := strings.Cut(got, " ")
+			p, _, _ := strings.Cut(rest, " ")
 			snapshots = snapshots || path == "/api/snapshots"
 			if p != project {
 				t.Errorf("API call %s carried project %q, want %s (all: %q)", path, p, project, seen)
@@ -125,6 +126,30 @@ func TestProjectLinkFollowsProject(t *testing.T) {
 	copied := evalStr(t, tctx, `new Promise(res => { navigator.clipboard.writeText = t => { res(t); return Promise.resolve(); }; document.getElementById("copy-link").click(); })`)
 	if !strings.Contains(copied, "project=alpha") || strings.Contains(copied, "snapshot=") {
 		t.Errorf("copied link %q; want project=alpha and no snapshot", copied)
+	}
+
+	// A rebuild imported after the page loaded doesn't change it: later
+	// calls carry the build the page loaded (R2-n6).
+	if _, err := s.Import(ctx, v2Project(t, "alpha", "snapshot-20261122T000000Z")); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	seen = nil
+	mu.Unlock()
+	if _, err := chromedp.Run(tctx, chromedp.Evaluate[any](`document.querySelector('[data-view="tables"]').click()`)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	mu.Lock()
+	lazy := slices.Clone(seen)
+	mu.Unlock()
+	if len(lazy) == 0 {
+		t.Fatal("opening the tables view made no API call")
+	}
+	for _, got := range lazy {
+		if !strings.HasSuffix(got, " alpha "+alpha) {
+			t.Errorf("after a rebuild, %q isn't pinned to the loaded build %s", got, alpha)
+		}
 	}
 
 	// Switching the project reloads onto its data.

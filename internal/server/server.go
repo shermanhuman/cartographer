@@ -420,8 +420,9 @@ func (a *api) status(r *http.Request, q *query.Q) (any, error) {
 		// With ?snapshot= the answer is that snapshot's, as on every other
 		// endpoint, so a project that resolves to nothing falls back to
 		// serve's default instead of failing the request.
-		if def, _, err = a.projectSnapshot(ctx, p); err != nil {
-			if r.URL.Query().Get("snapshot") == "" {
+		var code int
+		if def, code, err = a.projectSnapshot(ctx, p); err != nil {
+			if code != http.StatusNotFound || r.URL.Query().Get("snapshot") == "" {
 				return nil, err
 			}
 			def = a.defaultSnapshot(ctx)

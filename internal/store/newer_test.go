@@ -88,13 +88,15 @@ func TestRebuildRefusesANewerStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = rebuild(ctx, conn)
+	// Count inside the transaction: a ROLLBACK would undo any drop (R2-n7).
+	var n int
+	cerr := conn.QueryRowContext(ctx, `SELECT count(*) FROM snapshots`).Scan(&n)
 	conn.ExecContext(ctx, `ROLLBACK`)
 	var newer *ErrNewerStore
 	if !errors.As(err, &newer) {
 		t.Fatalf("rebuild of a newer store: %v, want ErrNewerStore", err)
 	}
-	var n int
-	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM snapshots`).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("snapshots after the refused rebuild: %d, %v", n, err)
+	if cerr != nil || n != 1 {
+		t.Fatalf("snapshots after the refused rebuild: %d, %v", n, cerr)
 	}
 }
