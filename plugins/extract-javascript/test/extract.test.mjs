@@ -523,3 +523,51 @@ export function go() { joined("orders"); slash("api/x"); req("one"); req(); }
     ]);
   } finally { fs.rmSync(root, {recursive: true}); }
 });
+
+// Decision 16: a call on a value that comes from a package is external.
+test('values from packages are external: chromium pages, helpers, callbacks', () => {
+  const root = write({
+    'e2e/smoke.mjs': `import { chromium } from 'playwright';
+async function login(page) { await page.fill('#email', 'a'); await page.click('button'); }
+async function main() {
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  await page.locator('a').click();
+  await login(page);
+  page.on('response', (r) => r.url());
+  const { request } = page;
+  await request.get('/x');
+  await browser.close();
+}
+main();
+`,
+  });
+  const doc = run({repo: 'shop', root, sourceRoots: ['e2e']});
+  const unresolved = doc.calls.filter(c => c.kind === 'unresolved').map(c => c.target.name);
+  assert.deepEqual(unresolved, []);
+  const js = doc.stats.find(s => s.language === 'javascript');
+  assert.equal(js.unresolved, 0);
+  assert.ok(js.external >= 9, `external ${js.external}`);
+});
+
+test('standard-library callbacks and project values never taint', () => {
+  const root = write({
+    'assets/js/app.js': `import { thing } from 'some-pkg';
+function make() { return { render() {} }; }
+function fetchX() { return new Promise(r => r({ x() {} })); }
+function helper(v) { v.go(); }
+export function run(items) {
+  items.forEach(i => i.render());
+  fetchX().then(r => r.x());
+  helper(make());
+  helper(thing);
+}
+`,
+  });
+  const doc = run({repo: 'shop', root});
+  const unresolved = doc.calls.filter(c => c.kind === 'unresolved').map(c => c.target.name).sort();
+  // render and x are on project values, forEach on an untyped parameter;
+  // go is reached once with a project value, so the helper's parameter
+  // isn't a package value.
+  assert.deepEqual(unresolved, ['forEach', 'go', 'render', 'x']);
+});
