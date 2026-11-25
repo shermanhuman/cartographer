@@ -64,14 +64,49 @@ func IsDefaultFile(name string) bool {
 	return err == nil && n == 1 && v > 4 && name == DefaultFile(v)
 }
 
-// Resolve maps a default store path recorded under any schema to this
-// schema's file in the same directory; any other path is returned as is.
-// A registration recorded before a schema change then follows the store.
+// DataDir is $CARTOGRAPHER_DATA, else $XDG_DATA_HOME/cartographer or
+// ~/.local/share/cartographer: where the default store lives.
+func DataDir() string {
+	if d := os.Getenv("CARTOGRAPHER_DATA"); d != "" {
+		return d
+	}
+	dir := os.Getenv("XDG_DATA_HOME")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(dir, "cartographer")
+}
+
+// Resolve maps the default store recorded under any schema (a default file
+// name in the data directory) to this schema's file there. Any other path,
+// a carto.db elsewhere included, is the user's choice and is returned as
+// is. A registration recorded before a schema change then follows the
+// store.
 func Resolve(path string) string {
-	if path == "" || !IsDefaultFile(filepath.Base(path)) {
+	if path == "" || !IsDefaultFile(filepath.Base(path)) || !sameDir(filepath.Dir(path), DataDir()) {
 		return path
 	}
 	return filepath.Join(filepath.Dir(path), DefaultFile(schemaVersion))
+}
+
+// IsDefaultStore reports whether path is a default store file, for any
+// schema, in the data directory.
+func IsDefaultStore(path string) bool {
+	return IsDefaultFile(filepath.Base(path)) && sameDir(filepath.Dir(path), DataDir())
+}
+
+func sameDir(a, b string) bool {
+	clean := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			p = r
+		}
+		return filepath.Clean(p)
+	}
+	return clean(a) == clean(b)
 }
 
 // DefaultKeep is how many snapshots per workspace Prune keeps by default.

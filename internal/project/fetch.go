@@ -5,13 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/shermanhuman/cartographer/internal/gitenv"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/shermanhuman/cartographer/internal/gitenv"
 	"github.com/shermanhuman/cartographer/internal/workspace"
 )
 

@@ -14,7 +14,9 @@ func TestDefaultFilePerSchema(t *testing.T) {
 		}
 	}
 	defer SetSchemaVersionForTest(5)()
-	for in, want := range map[string]string{"/d/carto.db": "/d/carto-v5.db", "/d/carto-v6.db": "/d/carto-v5.db", "/d/mine.db": "/d/mine.db", "": ""} {
+	t.Setenv("CARTOGRAPHER_DATA", "/d")
+	for in, want := range map[string]string{"/d/carto.db": "/d/carto-v5.db", "/d/carto-v6.db": "/d/carto-v5.db", "/d/mine.db": "/d/mine.db", "": "",
+		"/elsewhere/carto.db": "/elsewhere/carto.db"} { // only the data directory's default store moves
 		if got := Resolve(in); got != want {
 			t.Errorf("Resolve(%q) at schema 5 = %q, want %q", in, got, want)
 		}

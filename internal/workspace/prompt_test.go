@@ -105,3 +105,29 @@ func TestSchemaStepTempFilesGoInScratch(t *testing.T) {
 		t.Errorf("TMPDIR seen:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// The builder runs a plugin with TMPDIR set to its scratch, over the
+// plugin's own env, and the scratch goes with the build.
+func TestBuilderGivesPluginsItsScratch(t *testing.T) {
+	ws, _, _ := setup(t)
+	seen := filepath.Join(t.TempDir(), "tmpdir.log")
+	toml := filepath.Join(ws, FileName)
+	b, _ := os.ReadFile(toml)
+	s := strings.Replace(string(b), `env = { SF = "set" }`, `env = { SF = "set", TMPDIR = "/elsewhere" }`, 1)
+	s = strings.Replace(s, `command = ["sh", "-c", "test -f`, `command = ["sh", "-c", "echo \"$TMPDIR\" >> `+seen+` && test -f`, 1)
+	os.WriteFile(toml, []byte(s), 0o644)
+	c, err := Load(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Build(context.Background(), c, BuildOptions{Out: filepath.Join(t.TempDir(), "snap"), CacheDir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(mustRead(t, seen))
+	if got == "" || got == "/elsewhere" || !strings.Contains(filepath.Base(got), "cartographer-build-") {
+		t.Fatalf("the plugin saw TMPDIR=%q, want the build's scratch", got)
+	}
+	if _, err := os.Stat(got); err == nil {
+		t.Errorf("the scratch %s outlived the build", got)
+	}
+}

@@ -232,10 +232,12 @@ workspace answers.
 
 ## Credentials and prompts
 
-Cartographer never asks for a password. Every git and ssh process it starts,
-including extractor plugins, mise and detached rebuilds, runs with no
-terminal prompt and no askpass program: `GIT_TERMINAL_PROMPT=0`, an empty
-`GIT_ASKPASS` and `SSH_ASKPASS_REQUIRE=never`. Credentials come from the
+Cartographer never opens a password dialog. Every git and ssh process it
+starts, including extractor plugins, mise and detached rebuilds, runs with no
+askpass program and no git terminal prompt: `GIT_TERMINAL_PROMPT=0`, an empty
+`GIT_ASKPASS` and `SSH_ASKPASS_REQUIRE=never`. ssh itself may still ask on a
+terminal you're running cartographer from (a passphrase or host key, for a
+fetch your git config sends over ssh); background processes have no terminal. Credentials come from the
 machine's own git credential helpers (`gh auth setup-git`, a keychain helper)
 or a token. A fetch they can't answer fails, and shows as a failed cycle in
 `status` and `project list`; it never opens a dialog. Two things are outside

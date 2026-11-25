@@ -47,7 +47,8 @@ type Registration struct {
 
 // InStore reports whether db is the store the project builds into.
 func (r *Registration) InStore(db string) bool {
-	return r.Store != "" && SamePath(store.Resolve(r.Store), store.Resolve(db))
+	// r.Store is resolved by Load; db is the caller's explicit choice.
+	return r.Store != "" && SamePath(r.Store, db)
 }
 
 // SamePath reports whether a and b name the same file or directory,

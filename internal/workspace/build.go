@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/shermanhuman/cartographer/internal/gitenv"
 	"io"
 	"os"
 	"os/exec"
@@ -26,6 +25,7 @@ import (
 	"github.com/shermanhuman/cartographer/internal/bundle"
 	"github.com/shermanhuman/cartographer/internal/facts"
 	"github.com/shermanhuman/cartographer/internal/fresh"
+	"github.com/shermanhuman/cartographer/internal/gitenv"
 )
 
 type BuildOptions struct {

@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -121,17 +119,7 @@ type memo struct {
 
 // DataDir is $CARTOGRAPHER_DATA, else $XDG_DATA_HOME/cartographer or
 // ~/.local/share/cartographer.
-func DataDir() string {
-	if d := os.Getenv("CARTOGRAPHER_DATA"); d != "" {
-		return d
-	}
-	dir := os.Getenv("XDG_DATA_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "share")
-	}
-	return filepath.Join(dir, "cartographer")
-}
+func DataDir() string { return store.DataDir() }
 
 func (s *Session) logf(format string, a ...any) {
 	if s.Log != nil {
@@ -643,7 +631,7 @@ func (s *Session) chooseRepo(ctx context.Context, co fresh.Checkout) (string, st
 			}
 			return "", "", s.firstBuild(reg)
 		}
-		return "", "", store.ErrNoSnapshot
+		return "", "", &ErrNoMap{Cwd: s.Cwd, StateDir: s.StateDir}
 	}
 	latest := map[string]string{} // workspace -> newest snapshot (all is newest first)
 	var names []string

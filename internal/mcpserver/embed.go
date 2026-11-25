@@ -8,6 +8,7 @@ import (
 
 	"github.com/shermanhuman/cartographer/internal/query"
 	"github.com/shermanhuman/cartographer/internal/render"
+	cachesession "github.com/shermanhuman/cartographer/internal/session"
 	"github.com/shermanhuman/cartographer/internal/store"
 )
 
@@ -26,7 +27,7 @@ func EmbedTool(s *mcp.Server, prepare func(ctx context.Context) (*query.Q, error
 			q, err := prepare(ctx)
 			if err != nil {
 				if errors.Is(err, store.ErrNoSnapshot) {
-					return text("no map is available yet: "+store.NoMapAdvice, true), nil, nil
+					return text("no map is available yet: "+cachesession.AdviceFor(err), true), nil, nil
 				}
 				return nil, nil, err
 			}

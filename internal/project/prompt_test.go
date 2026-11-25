@@ -47,7 +47,8 @@ func TestPartialCloneLazyReadNeverPrompts(t *testing.T) {
 	t.Setenv("SSH_ASKPASS", h.Recorder)
 	t.Setenv("GIT_ASKPASS", h.Recorder)
 	t.Setenv("GIT_TERMINAL_PROMPT", "1")
-	gitenv.Apply() // what run() does first; t.Setenv restores the variables after
+	t.Setenv("SSH_ASKPASS_REQUIRE", "") // so Apply's changes are all restored after
+	gitenv.Apply()                      // what run() does first; t.Setenv restores the variables after
 	if _, err := ReadAt(context.Background(), clone, head, "file.txt"); err == nil {
 		t.Fatal("read a blob the 401 promisor never served")
 	}

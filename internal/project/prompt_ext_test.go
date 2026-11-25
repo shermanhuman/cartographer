@@ -50,6 +50,7 @@ func TestRegistrationFollowsTheDefaultStore(t *testing.T) {
 	defer store.SetSchemaVersionForTest(5)()
 	sd := t.TempDir()
 	data := t.TempDir()
+	t.Setenv("CARTOGRAPHER_DATA", data)
 	for name, st := range map[string]string{"alpha": filepath.Join(data, "carto.db"), "beta": filepath.Join(data, "mine.db")} {
 		if err := project.Save(sd, &project.Registration{Name: name, Anchor: "acme/" + name, Store: st}); err != nil {
 			t.Fatal(err)
@@ -70,5 +71,10 @@ func TestRegistrationFollowsTheDefaultStore(t *testing.T) {
 	}
 	if !a.InStore(filepath.Join(data, "carto-v5.db")) || a.InStore(filepath.Join(t.TempDir(), "carto-v5.db")) {
 		t.Error("InStore matched the wrong store")
+	}
+	// An explicit --db naming the older schema's file isn't this project's
+	// store: nothing builds into it.
+	if a.InStore(filepath.Join(data, "carto.db")) {
+		t.Error("InStore accepted the older schema's file")
 	}
 }

@@ -29,6 +29,13 @@ func TestEachSchemaHasItsOwnStoreFile(t *testing.T) {
 	if got := defaultDB(); got != v5 {
 		t.Fatalf("schema 5 default = %s, want %s", got, v5)
 	}
+	// refresh --head never writes any default store, this schema's or an
+	// older one's.
+	for _, db := range []string{v5, filepath.Join(data, "carto.db")} {
+		if err := headStoreAllowed(db); err == nil {
+			t.Errorf("refresh --head allowed into the default store %s", db)
+		}
+	}
 	ctx := context.Background()
 	sd := project.StateDir()
 	for _, oldPresent := range []bool{false, true} {

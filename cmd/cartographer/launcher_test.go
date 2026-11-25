@@ -72,10 +72,15 @@ func TestLaunchersPickTheRightCartographer(t *testing.T) {
 		}
 		os.WriteFile(filepath.Join(miseDir, "mise"), []byte(body), 0o755)
 	}
+	customStale := filepath.Join(root, "md/installs/github-shermanhuman-cartographer/0.1.2/cartographer")
+	fakeBin(t, customStale, "stale", "0")
+	miseAlias := filepath.Join(root, "misealias/cartographer") // a cartographer that is mise itself
+	os.MkdirAll(filepath.Dir(miseAlias), 0o755)
+	extraEnv := []string{}
 	run := func(script string, path ...string) (string, int) {
 		cmd := exec.Command("/bin/sh", "-c", script)
-		cmd.Env = []string{"PATH=" + strings.Join(append(path, "/usr/bin", "/bin"), ":"), "HOME=" + root,
-			"GIT_ASKPASS=/usr/bin/ksshaskpass", "SSH_ASKPASS=/usr/bin/ksshaskpass", "SSH_ASKPASS_REQUIRE=force"}
+		cmd.Env = append([]string{"PATH=" + strings.Join(append(path, "/usr/bin", "/bin"), ":"), "HOME=" + root,
+			"GIT_ASKPASS=/usr/bin/ksshaskpass", "SSH_ASKPASS=/usr/bin/ksshaskpass", "SSH_ASKPASS_REQUIRE=force"}, extraEnv...)
 		out, err := cmd.CombinedOutput()
 		var ee *exec.ExitError
 		code := 0
@@ -89,23 +94,30 @@ func TestLaunchersPickTheRightCartographer(t *testing.T) {
 	cases := []struct {
 		name     string
 		mise     int // 0 absent, 1 resolves, 2 has none
+		env      []string
 		path     []string
 		mcpOut   string
 		mcpCode  int
 		hookRuns string
 	}{
-		{"mise resolves, stale install first on PATH", 1, []string{filepath.Dir(stale), miseDir}, "good mcp", 3, "good hook grep"},
-		{"mise has none, non-mise build on PATH", 2, []string{miseDir, filepath.Dir(plain)}, "plain mcp", 0, "plain hook grep"},
-		{"mise has none, only a stale install", 2, []string{miseDir, filepath.Dir(stale)}, "", 127, ""},
-		{"mise has none, only a shim", 2, []string{miseDir, filepath.Dir(shim)}, "", 127, ""},
-		{"mise has none, only an alias into mise", 2, []string{miseDir, filepath.Dir(alias)}, "", 127, ""},
-		{"no mise, non-mise build on PATH", 0, []string{filepath.Dir(plain)}, "plain mcp", 0, "plain hook grep"},
+		{"mise resolves, stale install first on PATH", 1, nil, []string{filepath.Dir(stale), miseDir}, "good mcp", 3, "good hook grep"},
+		{"mise has none, non-mise build on PATH", 2, nil, []string{miseDir, filepath.Dir(plain)}, "plain mcp", 0, "plain hook grep"},
+		{"mise has none, only a stale install", 2, nil, []string{miseDir, filepath.Dir(stale)}, "", 127, ""},
+		{"mise has none, only a shim", 2, nil, []string{miseDir, filepath.Dir(shim)}, "", 127, ""},
+		{"mise has none, only an alias into mise", 2, nil, []string{miseDir, filepath.Dir(alias)}, "", 127, ""},
+		{"no mise, non-mise build on PATH", 0, nil, []string{filepath.Dir(plain)}, "plain mcp", 0, "plain hook grep"},
+		{"mise has none, stale install in a custom MISE_DATA_DIR", 2, []string{"MISE_DATA_DIR=" + filepath.Join(root, "md")}, []string{miseDir, filepath.Dir(customStale)}, "", 127, ""},
+		{"same, MISE_DATA_DIR with a trailing slash", 2, []string{"MISE_DATA_DIR=" + filepath.Join(root, "md") + "/"}, []string{miseDir, filepath.Dir(customStale)}, "", 127, ""},
+		{"mise has none, a cartographer that is mise itself", 2, nil, []string{miseDir, filepath.Dir(miseAlias)}, "", 127, ""},
 	}
 	for _, c := range cases {
 		os.Remove(filepath.Join(miseDir, "mise"))
 		if c.mise > 0 {
 			writeMise(c.mise == 1)
 		}
+		os.Remove(miseAlias)
+		os.Symlink(filepath.Join(miseDir, "mise"), miseAlias)
+		extraEnv = c.env
 		out, code := run(mcp, c.path...)
 		if code != c.mcpCode || (c.mcpOut != "" && !strings.HasPrefix(out, c.mcpOut)) || (c.mcpOut == "" && !strings.Contains(out, "cartographer not found")) {
 			t.Errorf("%s: mcp launcher ran %q, exit %d; want %q, exit %d", c.name, out, code, c.mcpOut, c.mcpCode)

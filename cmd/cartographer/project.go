@@ -337,7 +337,7 @@ func headStoreAllowed(db string) error {
 	if err != nil {
 		return err
 	}
-	if project.SamePath(abs, filepath.Join(session.DataDir(), store.DefaultFile(store.SchemaVersion()))) {
+	if store.IsDefaultStore(abs) {
 		return fmt.Errorf("refresh --head: %s is the default store; give it a scratch --db, so the map built from main stays as it is", abs)
 	}
 	regs, _ := project.List(project.StateDir())

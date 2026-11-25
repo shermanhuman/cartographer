@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/shermanhuman/cartographer/internal/gitenv"
 	"io"
 	"os"
 	"os/exec"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/shermanhuman/cartographer/internal/gitenv"
 	"github.com/shermanhuman/cartographer/internal/workspace"
 )
 
