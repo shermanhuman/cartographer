@@ -171,7 +171,7 @@ func (r *Runner) cycle(ctx context.Context, name string, force bool) (Result, er
 		}
 		return Result{}, false, nil
 	}
-	digest := r.digest(inputs)
+	digest := r.digest(ctx, inputs)
 	if res, done, err := settled(digest); done {
 		return res, err
 	}
@@ -180,7 +180,7 @@ func (r *Runner) cycle(ctx context.Context, name string, force bool) (Result, er
 	// like any other. Installing can resolve a prefix pin, so the digest
 	// is taken again.
 	r.installTools(ctx, inputs)
-	if d := r.digest(inputs); d != digest {
+	if d := r.digest(ctx, inputs); d != digest {
 		digest = d
 		if res, done, err := settled(digest); done {
 			return res, err
@@ -267,8 +267,10 @@ func sweepHead(dir string, age time.Duration, now time.Time) {
 }
 
 // digest is the inputs digest: each member's frozen commit (which fixes its
-// settings and pins), the tools named, the plugins and the version.
-func (r *Runner) digest(inputs []Input) string {
+// settings and pins), the tools named, the plugins and the version, and for
+// an Elixir member the Hex packages its locks pin that the cache holds
+// (hexdeps.go).
+func (r *Runner) digest(ctx context.Context, inputs []Input) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "cartographer-inputs v1\nversion=%s\nplugins=%s\n", r.Version, r.PluginsDigest)
 	sorted := append([]Input(nil), inputs...)
@@ -278,6 +280,7 @@ func (r *Runner) digest(inputs []Input) string {
 		for _, t := range toolsOf(in) {
 			fmt.Fprintf(h, "  tool %s\n", t.Spec())
 		}
+		hexDigestLines(ctx, h, in)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
