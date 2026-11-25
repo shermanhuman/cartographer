@@ -159,6 +159,10 @@ cartographer serve --open                  # the map in your browser (127.0.0.1)
 cartographer embed Shop.Billing.charge/2   # Markdown + Mermaid for an issue
 ```
 
+`serve` opens one project's map at `http://127.0.0.1:7878/#project=NAME`, and
+lists the registered projects at `/api/projects`. Both are described in
+[docs/serve-api.md](docs/serve-api.md).
+
 `cartographer help` lists every command and `cartographer <command> --help`
 its flags. The queries (`status`, `find`, `show`, `callers`, `callees`,
 `impact`, `path`, `table`, `context`) take `--budget` and `--format json`;

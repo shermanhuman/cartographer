@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/shermanhuman/cartographer/internal/rebuild"
@@ -192,20 +192,52 @@ func Remove(ctx context.Context, stateDir, name string, s *store.Store) error {
 // List returns every registration, sorted by name. Unreadable ones are
 // skipped and reported in the error (the rest still come back).
 func List(stateDir string) ([]*Registration, error) {
-	if stateDir == "" {
-		return nil, nil
+	out, problems, err := ListDetailed(stateDir)
+	if err != nil {
+		return nil, err
 	}
-	files, _ := filepath.Glob(filepath.Join(projectsDir(stateDir), "*.json"))
-	sort.Strings(files)
-	var out []*Registration
 	var errs []error
-	for _, f := range files {
-		r, err := Load(stateDir, strings.TrimSuffix(filepath.Base(f), ".json"))
+	for _, p := range problems {
+		errs = append(errs, errors.New(p.Error))
+	}
+	return out, errors.Join(errs...)
+}
+
+// ListProblem is one registration ListDetailed couldn't read.
+type ListProblem struct {
+	File  string `json:"file"`
+	Error string `json:"error"`
+}
+
+// ListDetailed is List for callers that must tell "no projects" from "can't
+// tell": a missing projects directory means none, any other directory read
+// error is returned, and each unreadable registration is its own problem
+// (the readable ones still come back, sorted by name).
+func ListDetailed(stateDir string) ([]*Registration, []ListProblem, error) {
+	if stateDir == "" {
+		return nil, nil, nil
+	}
+	dir := projectsDir(stateDir)
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing projects: %w", err)
+	}
+	var out []*Registration
+	var problems []ListProblem
+	for _, e := range ents { // ReadDir sorts by file name
+		name, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok || e.IsDir() {
+			continue
+		}
+		r, err := Load(stateDir, name)
 		if err != nil {
-			errs = append(errs, err)
+			problems = append(problems, ListProblem{File: filepath.Join(dir, e.Name()), Error: err.Error()})
 			continue
 		}
 		out = append(out, r)
 	}
-	return out, errors.Join(errs...)
+	return out, problems, nil
 }

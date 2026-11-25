@@ -49,7 +49,10 @@ func serve(ctx context.Context, w io.Writer, s *store.Store, c *common) error {
 	if sess.AutoPull {
 		sess.PullDue(ctx)
 	}
-	return server.Serve(ctx, ln, server.New(server.Options{Store: s, Version: version, Status: serveStatus(sess), Default: sess.Choose}))
+	return server.Serve(ctx, ln, server.New(server.Options{Store: s, Version: version, Status: serveStatus(sess), Default: sess.Choose,
+		ProjectSnapshot: sess.ProjectSnapshot,
+		Projects:        func(ctx context.Context) (any, error) { return sess.Projects(ctx) },
+	}))
 }
 
 // serveStatus reports freshness for /api/status, which the UI loads on every

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -21,8 +22,9 @@ import (
 var schemaSQL string
 
 // schemaVersion is kept in PRAGMA user_version. The store is a cache of
-// published snapshots, so a database at any other version is dropped and
-// recreated rather than migrated; the next pull or import refills it.
+// published snapshots, so a database at an older version is dropped and
+// recreated rather than migrated; the next pull or import refills it. A
+// newer one is refused (ErrNewerStore).
 //
 //	1 (stored as 0): initial schema
 //	2: db_tables.kind
@@ -76,8 +78,19 @@ func fileURI(path string) (string, error) {
 	return u.String(), nil
 }
 
+// ErrNewerStore means the database was written by a newer cartographer.
+// Opening it here would drop every map in it (the rebuild below), and the
+// newer release that wrote them would then rebuild the store again, so an
+// old binary started by a stale PATH would wipe a store it can't read.
+type ErrNewerStore struct{ Have, Want int }
+
+func (e *ErrNewerStore) Error() string {
+	return fmt.Sprintf("the store was written by a newer cartographer (schema %d; this binary, %s version %s, reads %d), so it's left untouched: an older cartographer is running, often one first on a stale PATH (check `which -a cartographer`); run the newer one, or upgrade (mise use -g github:shermanhuman/cartographer@latest), or pass --db for a separate store", e.Have, exe(), BinaryVersion, e.Want)
+}
+
 // migrate creates the schema, first dropping every table when the database
-// was written at another schemaVersion.
+// was written at an older schemaVersion (the store is a cache of imported
+// snapshots). A newer one is refused, never dropped (ErrNewerStore).
 func migrate(ctx context.Context, db *sql.DB) error {
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -90,6 +103,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if v == schemaVersion {
 		return nil
+	}
+	if v > schemaVersion {
+		return &ErrNewerStore{Have: v, Want: schemaVersion}
 	}
 	// IMMEDIATE takes the write lock up front, so two processes opening an
 	// old database don't both rebuild it.
@@ -111,6 +127,9 @@ func rebuild(ctx context.Context, conn *sql.Conn) error {
 	}
 	if v == schemaVersion {
 		return nil // another process rebuilt it first
+	}
+	if v > schemaVersion {
+		return &ErrNewerStore{Have: v, Want: schemaVersion} // a newer one wrote it first
 	}
 	// Virtual tables go first (their shadow tables go with them), snapshots
 	// last (everything else references it).
@@ -187,16 +206,18 @@ func (s *Store) Snapshots(ctx context.Context) ([]SnapshotInfo, error) {
 // Newest returns the newest snapshot of workspace with the given source
 // (ok false when there is none).
 func (s *Store) Newest(ctx context.Context, workspace, source string) (SnapshotInfo, bool, error) {
-	all, err := s.Snapshots(ctx)
+	// One row, in Snapshots' order: project pages ask on every API call.
+	var si SnapshotInfo
+	err := s.DB.QueryRowContext(ctx, `SELECT id, workspace, created_at, source, map_id, coalesce(json_extract(manifest, '$.inputs_digest'), '')
+	  FROM snapshots WHERE workspace = ? AND source = ? ORDER BY created_at DESC, id DESC LIMIT 1`, workspace, source).
+		Scan(&si.ID, &si.Workspace, &si.CreatedAt, &si.Source, &si.MapID, &si.InputsDigest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SnapshotInfo{}, false, nil
+	}
 	if err != nil {
 		return SnapshotInfo{}, false, err
 	}
-	for _, si := range all {
-		if si.Workspace == workspace && si.Source == source {
-			return si, true, nil
-		}
-	}
-	return SnapshotInfo{}, false, nil
+	return si, true, nil
 }
 
 // Info returns one snapshot's summary (ok false when it isn't imported).
@@ -348,4 +369,12 @@ func (s *Store) Repos(ctx context.Context, snapshot string) ([]RepoInfo, error) 
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// exe names this binary for ErrNewerStore ("cartographer" when unknown).
+func exe() string {
+	if p, err := os.Executable(); err == nil {
+		return p
+	}
+	return "cartographer"
 }

@@ -375,7 +375,7 @@ func projectCmd(ctx context.Context, w io.Writer, c *common, pos []string) error
 		if err != nil {
 			fmt.Fprintln(w, "warning:", err)
 		}
-		if len(regs) == 0 {
+		if len(regs) == 0 && err == nil {
 			fmt.Fprintln(w, "no projects registered")
 		}
 		for _, reg := range regs {

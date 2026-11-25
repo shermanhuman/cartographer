@@ -9,7 +9,9 @@
   the comment box; GitHub has no attachment API.
 - **SVG of the graph:** `cartographer export --svg --around <ref> -o graph.svg`.
 - **Interactive:** `cartographer serve --open` (127.0.0.1 only); every view
-  has a deep link and Save as PDF / Download SVG buttons.
+  has a deep link and Save as PDF / Download SVG buttons. `#project=NAME`
+  opens a registered project's newest map, and stays valid across rebuilds
+  (see `docs/serve-api.md` in the cartographer repository).
 
 Every export names the snapshot and repository revisions it came from.
 Shared files can't be revoked: prefer a snippet over a whole map.
