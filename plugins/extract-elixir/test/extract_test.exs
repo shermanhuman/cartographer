@@ -501,6 +501,31 @@ defmodule Cartographer.ElixirExtractTest do
           def lit_case, do: lc("/c")
           def concat, do: cc("/k")
           def pair, do: tp("/t")
+          def by_param(base), do: bp("/bp", base)
+          def by_case(x), do: bc("/bc", x)
+          def by_with(x), do: bw("/bw", x)
+          def by_fn(base), do: bf("/bf", base)
+
+          defp bp(path, base) do
+            _ = "https://api.stripe.com/v1"
+            Req.get(Req.new(base_url: base), url: path)
+          end
+
+          defp bc(path, x) do
+            case x do
+              {:ok, base} -> Req.get(Req.new(base_url: base, headers: [{"a", "https://api.stripe.com"}]), url: path)
+            end
+          end
+
+          defp bw(path, x) do
+            with {:ok, base} <- x, do: Req.get(Req.new(base_url: base, headers: [{"a", "https://api.stripe.com"}]), url: path)
+          end
+
+          defp bf(path, base) do
+            f = fn -> base = "https://api.stripe.com/v1"; base end
+            _ = f
+            Req.get(Req.new(base_url: base), url: path)
+          end
 
           defp from_param(path, url) do
             base = if url, do: url, else: "https://api.stripe.com/v1"
@@ -551,6 +576,10 @@ defmodule Cartographer.ElixirExtractTest do
       assert refs["fixture:Two.lit_case/0"] == {"https://api.stripe.com", "/v1/c"}
       assert refs["fixture:Two.concat/0"] == {"https://api.stripe.com", "/v1/k"}
       assert refs["fixture:Two.pair/0"] == {"https://api.stripe.com", "/v1/t"}
+      # H5-M11: a name bound other than by a top-level `=` has no base.
+      for f <- ~w(by_param/1 by_case/1 by_with/1 by_fn/1) do
+        assert {"Two", _} = refs["fixture:Two.#{f}"], f
+      end
     end
 
     # Decision 26.

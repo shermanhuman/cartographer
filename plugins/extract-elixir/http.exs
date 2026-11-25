@@ -225,21 +225,36 @@ defmodule Cartographer.ElixirHTTP do
   # (decision 31). Each must be a literal URL; anything else (a call, a
   # parameter, an interpolation) makes the base unknown.
   defp resolve_base({name, _, ctx}, clause, module, _cs, attr) when is_atom(ctx) do
-    {_, found} =
-      Macro.prewalk(clause.http.body, [], fn
-        {:=, _, [lhs, rhs]} = node, acc ->
-          if binds?(lhs, name), do: {node, [{lhs, rhs} | acc]}, else: {node, acc}
+    stmts =
+      case do_block(clause.http.body) do
+        {:__block__, _, es} when is_list(es) -> es
+        e -> [e]
+      end
 
-        node, acc ->
-          {node, acc}
+    found = for {:=, _, [lhs, rhs]} <- stmts, binds?(lhs, name), do: {lhs, rhs}
+
+    # Every place the clause binds the name: its parameters, and any `=`,
+    # `->` or `<-` pattern. Only top-level `=` matches are read; a name
+    # also bound anywhere else may not be what the request sees.
+    {_, sites} =
+      Macro.prewalk(clause.http.body, 0, fn
+        {op, _, [lhs, _]} = node, n when op in [:=, :<-, :->] ->
+          {node, if(binds?(lhs, name), do: n + 1, else: n)}
+
+        node, n ->
+          {node, n}
       end)
+
+    sites = sites + if(binds?(clause.http.params, name), do: 1, else: 0)
 
     values =
       Enum.flat_map(found, fn {lhs, rhs} ->
         rhs |> leaf_values(module, attr) |> Enum.flat_map(&project(&1, lhs, name, module, attr))
       end)
 
-    if values == [] or Enum.any?(values, &(not is_binary(&1))), do: [:unknown], else: values
+    if values == [] or sites != length(found) or Enum.any?(values, &(not is_binary(&1))),
+      do: [:unknown],
+      else: values
   end
 
   # A local function (`base_url(opts)`): the literals in its body.
@@ -253,6 +268,13 @@ defmodule Cartographer.ElixirHTTP do
   end
 
   defp resolve_base(_v, _clause, _module, _cs, _attr), do: []
+
+  # A def's `do` body (the clause keeps `[[do: ...]]`).
+  defp do_block([kw]) when is_list(kw) do
+    Enum.find_value(kw, fn {k, v} -> if ElixirSource.str(k) == "do", do: v end)
+  end
+
+  defp do_block(_), do: nil
 
   # The values an expression can evaluate to: literals, {:tuple, elems}, or
   # :unknown.
