@@ -8,7 +8,7 @@ import {createRequire} from 'node:module';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 
-export const VERSION = '0.3.0';
+export const VERSION = '0.5.0';
 // The compiler version every machine must run: a different one could resolve
 // differently and change the map.
 export const TYPESCRIPT_VERSION = '6.0.3';

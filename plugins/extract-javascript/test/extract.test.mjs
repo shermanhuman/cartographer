@@ -40,7 +40,7 @@ test('function ids match the v0.2.0 (Acorn) extractor on every naming rule', () 
 
 test('inventories functions with arity and min_arity', () => {
   const doc = run({repo: 'shop', root: fixture});
-  assert.deepEqual(doc.producer, {name: 'extract-javascript', version: '0.3.0', call_precision: 'heuristic'});
+  assert.deepEqual(doc.producer, {name: 'extract-javascript', version: '0.5.0', call_precision: 'heuristic'});
   assert.equal(doc.facts_version, 3);
   assert.deepEqual(doc.modules.map(m => m.id), ['shop:assets/js/app.js', 'shop:assets/js/util.mjs']);
   assert.deepEqual(doc.notes, []);
