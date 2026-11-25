@@ -2,6 +2,7 @@
 Code.require_file("../heex_tokenizer.exs", __DIR__)
 Code.require_file("../heex.exs", __DIR__)
 Code.require_file("../source.exs", __DIR__)
+Code.require_file("../deps.exs", __DIR__)
 Code.require_file("../http.exs", __DIR__)
 Code.require_file("../facts.exs", __DIR__)
 ExUnit.start()

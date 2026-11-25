@@ -20,6 +20,9 @@ defmodule Cartographer.ElixirSource do
 
   @defs [:def, :defp, :defmacro, :defmacrop, :defdelegate, :defguard, :defguardp]
   @special [
+    # `super(...)` at any arity calls the overridden definition, not a
+    # function named super.
+    :super,
     :__block__,
     :__aliases__,
     :{},
@@ -391,7 +394,7 @@ defmodule Cartographer.ElixirSource do
         _ -> nil
       end
 
-    expand_use(name(mod, env), kind, env, acc, 0)
+    expand_use(name(mod, env), kind, env, acc, 0, option_aliases(rest, env))
   end
 
   defp walk({:embed_templates, meta, [pattern | rest]}, %{module: m, caller: nil} = env, acc)
@@ -640,9 +643,11 @@ defmodule Cartographer.ElixirSource do
       end
 
     {_, acc} = walk(mod, env, acc)
-    {_, acc} = walk(args, env, acc)
+    module = if literal, do: name(mod, env)
+    {_, acc} = walk(args, enclose(env, module, fun, length(args)), acc)
     {env, acc}
   end
+
 
   defp walk({{:., _, [fun_expr]}, meta, args}, env, acc) when is_list(args) do
     acc = call(acc, env, nil, :anonymous, length(args), meta, "dynamic")
@@ -657,16 +662,22 @@ defmodule Cartographer.ElixirSource do
     {env, acc}
   end
 
+  # `^expr` inside a query is evaluated as ordinary code.
+  defp walk({:^, _, [expr]}, env, acc) do
+    {_, acc} = walk(expr, Map.put(env, :pinned, true), acc)
+    {env, acc}
+  end
+
   defp walk({fun, meta, args}, env, acc) when ident?(fun) and is_list(args) do
     arity = length(args)
 
-    acc =
-      if env.caller && fun not in @special && {fun, arity} not in @special_forms &&
-           not (is_atom(fun) and Macro.operator?(fun, arity)),
-         do: call(acc, env, nil, fun, arity, meta, "local_or_import", args),
-         else: acc
+    is_call =
+      env.caller && fun not in @special && {fun, arity} not in @special_forms &&
+        not (is_atom(fun) and Macro.operator?(fun, arity))
 
-    {_, acc} = walk(args, env, acc)
+    acc = if is_call, do: call(acc, env, nil, fun, arity, meta, "local_or_import", args), else: acc
+
+    {_, acc} = walk(args, if(is_call, do: enclose(env, nil, fun, arity), else: env), acc)
     {env, acc}
   end
 
@@ -1104,8 +1115,28 @@ defmodule Cartographer.ElixirSource do
   # for `use X, :kind`, of its `kind/0` quote), applied to this module's
   # scope. `unquote(helper())` follows another quote of the same module;
   # a nested `use` follows up to three levels.
-  defp expand_use(module, kind, env, acc, depth) do
-    acc = %{acc | uses: [%{module: env.module, use: module, kind: kind} | acc.uses]}
+  # The calls a call sits inside (nearest first, a few levels), and whether
+  # it's under `^`: the query-DSL rule reads them (map-coverage-2 decision
+  # 17).
+  defp enclose(env, module, fun, arity) do
+    outer = Map.get(env, :enclosing, [])
+    Map.put(env, :enclosing, [%{module: module, name: str(fun), arity: arity} | Enum.take(outer, 7)])
+  end
+
+  # Module aliases among a `use`'s options (`adapter: Ecto.Adapters.Postgres`):
+  # the library reader follows them (map-coverage-2 decision 16).
+  defp option_aliases(opts, env) do
+    {_, found} =
+      Macro.prewalk(opts, [], fn
+        {:__aliases__, _, _} = a, acc -> {a, [name(a, env) | acc]}
+        n, acc -> {n, acc}
+      end)
+
+    Enum.reverse(found)
+  end
+
+  defp expand_use(module, kind, env, acc, depth, opts) do
+    acc = %{acc | uses: [%{module: env.module, use: module, kind: kind, opts: opts} | acc.uses]}
     h = Map.get(env.helpers, module)
     env = %{env | uses: [module | Map.get(env, :uses, [])]}
 
@@ -1145,7 +1176,7 @@ defmodule Cartographer.ElixirSource do
         _ -> nil
       end
 
-    expand_use(name(mod, env), kind, env, acc, depth + 1)
+    expand_use(name(mod, env), kind, env, acc, depth + 1, option_aliases(rest, env))
   end
 
   defp expand_form({:unquote, _, [{fun, _, args}]}, module, h, env, acc, depth)
@@ -1525,6 +1556,8 @@ defmodule Cartographer.ElixirSource do
       kind: kind,
       imports: env.imports,
       uses: Map.get(env, :uses, []),
+      enclosing: Map.get(env, :enclosing, []),
+      pinned: Map.get(env, :pinned, false),
       file: env.file
     }
 

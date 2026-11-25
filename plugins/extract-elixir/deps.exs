@@ -119,6 +119,9 @@ defmodule Cartographer.ElixirDeps do
   def exported?(list, name, arity),
     do: Enum.any?(list, fn {n, lo, hi} -> n == name and (lo == -1 or (arity >= lo and arity <= hi)) end)
 
+  @doc "Whether the reader has quote facts for `module` (an indexed library or a stdlib source)."
+  def has_quotes?(%__MODULE__{} = ev, lock, module), do: quote_facts(ev, lock, module) != nil
+
   @doc "Whether anything is known about `module` (an index entry or the runtime)."
   def known?(ev, lock, module), do: exports(ev, lock, module) != nil
 
