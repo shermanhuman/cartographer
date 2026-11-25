@@ -292,7 +292,8 @@ func Build(ctx context.Context, c *Config, o BuildOptions) (*bundle.Manifest, er
 			logf("%s: plugin %s", co.repo.Name, pname)
 			// Plugins run in the workspace directory, never inside the archived
 			// repository: its tool config (e.g. mise.toml) is not trusted here.
-			stderr, err := runPlugin(ctx, c.dir, mapEnv(p.Env), expand(p.Command, v), filepath.Join(out, rel), co.repo.Name)
+			// Temp files go in the build's scratch, removed with it.
+			stderr, err := runPlugin(ctx, c.dir, append(mapEnv(p.Env), "TMPDIR="+work), expand(p.Command, v), filepath.Join(out, rel), co.repo.Name)
 			if err != nil {
 				return nil, fmt.Errorf("build: %s: plugin %s: %w", co.repo.Name, pname, err)
 			}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -79,5 +80,28 @@ func TestSSHNeverAsksAndKeepsTheUsersSSH(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// Schema prepare and capture keep their temp files in the build's scratch,
+// even when the repo's own [schema] env names another TMPDIR.
+func TestSchemaStepTempFilesGoInScratch(t *testing.T) {
+	scratch := t.TempDir()
+	log := filepath.Join(t.TempDir(), "tmpdir.log")
+	_, err := RunSchema(context.Background(), SchemaStep{
+		Root: t.TempDir(), Dir: t.TempDir(),
+		Prepare:  `echo "prepare $TMPDIR" >> '` + log + `'`,
+		Command:  []string{"sh", "-c", `echo "capture $TMPDIR" >> '` + log + `'; exit 1`},
+		Env:      map[string]string{"TMPDIR": "/somewhere/else"},
+		Key:      "k",
+		CacheDir: t.TempDir(),
+		Scratch:  scratch,
+	})
+	if err == nil {
+		t.Fatal("a capture that exits 1 succeeded")
+	}
+	b, _ := os.ReadFile(log)
+	if got, want := strings.TrimSpace(string(b)), "prepare "+scratch+"\ncapture "+scratch; got != want {
+		t.Errorf("TMPDIR seen:\n%s\nwant:\n%s", got, want)
 	}
 }
