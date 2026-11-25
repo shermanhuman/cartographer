@@ -380,9 +380,10 @@ defmodule Cartographer.ElixirSource do
     {env, template(acc, env, text, first)}
   end
 
-  # `use X, :kind` and `use X`: the imports and aliases X's __using__ quote
-  # brings in (one level of an in-repo helper, as Phoenix's `html_helpers`),
-  # so template components resolve per app.
+  # `use X, :kind` and `use X`: what X's __using__ quote applies (imports,
+  # aliases and the functions it defines), up to three levels through
+  # helpers and nested uses, as Phoenix's `html_helpers`, so template
+  # components resolve per app.
   defp walk({:use, _, [mod | rest]}, %{module: m, caller: nil} = env, acc) when m != nil do
     kind =
       case rest do

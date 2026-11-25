@@ -119,11 +119,12 @@ Exit status 2 means bad arguments; nothing is written to stdout.
     `<%= %>` is walked as code. An event attribute whose value is a call
     (`phx-click={show_modal("x")}`) counts as a dynamic send: what it returns
     isn't known.
-  - `use X, :kind` (and `use X`) brings in the `import` and `alias` forms of
-    X's helper quote, as Phoenix's `html_helpers` does. Only one level is
-    followed, through `unquote(helper())` and a nested `use`. So `<.button>`
-    resolves to the CoreComponents of its own app, and other calls through
-    those imports resolve too.
+  - `use X, :kind` (and `use X`) applies X's helper quote, as Phoenix's
+    `html_helpers` does: its `import` and `alias` forms, and the functions
+    it defines (see library calls below). Up to three levels are followed,
+    through `unquote(helper())` and nested `use`s. So `<.button>` resolves
+    to the CoreComponents of its own app, and other calls through those
+    imports resolve too.
   - A syntax error is a `heex_parse_error` note; the rest of the file still
     counts.
 - `events`: LiveView sends.
@@ -177,7 +178,10 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   with several hosts the first in source order is used and no path joined.
   A function with no `base_url:` takes its module's host when every
   `base_url:` in the module is a literal naming one host. An interpolated
-  string, a loopback URL or anything computed sets none, and a base joined
+  string, a loopback URL or a variable with a computed value sets none
+  (an expression written in `base_url:` itself, such as
+  `Application.get_env(:app, :api, "https://…")`, takes the literal
+  default inside it), and a base joined
   into the URL itself (`url: base <> path`) isn't read: such a request
   keeps its module as its base.
 - `stats`: one entry, language `elixir`. `call_sites` counts `calls`;
