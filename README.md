@@ -81,6 +81,7 @@ throwaway PostgreSQL), `[rust] build_scripts` and `contexts_depth`.
 ```sh
 cartographer project add ~/src/my-app     # or my-org/my-app; any member works
 cartographer status                       # map id, freshness, coverage, your work
+cartographer status sengastudio           # one project's newest map, from anywhere
 cartographer refresh                      # fetch and rebuild now
 cartographer project init ~/src/my-worker # a starter .cartographer/repo.toml, plus the git commands to commit it
 cartographer refresh --head --from ~/src/my-app --db /tmp/try.db   # try uncommitted settings in a scratch store
@@ -228,6 +229,27 @@ Private workspaces need a GitHub token: `GH_TOKEN`/`GITHUB_TOKEN`, else
 `gh auth token` (a `gh` on PATH, or one installed globally with mise).
 Pulled and locally built snapshots coexist: the newest one of the
 workspace answers.
+
+## Credentials and prompts
+
+Cartographer never asks for a password. Every git and ssh process it starts,
+including extractor plugins, mise and detached rebuilds, runs with no
+terminal prompt and no askpass program: `GIT_TERMINAL_PROMPT=0`, an empty
+`GIT_ASKPASS` and `SSH_ASKPASS_REQUIRE=never`. Credentials come from the
+machine's own git credential helpers (`gh auth setup-git`, a keychain helper)
+or a token. A fetch they can't answer fails, and shows as a failed cycle in
+`status` and `project list`; it never opens a dialog. Two things are outside
+this promise: a credential helper that opens a browser on its own, and a
+program that replaces its whole environment. Your own ssh setup
+(`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`) is respected.
+
+## Store files
+
+The default store is `carto.db` in the data directory
+(`~/.local/share/cartographer`). From the next schema change, each schema gets
+its own file (`carto-v5.db`, and so on), so an older cartographer can never
+open a newer store. The newer version starts its file fresh and rebuilds the
+maps. A project registered against the default store follows it.
 
 ## How it works
 
