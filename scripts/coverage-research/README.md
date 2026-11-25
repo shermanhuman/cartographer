@@ -39,9 +39,15 @@ on a scratch copy (never a user's checkout):
 git -C ~/github/<repo> archive origin/main | tar -x -C $scratch/app
 elixir stage_deps.exs $scratch/app ~/.hex/packages/hexpm   # verified tarballs into deps/<lock key>
 cd $scratch/app && env -u XDG_CACHE_HOME MIX_ENV=dev elixir ../trace.exs   # deps.compile, compile with a tracer, debug info
-CARTO_DEBUG_EXT=1 elixir extract.exs ... > ext.json   # a facts.exs that keeps `ext` on each call
+elixir $copy/extract.exs ... > ext.json   # a scratch copy whose facts.exs keeps `ext` on each call
 python3 compare.py ext.json $scratch/app/oracle.json
 ```
+
+The scratch copy of the plugin differs in one line: `calls/4` in
+`facts.exs` returns `calls` instead of
+`Enum.map(calls, &Map.delete(&1, :ext))` as its first element, so each
+emitted call keeps its `ext` outcome (facts decoding would reject the
+field, so the plugin never emits it).
 
 `extract_shapes.exs` collected the regression corpus's shapes from the
 review probes.

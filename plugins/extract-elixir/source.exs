@@ -643,8 +643,9 @@ defmodule Cartographer.ElixirSource do
       end
 
     {_, acc} = walk(mod, env, acc)
-    module = if literal, do: name(mod, env)
-    {_, acc} = walk(args, enclose(env, module, fun, length(args)), acc)
+    # A call on a value (`repo.update(...)`) is no module's macro.
+    module = if literal, do: name(mod, env), else: :dynamic
+    {_, acc} = walk_args(args, env, acc, module, fun)
     {env, acc}
   end
 
@@ -664,7 +665,9 @@ defmodule Cartographer.ElixirSource do
 
   # `^expr` inside a query is evaluated as ordinary code.
   defp walk({:^, _, [expr]}, env, acc) do
-    {_, acc} = walk(expr, Map.put(env, :pinned, true), acc)
+    # The pin's depth: calls entered inside the pinned expression (a whole
+    # `^from(...)` query) are not pinned relative to their own macros.
+    {_, acc} = walk(expr, Map.put(env, :pinned, length(Map.get(env, :enclosing, []))), acc)
     {env, acc}
   end
 
@@ -677,7 +680,7 @@ defmodule Cartographer.ElixirSource do
 
     acc = if is_call, do: call(acc, env, nil, fun, arity, meta, "local_or_import", args), else: acc
 
-    {_, acc} = walk(args, if(is_call, do: enclose(env, nil, fun, arity), else: env), acc)
+    {_, acc} = if is_call, do: walk_args(args, env, acc, nil, fun), else: walk(args, env, acc)
     {env, acc}
   end
 
@@ -1111,16 +1114,27 @@ defmodule Cartographer.ElixirSource do
     found |> Enum.reverse() |> Enum.uniq()
   end
 
-  # `use` expansion: the forms of an in-repo module's __using__ quote (or,
-  # for `use X, :kind`, of its `kind/0` quote), applied to this module's
-  # scope. `unquote(helper())` follows another quote of the same module;
-  # a nested `use` follows up to three levels.
   # The calls a call sits inside (nearest first, a few levels), and whether
   # it's under `^`: the query-DSL rule reads them (map-coverage-2 decision
   # 17).
-  defp enclose(env, module, fun, arity) do
+  @enclosing_depth 8
+
+  # Each argument of a call, walked inside it with its position (the query
+  # rule reads which argument of a query macro a call sits in).
+  defp walk_args(args, env, acc, module, fun) do
+    arity = length(args)
+
+    acc =
+      args
+      |> Enum.with_index()
+      |> Enum.reduce(acc, fn {arg, i}, a -> elem(walk(arg, enclose(env, module, fun, arity, i), a), 1) end)
+
+    {env, acc}
+  end
+
+  defp enclose(env, module, fun, arity, index) do
     outer = Map.get(env, :enclosing, [])
-    Map.put(env, :enclosing, [%{module: module, name: str(fun), arity: arity} | Enum.take(outer, 7)])
+    Map.put(env, :enclosing, [%{module: module, name: str(fun), arity: arity, arg: index} | Enum.take(outer, @enclosing_depth - 1)])
   end
 
   # Module aliases among a `use`'s options (`adapter: Ecto.Adapters.Postgres`):
@@ -1135,6 +1149,10 @@ defmodule Cartographer.ElixirSource do
     Enum.reverse(found)
   end
 
+  # `use` expansion: the forms of an in-repo module's __using__ quote (or,
+  # for `use X, :kind`, of its `kind/0` quote), applied to this module's
+  # scope. `unquote(helper())` follows another quote of the same module;
+  # a nested `use` follows up to three levels.
   defp expand_use(module, kind, env, acc, depth, opts) do
     acc = %{acc | uses: [%{module: env.module, use: module, kind: kind, opts: opts} | acc.uses]}
     h = Map.get(env.helpers, module)
@@ -1557,7 +1575,7 @@ defmodule Cartographer.ElixirSource do
       imports: env.imports,
       uses: Map.get(env, :uses, []),
       enclosing: Map.get(env, :enclosing, []),
-      pinned: Map.get(env, :pinned, false),
+      pinned: Map.get(env, :pinned),
       file: env.file
     }
 

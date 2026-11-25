@@ -74,6 +74,35 @@ defmodule Cartographer.ElixirDepsTest do
   defmodule Lib.Hasher do
     use Lib.Behaviour
   end
+  defmodule Lib.Sql do
+    defmacro __using__(_) do
+      quote do
+        def query!(sql, params \\ []), do: {sql, params}
+      end
+    end
+  end
+  defmodule Lib.Pg do
+    use Lib.Sql
+  end
+  defmodule Lib.Other do
+    defmacro __using__(_) do
+      quote do
+        def secret, do: :no
+      end
+    end
+  end
+  defmodule Lib.Shy do
+    defmacro __using__(_) do
+      quote do
+        import Lib.Other
+        defp hidden, do: :no
+        defmodule Inner do
+          def inner_only, do: :no
+        end
+        def shown, do: hidden()
+      end
+    end
+  end
   defmodule Lib.Verbs do
     @verbs [:get, :post]
     for v <- @verbs do
@@ -119,6 +148,23 @@ defmodule Cartographer.ElixirDepsTest do
     assert Enum.any?(ElixirDeps.reach(ev, lock, "Lib.Hooked", []).defs, &(elem(&1, 0) == "hooked"))
   end
 
+  # Review round 1, X1-m1: the reader rules each pinned.
+  test "the reader: arity ranges, imports give exports only, top-level uses, no defp or nested modules" do
+    {root, hex} = fixture()
+    ev = ElixirDeps.load(root, ["app/lib/a.ex"], hex)
+    lock = "app"
+    refute ElixirDeps.exported?(ElixirDeps.exports(ev, lock, "Lib.Query"), "from", 3)
+    # A reached module's own top-level `use` is followed (the adapter shape).
+    assert Enum.any?(ElixirDeps.reach(ev, lock, "Lib.Repo", ["Lib.Pg"]).defs, &(elem(&1, 0) == "query!"))
+    names = ElixirDeps.reach(ev, lock, "Lib.Shy", []).defs |> Enum.map(&elem(&1, 0))
+    assert "shown" in names
+    # An import contributes exports, never its quotes (decision 23); a
+    # quoted defp is private; a module nested in a quote is its own.
+    refute "secret" in names
+    refute "hidden" in names
+    refute "inner_only" in names
+  end
+
   test "the runtime knows Elixir and OTP modules; nothing else" do
     {root, hex} = fixture()
     ev = ElixirDeps.load(root, ["app/lib/a.ex"], hex)
@@ -149,13 +195,47 @@ defmodule Cartographer.ElixirDepsTest do
     assert ElixirDeps.exports(ev, nil, "Lib.Query") == nil
   end
 
+  # Review round 1, X1-m5 and X1-m6.
+  test "evidence that goes missing says so; a lock creates no atoms" do
+    root = scratch()
+    File.mkdir_p!(root)
+    name = "zz_never_seen_pkg_#{System.unique_integer([:positive])}"
+
+    File.write!(Path.join(root, "mix.lock"), """
+    %{
+      "#{name}": {:hex, :#{name}, "1.0.0", "a", [:mix], [], "hexpm", "#{String.duplicate("b", 64)}"},
+      "oban": {:hex, :oban, "2.0.0", "a", [:mix], [], "oban", "#{String.duplicate("c", 64)}"},
+      "old": {:hex, :old, "0.1.0", "a", [:mix], []},
+    }
+    """)
+
+    {entries, notes} = ElixirDeps.read_lock(root, ".")
+    assert [%{name: ^name}] = entries
+    assert_raise ArgumentError, fn -> String.to_existing_atom(name) end
+    assert Enum.map(notes, & &1.file) |> Enum.sort() == ["oban-2.0.0", "old-0.1.0"]
+
+    File.write!(Path.join(root, "mix.lock"), <<0xFF, 0xFE>>)
+    assert {[], [%{file: "mix.lock"}]} = ElixirDeps.read_lock(root, ".")
+    assert ElixirDeps.source_modules(<<"defmodule A do ", 0xFF, " end">>) == []
+  end
+
+  # The sample lock the Go digest's parser test reads too.
+  test "the shared sample lock: one package, notes for the rest" do
+    root = scratch()
+    File.mkdir_p!(root)
+    File.cp!(Path.join(__DIR__, "support/sample.lock"), Path.join(root, "mix.lock"))
+    {entries, notes} = ElixirDeps.read_lock(root, ".")
+    assert [%{name: "ecto", version: "3.14.3"}] = entries
+    assert notes |> Enum.map(& &1.file) |> Enum.sort() == ["oban_pro-1.5.0", "old-0.1.0"]
+  end
+
   test "a lock is read as data, never evaluated" do
     root = scratch()
     File.mkdir_p!(root)
     marker = Path.join(root, "pwned")
     evil = "%{\"x\": {:hex, :x, \"1.0.0\", \"a\", [:mix], [], \"hexpm\", \"b\"}} |> tap(fn _ -> File.write!(\"" <> marker <> "\", \"\") end)"
     File.write!(Path.join(root, "mix.lock"), evil)
-    assert ElixirDeps.read_lock(root, ".") == []
+    assert {[], [%{kind: "dependency_missing"}]} = ElixirDeps.read_lock(root, ".")
     refute File.exists?(Path.join(root, "pwned"))
   end
 end

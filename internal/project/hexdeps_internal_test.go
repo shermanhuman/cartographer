@@ -15,8 +15,14 @@ const testLock = `%{
 }
 `
 
+// The same sample lock the Elixir reader's test reads: only the hexpm
+// entry with an outer checksum is a package.
 func TestParseHexLock(t *testing.T) {
-	got := parseHexLock([]byte(testLock))
+	sample, err := os.ReadFile("../../plugins/extract-elixir/test/support/sample.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := parseHexLock(sample)
 	if len(got) != 1 || got[0] != (hexEntry{"ecto", "3.14.3", "da2548bd3ced0f56c27d54255389bbbb8f110150ce15cffc95ec0cafa364465c"}) {
 		t.Fatalf("entries %+v", got)
 	}

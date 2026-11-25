@@ -511,16 +511,35 @@ defmodule Cartographer.ElixirFacts do
   # comes before the project's own definitions. Returns the owner or nil.
   @query_api ["Ecto.Query.API", "Ecto.Query.WindowAPI"]
 
-  defp query_dsl(%{module: nil, kind: "local_or_import", pinned: false} = c, ctx) do
+  # The nearest enclosing call that is a proven Ecto.Query macro, with the
+  # call in one of its arguments after the first (the first is the query or
+  # its source, evaluated as ordinary code), and no pin taken inside that
+  # macro covering it (round 1 of review, X1-M1 and X1-m2).
+  defp query_dsl(%{module: nil, kind: "local_or_import"} = c, ctx) do
     lock = ElixirDeps.lock_of(ctx.ev, c.file)
+    enclosing = Map.get(c, :enclosing, [])
+    depth = length(enclosing)
 
-    if Enum.any?(Map.get(c, :enclosing, []), &query_macro?(&1, c, ctx, lock)) do
-      Enum.find(@query_api, fn api ->
-        case ElixirDeps.exports(ctx.ev, lock, api) do
-          nil -> false
-          ex -> Enum.any?(ex, fn {n, _, _} -> n == c.name end)
+    in_query =
+      enclosing
+      |> Enum.with_index()
+      |> Enum.find(fn {e, _j} -> query_macro?(e, c, ctx, lock) end)
+
+    case in_query do
+      {%{arg: arg}, j} when arg > 0 ->
+        pin = Map.get(c, :pinned)
+
+        unless is_integer(pin) and pin >= depth - j do
+          Enum.find(@query_api, fn api ->
+            case ElixirDeps.exports(ctx.ev, lock, api) do
+              nil -> false
+              ex -> Enum.any?(ex, fn {n, _, _} -> n == c.name end)
+            end
+          end)
         end
-      end)
+
+      _ ->
+        nil
     end
   end
 
@@ -529,12 +548,13 @@ defmodule Cartographer.ElixirFacts do
   defp query_macro?(%{module: m, name: n, arity: a}, c, ctx, lock) do
     module =
       cond do
+        # A call on a value (`repo.update(...)`) has module :dynamic.
         m != nil -> m
         admits?(Map.get(c.imports, "Ecto.Query"), {n, a}) -> "Ecto.Query"
         true -> nil
       end
 
-    module == "Ecto.Query" and ElixirDeps.exported?(ElixirDeps.exports(ctx.ev, lock, "Ecto.Query"), n, a)
+    module == "Ecto.Query" and ElixirDeps.macro?(ctx.ev, lock, "Ecto.Query", n, a)
   end
 
   defp admits?(entry, fa) when is_map(entry),
@@ -661,7 +681,13 @@ defmodule Cartographer.ElixirFacts do
       Enum.any?(Map.keys(c.imports) ++ uses, fn m ->
         m != "Kernel" and not project?.(m) and not ElixirDeps.known?(ctx.ev, lock, m)
       end) or
-      Enum.any?(uses, &(not project?.(&1) and not ElixirDeps.has_quotes?(ctx.ev, lock, &1)))
+      Enum.any?(uses, &(not project?.(&1) and not ElixirDeps.has_quotes?(ctx.ev, lock, &1))) or
+      # A library `use` that reaches a module with no evidence (a package
+      # the cache lacks, behind the library's own quotes): X1-m4.
+      Enum.any?(uses, fn u ->
+        not project?.(u) and
+          Enum.any?(ElixirDeps.reach(ctx.ev, lock, u, Map.get(ctx.use_opts, {c.caller_module, u}, [])).unknown, &(not project?.(&1)))
+      end)
   end
 
   defp external_kind("capture"), do: "capture"

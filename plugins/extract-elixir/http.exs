@@ -109,9 +109,8 @@ defmodule Cartographer.ElixirHTTP do
   # The base URL a function's requests go to (decision 17): the literal
   # behind a `base_url:` option in that function's own clauses, read from a
   # string, a module attribute (`@api "https://..."`), the literal default
-  # of a local function it calls (`base_url(opts)`) or the literals bound to
-  # a variable (`{base, _} = case ...`). An interpolated string is never
-  # read. Returns `%{fid => {scheme://host, path prefix}}`; with several
+  # of a local function it calls (`base_url(opts)`). A variable gives no
+  # base (map-coverage-2 decision 2), nor does an interpolated string. Returns `%{fid => {scheme://host, path prefix}}`; with several
   # hosts the first in source order is used and no path is joined.
   defp bases(clauses, attrs) do
     cs = Enum.filter(clauses, &Map.has_key?(&1, :http))
@@ -126,7 +125,7 @@ defmodule Cartographer.ElixirHTTP do
     module_base =
       Map.new(by_module, fn {module, mcs} ->
         values =
-          for c <- mcs, v <- base_url_values(c.http.body), do: resolve_base(v, c, module, mcs, attr)
+          for c <- mcs, v <- base_url_values(c.http.body), do: resolve_base(v, module, mcs, attr)
 
         urls = List.flatten(values)
 
@@ -167,7 +166,7 @@ defmodule Cartographer.ElixirHTTP do
   defp clause_urls(c, module, cs, attr) do
     c.http.body
     |> base_url_values()
-    |> Enum.flat_map(&resolve_base(&1, c, module, cs, attr))
+    |> Enum.flat_map(&resolve_base(&1, module, cs, attr))
   end
 
   defp base_of(urls) do
@@ -216,18 +215,18 @@ defmodule Cartographer.ElixirHTTP do
     Enum.reverse(found)
   end
 
-  defp resolve_base(v, _clause, _module, _cs, _attr) when is_binary(v), do: [v]
+  defp resolve_base(v, _module, _cs, _attr) when is_binary(v), do: [v]
 
-  defp resolve_base({:@, _, [{name, _, _}]}, _clause, module, _cs, attr),
+  defp resolve_base({:@, _, [{name, _, _}]}, module, _cs, attr),
     do: Map.get(attr, {module, ElixirSource.str(name)}, [])
 
   # A variable gives no base: what it holds at the request isn't read
   # (map-coverage-2 decision 2, which drops map-coverage-1 decisions 17's
   # and 31's variable reading).
-  defp resolve_base({_name, _, ctx}, _clause, _module, _cs, _attr) when is_atom(ctx), do: [:unknown]
+  defp resolve_base({_name, _, ctx}, _module, _cs, _attr) when is_atom(ctx), do: [:unknown]
 
   # A local function (`base_url(opts)`): the literals in its body.
-  defp resolve_base({fun, _, args} = v, _clause, _module, cs, _attr) when is_list(args) do
+  defp resolve_base({fun, _, args} = v, _module, cs, _attr) when is_list(args) do
     name = if is_atom(fun) or is_map(fun), do: ElixirSource.str(fun)
     local = Enum.filter(cs || [], &(&1.name == name))
 
@@ -236,7 +235,7 @@ defmodule Cartographer.ElixirHTTP do
       else: strings(v)
   end
 
-  defp resolve_base(_v, _clause, _module, _cs, _attr), do: []
+  defp resolve_base(_v, _module, _cs, _attr), do: []
 
 
   # String literals, never the fragments of an interpolated string.

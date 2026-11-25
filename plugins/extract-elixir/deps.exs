@@ -22,7 +22,7 @@ defmodule Cartographer.ElixirDeps do
 
   @stdlib_apps ~w(elixir ex_unit logger eex mix iex)a
 
-  defstruct locks: %{}, by_file: %{}, packages: %{}, notes: [], runtime: nil, stdlib: %{}, cache: nil
+  defstruct locks: %{}, by_file: %{}, notes: [], runtime: nil, stdlib: %{}, cache: nil
 
   @doc """
   Evidence for `files` (repo-relative) under `root`, reading tarballs from
@@ -37,6 +37,9 @@ defmodule Cartographer.ElixirDeps do
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
       |> Map.new(fn dir -> {dir, read_lock(root, dir)} end)
+
+    lock_notes = Enum.flat_map(locks, fn {_dir, {_entries, notes}} -> notes end)
+    locks = Map.new(locks, fn {dir, {entries, _notes}} -> {dir, entries} end)
 
     {packages, notes} =
       Enum.reduce(locks, {%{}, []}, fn {dir, entries}, acc ->
@@ -84,16 +87,11 @@ defmodule Cartographer.ElixirDeps do
     %__MODULE__{
       locks: lock_modules,
       by_file: lock_dirs,
-      notes: Enum.reverse(notes) ++ stdlib_notes,
+      notes: lock_notes ++ Enum.reverse(notes) ++ stdlib_notes,
       runtime: runtime_modules(),
       stdlib: stdlib,
       cache: :ets.new(:cartographer_deps, [:set, :public])
     }
-  end
-
-  @doc "No evidence at all (tests and repos with no lock)."
-  def empty do
-    %__MODULE__{runtime: runtime_modules(), stdlib: elem(stdlib_quotes(), 0), cache: :ets.new(:cartographer_deps, [:set, :public])}
   end
 
   @doc "The lock directory a file's evidence comes from, or nil."
@@ -119,6 +117,19 @@ defmodule Cartographer.ElixirDeps do
     end)
   end
 
+  @doc "Whether `module` defines `name/arity` as a macro (its source, or the runtime's `__info__(:macros)`)."
+  def macro?(%__MODULE__{} = ev, lock, module, name, arity) do
+    list =
+      cached(ev, {:macros, lock, module}, fn ->
+        case get_in(ev.locks, [lock, module]) do
+          %{macros: m} -> m
+          nil -> runtime_macros(ev, module)
+        end
+      end)
+
+    exported?(list, name, arity)
+  end
+
   @doc "Whether `{name, arity}` is in an export list."
   def exported?(nil, _name, _arity), do: false
 
@@ -134,10 +145,10 @@ defmodule Cartographer.ElixirDeps do
   @doc """
   The superset reader (decisions 16 and 23): what a `use` of `module`, with
   the module aliases among its options, can put in the using module.
-  Returns `%{defs: [{name, min, max}], imports: [module], reached: [module],
-  unknown: [module]}`: definitions from any quote of a reached module, the
-  modules those quotes import (their exports apply), and the modules the
-  walk reached but knows nothing about (a hole).
+  Returns `%{defs: [{name, min, max}], imports: [module], unknown: [module]}`:
+  definitions from any quote of a reached module, the modules those quotes
+  import (their exports apply), and the modules the walk reached but knows
+  nothing about (a hole, decision 27).
   """
   def reach(%__MODULE__{} = ev, lock, module, opt_aliases) do
     cached(ev, {:reach, lock, module, Enum.sort(opt_aliases)}, fn ->
@@ -148,14 +159,18 @@ defmodule Cartographer.ElixirDeps do
       imports = facts |> Enum.flat_map(fn {_, f} -> (f && f.imports) || [] end) |> Enum.uniq()
       unknown = for {m, nil} <- facts, not known?(ev, lock, m), do: m
 
-      %{defs: defs, imports: imports, reached: MapSet.to_list(seen), unknown: unknown}
+      %{defs: defs, imports: imports, unknown: unknown}
     end)
   end
+
+  # How many modules one `use` may reach; past it the reader stops (no
+  # real library comes close: Phoenix.LiveView reaches 7).
+  @reach_limit 200
 
   defp bfs(_ev, _lock, [], seen), do: {seen, []}
 
   defp bfs(ev, lock, [m | rest], seen) do
-    if MapSet.member?(seen, m) or MapSet.size(seen) > 200 do
+    if MapSet.member?(seen, m) or MapSet.size(seen) > @reach_limit do
       bfs(ev, lock, rest, seen)
     else
       refs =
@@ -197,16 +212,67 @@ defmodule Cartographer.ElixirDeps do
     end
   end
 
-  @doc "The `:hex` entries of a lock, parsed as data: `[%{name, version, outer}]`."
+  @doc """
+  The `:hex` entries of a lock, parsed as data with no atom created:
+  `{[%{name, version, outer}], notes}`. An unreadable lock, an entry from a
+  repository other than hexpm, or one without an outer checksum gives a
+  `dependency_missing` note: it gives no evidence.
+  """
   def read_lock(root, dir) do
-    with {:ok, text} <- File.read(Path.join([root, dir, "mix.lock"])),
-         {:ok, {:%{}, _, entries}} <- Code.string_to_quoted(text, existing_atoms_only: false, emit_warnings: false) do
-      for {_key, {:{}, _, [:hex, pkg, version, _inner, _managers, _deps, "hexpm", outer | _]}} <- entries,
-          is_atom(pkg) and is_binary(version) and is_binary(outer),
-          do: %{name: Atom.to_string(pkg), version: version, outer: String.downcase(outer)}
+    path = Path.join(dir, "mix.lock")
+
+    with {:ok, text} <- File.read(Path.join(root, path)),
+         true <- String.valid?(text),
+         {:ok, {m, _, entries}} <- safe_quoted(text),
+         "%{}" <- s(m) || "%{}" do
+      Enum.reduce(entries, {[], []}, fn entry, {ok, notes} ->
+        case lock_entry(entry) do
+          {:ok, e} -> {[e | ok], notes}
+          {:skip, name, why} -> {ok, [missing_note(path, name, why) | notes]}
+          :other -> {ok, notes}
+        end
+      end)
+      |> then(fn {ok, notes} -> {Enum.reverse(ok), Enum.reverse(notes)} end)
     else
-      _ -> []
+      _ -> {[], [missing_note(path, "mix.lock", "the lock can't be read")]}
     end
+  end
+
+  # `"key": {:hex, :name, "version", inner, managers, deps, "hexpm", outer}`.
+  defp lock_entry({_key, {tag, _, [kind, pkg, version | rest]}}) do
+    cond do
+      s(tag) != "{}" or s(kind) != "hex" ->
+        :other
+
+      not (name_like?(pkg) and is_binary(version)) ->
+        :other
+
+      not Regex.match?(~r/\A[0-9A-Za-z.+_-]+\z/, version) ->
+        {:skip, s(pkg), "version #{inspect(version)} isn't a version"}
+
+      true ->
+        case rest do
+          [_inner, _managers, _deps, "hexpm", outer | _] when is_binary(outer) ->
+            {:ok, %{name: s(pkg), version: version, outer: String.downcase(outer)}}
+
+          [_inner, _managers, _deps, repo | _] when is_binary(repo) ->
+            {:skip, "#{s(pkg)}-#{version}", "from the #{repo} repository, which isn't read"}
+
+          _ ->
+            {:skip, "#{s(pkg)}-#{version}", "no outer checksum in the lock"}
+        end
+    end
+  end
+
+  defp lock_entry(_), do: :other
+
+  defp missing_note(lock, file, why),
+    do: %{kind: "dependency_missing", file: file, message: "#{lock}: #{file} gives no evidence (#{why})"}
+
+  defp safe_quoted(text) do
+    Code.string_to_quoted(text, emit_warnings: false, static_atoms_encoder: &encode/2)
+  rescue
+    _ -> :error
   end
 
   # --- packages ------------------------------------------------------------
@@ -252,8 +318,10 @@ defmodule Cartographer.ElixirDeps do
 
   @doc "Modules defined in one Elixir source: `[{name, %{exports, quotes}}]`."
   def source_modules(src) do
-    case Code.string_to_quoted(src, emit_warnings: false, static_atoms_encoder: &encode/2) do
-      {:ok, ast} -> modules(ast, nil)
+    with true <- String.valid?(src),
+         {:ok, ast} <- safe_quoted(src) do
+      modules(ast, nil)
+    else
       _ -> []
     end
   end
@@ -292,6 +360,7 @@ defmodule Cartographer.ElixirDeps do
       for {at, _, [{n, _, [list]}]} <- forms, s(at) == "@", is_list(list), into: %{}, do: {s(n), list}
 
     exports = Enum.flat_map(forms, &top_exports(&1, %{}, attrs))
+    macros = Enum.flat_map(forms, &top_exports(&1, %{}, attrs, ["defmacro"]))
     top_uses = for {u, _, [m | _]} <- forms, s(u) == "use", r = ref(m, name), r != nil, do: r
 
     {_, q} =
@@ -305,6 +374,7 @@ defmodule Cartographer.ElixirDeps do
 
     %{
       exports: Enum.uniq(exports),
+      macros: Enum.uniq(macros),
       uses: Enum.uniq(top_uses),
       quotes: %{defs: Enum.uniq(q.defs), refs: Enum.uniq(q.refs), imports: Enum.uniq(q.imports)}
     }
@@ -313,23 +383,25 @@ defmodule Cartographer.ElixirDeps do
   @defs ~w(def defmacro defdelegate defguard)
   @all_defs ~w(def defp defmacro defmacrop defdelegate defguard defguardp)
 
-  defp top_exports({kw, _, args}, binds, attrs) when is_list(args) do
+  defp top_exports(form, binds, attrs, kinds \\ @defs)
+
+  defp top_exports({kw, _, args}, binds, attrs, kinds) when is_list(args) do
     k = s(kw)
 
     cond do
-      k in @defs and args != [] -> List.wrap(head(hd(args), binds))
-      k == "for" -> for_exports(args, attrs)
+      k in kinds and args != [] -> List.wrap(head(hd(args), binds))
+      k == "for" -> for_exports(args, attrs, kinds)
       # Definitions under a module-level `if Code.ensure_loaded?(...)`
       # count, in either branch (a superset, decision 16).
-      k in ["if", "unless"] -> args |> List.last() |> branches() |> Enum.flat_map(&top_exports(&1, binds, attrs))
+      k in ["if", "unless"] -> args |> List.last() |> branches() |> Enum.flat_map(&top_exports(&1, binds, attrs, kinds))
       # defexception generates exception/1 and message/1; defstruct the struct.
-      k == "defexception" -> [{"exception", 1, 1}, {"message", 1, 1}, {"__struct__", 0, 1}]
-      k == "defstruct" -> [{"__struct__", 0, 1}]
+      k == "defexception" and "def" in kinds -> [{"exception", 1, 1}, {"message", 1, 1}, {"__struct__", 0, 1}]
+      k == "defstruct" and "def" in kinds -> [{"__struct__", 0, 1}]
       true -> []
     end
   end
 
-  defp top_exports(_, _, _), do: []
+  defp top_exports(_, _, _, _), do: []
 
   defp branches(kw) when is_list(kw) do
     Enum.flat_map(kw, fn
@@ -341,11 +413,11 @@ defmodule Cartographer.ElixirDeps do
   defp branches(_), do: []
 
   # `for m <- [:get, :post], do: defmacro unquote(m)(conn, path) ...`
-  defp for_exports(args, attrs) do
+  defp for_exports(args, attrs, kinds) do
     {gens, body} = for_parts(args, attrs)
 
     Enum.flat_map(gens, fn {v, atoms} ->
-      Enum.flat_map(atoms, fn a -> body |> block_forms() |> Enum.flat_map(&top_exports(&1, %{v => a}, attrs)) end)
+      Enum.flat_map(atoms, fn a -> body |> block_forms() |> Enum.flat_map(&top_exports(&1, %{v => a}, attrs, kinds)) end)
     end)
   end
 
@@ -405,7 +477,8 @@ defmodule Cartographer.ElixirDeps do
 
             k == "import" ->
               case args do
-                [m | _] -> {n, add(acc, :imports, ref(m, modname)) |> add(:refs, ref(m, modname))}
+                # Exports only, never its quotes (decision 23).
+                [m | _] -> {n, add(acc, :imports, ref(m, modname))}
                 _ -> {n, acc}
               end
 
@@ -540,6 +613,20 @@ defmodule Cartographer.ElixirDeps do
         else
           nil
         end
+    end
+  end
+
+  defp runtime_macros(ev, module) do
+    case Map.get(ev.runtime, module) do
+      nil ->
+        nil
+
+      erl_name ->
+        mod = String.to_atom(erl_name)
+
+        if Code.ensure_loaded?(mod) and function_exported?(mod, :__info__, 1),
+          do: for({n, a} <- mod.__info__(:macros), do: {Atom.to_string(n), a, a}),
+          else: nil
     end
   end
 

@@ -11,6 +11,8 @@ defmodule Cartographer.StubLibs do
     defmacro from(expr, kw \\ []), do: {expr, kw}
     defmacro where(q, binding \\ [], expr), do: {q, binding, expr}
     defmacro select(q, binding \\ [], expr), do: {q, binding, expr}
+    defmacro update(q, binding \\ [], expr), do: {q, binding, expr}
+    def subquery(q, opts \\ []), do: {q, opts}
   end
   defmodule Ecto.Query.API do
     def count(v), do: v

@@ -1522,6 +1522,102 @@ defmodule Cartographer.ElixirExtractTest do
       assert from(doc, "App.Sup.mount/2", "super") == []
     end
 
+    # Review round 1, X1-m1: each rule pinned by its own case.
+    test "the evidence rules, one case each" do
+      doc =
+        build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/repo.ex" => "defmodule App.Repo do\n  use Ecto.Repo, otp_app: :app\nend\n",
+              "lib/own.ex" => "defmodule App.OwnRepo do\n  use Ecto.Repo, otp_app: :app\n  def all(q, _opts), do: q\nend\n",
+              "lib/mystery.ex" => "defmodule App.Mystery do\n  def from(a, b), do: {a, b}\nend\n",
+              "lib/a.ex" => ~S"""
+              defmodule A.UnreadableImport do
+                import Ecto.Query
+                import App.Mystery, only: opts()
+                def opts, do: []
+                def go(x), do: from(x, [])
+              end
+              defmodule A.UnknownModule do
+                import Missing.Lib
+                import Ecto.Changeset
+                def go(x), do: change(x)
+              end
+              defmodule A.UseWithoutQuotes do
+                use :lists
+                import Ecto.Changeset
+                def go(x), do: change(x)
+              end
+              defmodule A.NotAdmitted do
+                import Ecto.Changeset, only: [cast: 3]
+                def go(x), do: change(x)
+              end
+              defmodule A.WrongArity do
+                def go(x), do: App.Repo.all(x, 1, 2, 3)
+              end
+              defmodule A.OwnDefinition do
+                def go(x), do: App.OwnRepo.all(x, [])
+              end
+              defmodule A.NoImport do
+                def count(x), do: x
+                def where(q, b, e), do: {q, b, e}
+                def go(q), do: where(q, [], count(1))
+              end
+              defmodule A.Deep do
+                import Ecto.Query
+                def go(q), do: where(q, [u], not is_nil(count(u.id)))
+              end
+              """
+            })
+        )
+
+      for m <- ~w(UnreadableImport UnknownModule UseWithoutQuotes NotAdmitted) do
+        assert [%{kind: "local_or_import"}] = from(doc, "A.#{m}.go/1", if(m == "UnreadableImport", do: "from", else: "change")), m
+      end
+
+      # No generated all/4.
+      assert [%{kind: "remote"}] = from(doc, "A.WrongArity.go/1", "all")
+      # The project module defines all/2 itself: its own, not the library's.
+      assert [%{kind: "remote"}] = from(doc, "A.OwnDefinition.go/1", "all")
+      # Without `import Ecto.Query`, a local where/3 is no query macro.
+      assert [%{kind: "local"}] = from(doc, "A.NoImport.go/1", "count")
+      # Two calls deep inside the macro is still its argument.
+      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "A.Deep.go/1", "count")
+    end
+
+    test "a call to a module with no evidence counts as unresolved, not external" do
+      doc = extract("defmodule U do\n  def go(x), do: Some.Unindexed.thing(x)\nend\n")
+      stats = Enum.find(doc.stats, &(&1.language == "elixir"))
+      assert {stats.external, stats.unresolved} == {0, 1}
+    end
+
+    # Review round 1, X1-M1 and X1-m2.
+    test "query vocabulary only in a query macro's later arguments" do
+      doc =
+        extract(~S"""
+        defmodule P do
+          import Ecto.Query
+          def count(x), do: x
+          def src(o), do: from(u in count(o), select: u)
+          def first(q), do: where(count(q), [u], u.id > 1)
+          def sub(q), do: subquery(count(q))
+          def dyn(repo, x), do: repo.update(count(x), [])
+          def dyn_later(repo, x), do: repo.update(x, [], count(1))
+          def nested(ids), do: from(u in "u", preload: [posts: ^from(p in "p", where: fragment("x"))], where: u.id in ^ids)
+          def later(q), do: where(q, [u], count(u.id) > 1)
+        end
+        """)
+
+      for f <- ~w(src/1 first/1 sub/1 dyn/2 dyn_later/2) do
+        assert [%{kind: "local"}] = from(doc, "P.#{f}", "count"), f
+      end
+
+      # A query nested under ^ keeps its own vocabulary.
+      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "P.nested/1", "fragment")
+      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "P.later/1", "count")
+    end
+
     test "under ^ a call is ordinary code, not query vocabulary" do
       doc =
         extract(~S"""

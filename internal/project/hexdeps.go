@@ -71,56 +71,40 @@ func extractsElixir(in Input) bool {
 	return false
 }
 
-// lockPaths lists the mix.lock files of a member at its commit (or in its
-// working copy for a --head build), skipping deps/ and _build/.
-func lockPaths(ctx context.Context, in Input) []string {
+// lockPaths lists the mix.lock files of a member at its commit, skipping
+// deps/. (A --head build never takes a digest.)
+func lockPaths(ctx context.Context, in Input) ([]string, error) {
+	out, err := exec.CommandContext(ctx, "git", "-C", in.Path, "ls-tree", "-r", "--name-only", in.Commit).Output()
+	if err != nil {
+		return nil, err
+	}
 	var names []string
-	if in.Head {
-		filepath.WalkDir(in.Path, func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if d.IsDir() && (d.Name() == "deps" || d.Name() == "_build" || d.Name() == ".git" || d.Name() == "node_modules") {
-				return filepath.SkipDir
-			}
-			if !d.IsDir() && d.Name() == "mix.lock" {
-				if rel, err := filepath.Rel(in.Path, p); err == nil {
-					names = append(names, filepath.ToSlash(rel))
-				}
-			}
-			return nil
-		})
-	} else {
-		out, err := exec.CommandContext(ctx, "git", "-C", in.Path, "ls-tree", "-r", "--name-only", in.Commit).Output()
-		if err != nil {
-			return nil
-		}
-		for _, l := range strings.Split(string(out), "\n") {
-			if path.Base(l) == "mix.lock" && !strings.HasPrefix(l, "deps/") && !strings.Contains(l, "/deps/") {
-				names = append(names, l)
-			}
+	for _, l := range strings.Split(string(out), "\n") {
+		if path.Base(l) == "mix.lock" && !strings.HasPrefix(l, "deps/") && !strings.Contains(l, "/deps/") {
+			names = append(names, l)
 		}
 	}
 	sort.Strings(names)
-	return names
+	return names, nil
 }
 
 // hexDigestLines writes, for each pinned package of a member running the
 // Elixir extractor, whether the Hex cache holds its tarball, and its size.
 func hexDigestLines(ctx context.Context, w io.Writer, in Input) {
-	if !extractsElixir(in) || in.Path == "" {
+	if !extractsElixir(in) || in.Path == "" || in.Head {
 		return
 	}
 	cache := hexCacheDir()
-	for _, lock := range lockPaths(ctx, in) {
-		var text []byte
-		var err error
-		if in.Head {
-			text, err = os.ReadFile(filepath.Join(in.Path, filepath.FromSlash(lock)))
-		} else {
-			text, err = ReadAt(ctx, in.Path, in.Commit, lock)
-		}
+	locks, err := lockPaths(ctx, in)
+	if err != nil {
+		// Unreadable now: the digest says so, and changes once it's readable.
+		fmt.Fprintf(w, "  hex-locks unreadable\n")
+		return
+	}
+	for _, lock := range locks {
+		text, err := ReadAt(ctx, in.Path, in.Commit, lock)
 		if err != nil {
+			fmt.Fprintf(w, "  hex-lock %s unreadable\n", lock)
 			continue
 		}
 		for _, e := range parseHexLock(text) {

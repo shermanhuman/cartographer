@@ -16,6 +16,7 @@ mise exec -- elixir plugins/extract-elixir/extract.exs \
   --repo shop-app --root /path/to/snapshot --revision "$SHA" \
   [--source-roots lib,test] \
   [--schema-facts schema.json] [--ref-roots lib,priv/repo/migrations,scripts]
+  [--hex-cache DIR]
 ```
 
 | Argument | Default | Meaning |
@@ -26,6 +27,7 @@ mise exec -- elixir plugins/extract-elixir/extract.exs \
 | `--source-roots` | `lib` | Comma-separated directories (relative to root) whose `.ex`/`.exs` files are parsed. Paths are literal (no globbing); symlinks are never followed; dot-files and dot-directories are skipped. |
 | `--schema-facts` | none | A facts document from `extract-postgres-schema`. Enables `table_refs`. |
 | `--ref-roots` | `lib,priv/repo/migrations,scripts` | Directories scanned for table names (`.ex .exs .sql .sh`). |
+| `--hex-cache` | `$HEX_HOME/packages/hexpm`, else `~/.hex/packages/hexpm` | Hex's package cache: the evidence for library calls (see below). Read only. |
 
 Exit status 2 means bad arguments; nothing is written to stdout.
 
@@ -56,7 +58,7 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   | `dynamic` | `var.fun()`, `fun.()`, `apply/2,3` with non-literal parts | omitted; never resolved |
 
   Operators, special forms, string-interpolation `to_string`, field access
-  (`map.field`) and `quote` bodies are not calls. A pipe adds one to the
+  (`map.field`), `super(...)` and `quote` bodies are not calls. A pipe adds one to the
   arity.
 - `table_refs` (with `--schema-facts`): lines naming a captured table,
   plus Ecto `schema "table"` declarations. `#` and `--` comment lines are
@@ -236,6 +238,8 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   | `duplicate_module` / `duplicate_definition` | The same module or function id in a second place. |
   | `symlink_skipped` | A symlinked file or directory, noted once and never followed. |
   | `empty_root` | A source or ref root has no matching files (or does not exist). |
+  | `dependency_missing` | A locked package gives no evidence (not in the Hex cache, a checksum that differs from the lock, another repository, no outer checksum) or a lock can't be read; `file` is `name-version` (or `mix.lock`). |
+  | `stdlib_sources_missing` | The runtime has no bundled sources for an Elixir app (`ex_unit`, `elixir`): its `use` quotes give no evidence. |
   | `unknown_table` | An Ecto schema whose table is not in the schema facts. |
   | `duplicate_route` | A route with the method and path of an earlier one. |
   | `heex_parse_error` | A template the tokenizer rejected (the message has its line). |

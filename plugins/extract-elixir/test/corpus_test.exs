@@ -191,7 +191,10 @@ defmodule Cartographer.CorpusTest do
     # (map-coverage-2 decision 25), so it's exempt here.
     for c <- doc.calls, c.kind == "external", c.target[:module] not in ["Ecto.Query.API", "Ecto.Query.WindowAPI"] do
       [_, from_mod] = Regex.run(~r/^fx:(.*)\.[^.]+\/\d+$/, c.from)
-      in_scope = scope(mods, from_mod) |> Enum.uniq()
+      # The caller's scope, and the target module when it's the project's
+      # (a remote call to a function that module defines itself).
+      target = c.target[:module]
+      in_scope = (scope(mods, from_mod) ++ if(Map.has_key?(mods, target), do: [target], else: [])) |> Enum.uniq()
       a = c.target.arity
 
       clash =

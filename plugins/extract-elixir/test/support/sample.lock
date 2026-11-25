@@ -1,0 +1,6 @@
+%{
+  "ecto": {:hex, :ecto, "3.14.3", "4e7f7728c1432b18d8a48e4aeef879e8b908ecefd66afde17adb8cca0a46eff4", [:mix], [{:decimal, "~> 3.0", [hex: :decimal, repo: "hexpm", optional: false]}], "hexpm", "da2548bd3ced0f56c27d54255389bbbb8f110150ce15cffc95ec0cafa364465c"},
+  "oban_pro": {:hex, :oban_pro, "1.5.0", "aaaa", [:mix], [], "oban", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "old": {:hex, :old, "0.1.0", "cccc", [:mix], []},
+  "local": {:git, "https://example.com/local.git", "abc", []},
+}
