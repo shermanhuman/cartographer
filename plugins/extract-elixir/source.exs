@@ -124,6 +124,9 @@ defmodule Cartographer.ElixirSource do
       module: nil,
       aliases: %{},
       imports: %{},
+      # the modules `use`d in this lexical scope, directly or through an
+      # expanded helper (newest first): a bare call's library owners
+      uses: [],
       file: relative,
       repo: repo,
       caller: nil,
@@ -455,6 +458,10 @@ defmodule Cartographer.ElixirSource do
     entry = import_entry(List.first(opts) || [], prior)
     {%{env | imports: Map.put(env.imports, module, entry)}, acc}
   end
+
+  # A bitstring segment's type (`binary-size(32)`, `integer-little`) names
+  # modifiers, not calls: only its value is code.
+  defp walk({:"::", _, [value, _type]}, env, acc), do: walk(value, env, acc)
 
   defp walk({kind, meta, [head | body]} = clause, env, acc) when kind in @defs do
     {head, guards} =
@@ -1067,6 +1074,14 @@ defmodule Cartographer.ElixirSource do
   defp expand_use(module, kind, env, acc, depth) do
     acc = %{acc | uses: [%{module: env.module, use: module, kind: kind} | acc.uses]}
     h = Map.get(env.helpers, module)
+    env = %{env | uses: [module | Map.get(env, :uses, [])]}
+
+    # An ExUnit.CaseTemplate's `using` block runs inside `use ExUnit.Case`,
+    # which the block itself doesn't name.
+    env =
+      if h && Map.get(h, :template, false),
+        do: %{env | uses: ["ExUnit.Case" | env.uses]},
+        else: env
 
     forms =
       cond do
@@ -1141,6 +1156,23 @@ defmodule Cartographer.ElixirSource do
       case form do
         {:defmodule, _, _} ->
           helpers(form, module, acc)
+
+        # ExUnit.CaseTemplate: `using do quote do ... end end` is the
+        # template's __using__ (decision 20).
+        {:using, _, args} when is_list(args) ->
+          quoted =
+            case args do
+              [[{:do, q}]] -> q
+              [_opts, [{:do, q}]] -> q
+              _ -> nil
+            end
+
+          entry = Map.get(acc, module, %{funs: %{}, using: nil})
+
+          case quoted && quote_forms(quoted) do
+            nil -> acc
+            fs -> Map.put(acc, module, Map.merge(entry, %{using: fs, template: true}))
+          end
 
         {kind, _, [head, [{:do, quoted}]]} when kind in [:def, :defp, :defmacro] ->
           {fun, args} =
@@ -1412,6 +1444,7 @@ defmodule Cartographer.ElixirSource do
       line: line(meta),
       kind: kind,
       imports: env.imports,
+      uses: Map.get(env, :uses, []),
       file: env.file
     }
 

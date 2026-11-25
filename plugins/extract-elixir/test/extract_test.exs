@@ -145,8 +145,9 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{target: %{module: "Kernel"}, kind: "import"}] =
                calls_from(doc, "Shop.Orders.label/1", "to_string")
 
-      # Imports from dependencies cannot be attributed: no module.
-      assert [%{target: t, kind: "local_or_import"}] =
+      # A dependency's function is external. Its scope has two library
+      # owners (use Ecto.Schema, import Ecto.Query), so none is named.
+      assert [%{target: t, kind: "external"}] =
                calls_from(doc, "Shop.Orders.Order.recent_query/0", "from")
 
       refute Map.has_key?(t, :module)
@@ -934,4 +935,132 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{kind: "local_or_import"}] = from(doc, "Dyn.run/1", "length")
     end
   end
+
+  describe "external calls (library imports, use-generated functions)" do
+    test "a library import is external; one owner is named, several are not" do
+      doc =
+        extract(~S"""
+        defmodule One do
+          import Ecto.Query
+          def q, do: from(x in "t", select: x)
+        end
+        defmodule Two do
+          use Phoenix.LiveView
+          import Phoenix.HTML
+          def m(s), do: assign(s, :a, 1)
+        end
+        defmodule Bare do
+          def n(x), do: not_anywhere(x)
+        end
+        """)
+
+      assert [%{target: %{module: "Ecto.Query"}, kind: "external"}] = from(doc, "One.q/0", "from")
+      assert [%{target: t, kind: "external"}] = from(doc, "Two.m/1", "assign")
+      refute Map.has_key?(t, :module)
+      # No library in scope: still unresolved.
+      assert [%{kind: "local_or_import"}] = from(doc, "Bare.n/1", "not_anywhere")
+      assert doc.stats |> hd() |> Map.fetch!(:external) >= 2
+    end
+
+    test "bitstring type modifiers are not calls" do
+      doc =
+        extract(~S"""
+        defmodule Bits do
+          import Bitwise
+          def take(<<id::binary-size(32), rest::binary>>), do: {id, rest, byte_size(rest)}
+        end
+        """)
+
+      assert from(doc, "Bits.take/1", "size") == []
+      assert [%{kind: "import"}] = from(doc, "Bits.take/1", "byte_size")
+    end
+
+    test "a name a project module defines publicly is never external" do
+      doc =
+        extract(~S"""
+        defmodule Mine do
+          def count(x), do: x
+        end
+        defmodule Uses do
+          import Ecto.Query
+          def c(x), do: count(x)
+        end
+        """)
+
+      assert [%{kind: "local_or_import"}] = from(doc, "Uses.c/1", "count")
+    end
+
+    test "case templates expand: helpers resolve, library calls name no wrong owner" do
+      doc =
+        extract(~S"""
+        defmodule App.ConnCase do
+          use ExUnit.CaseTemplate
+          using do
+            quote do
+              import Plug.Conn
+              import App.ConnCase
+            end
+          end
+          def log_in_user(conn, user), do: {conn, user}
+        end
+        defmodule App.PageTest do
+          use App.ConnCase
+          def t(c), do: {log_in_user(c, 1), put_req_header(c, "a", "b")}
+        end
+        """)
+
+      assert [%{target: %{module: "App.ConnCase"}, kind: "import"}] =
+               from(doc, "App.PageTest.t/1", "log_in_user")
+
+      # Owners: Plug.Conn (imported) and ExUnit.Case (the template's own use).
+      assert [%{target: t, kind: "external"}] = from(doc, "App.PageTest.t/1", "put_req_header")
+      refute Map.has_key?(t, :module)
+    end
+
+    test "a project use the walk can't expand names no owner" do
+      doc =
+        extract(~S"""
+        defmodule App.Opaque do
+          defmacro __using__(opts), do: build(opts)
+          def build(_), do: nil
+        end
+        defmodule User do
+          use App.Opaque
+          import Ecto.Query
+          def q, do: from(x in "t", select: x)
+        end
+        """)
+
+      assert [%{target: t, kind: "external"}] = from(doc, "User.q/0", "from")
+      refute Map.has_key?(t, :module)
+    end
+
+    test "functions a library's use generated are external, keeping their target" do
+      # One module per file, as in a real repo: a dynamic_definition note
+      # covers the modules of its file.
+      doc =
+        ElixirFacts.build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/repo.ex" => "defmodule App.Repo do\n  use Ecto.Repo, otp_app: :app\nend\n",
+              "lib/plain.ex" => "defmodule App.Plain do\n  def here, do: 1\nend\n",
+              "lib/settings.ex" =>
+                "defmodule App.Settings do\n  use Ecto.Schema\n  for n <- [:a, :b] do\n    def unquote(n)(), do: 1\n  end\nend\n",
+              "lib/worker.ex" =>
+                "defmodule App.Worker do\n  use Oban.Worker\n  def go(x), do: {App.Repo.get_by(x, id: 1), App.Plain.gone(), App.Settings.a(), new(x)}\nend\n"
+            })
+        )
+
+      assert [%{target: %{module: "App.Repo", name: "get_by"}, kind: "external"}] =
+               from(doc, "App.Worker.go/1", "get_by")
+
+      assert [%{target: %{module: "App.Plain"}, kind: "remote"}] = from(doc, "App.Worker.go/1", "gone")
+      assert [%{target: %{module: "App.Settings"}, kind: "remote"}] = from(doc, "App.Worker.go/1", "a")
+      # The same generated function called bare inside the using module.
+      assert [%{target: %{module: "Oban.Worker"}, kind: "external"}] =
+               from(doc, "App.Worker.go/1", "new")
+    end
+  end
+
 end
