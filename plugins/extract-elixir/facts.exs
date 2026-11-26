@@ -9,7 +9,7 @@ defmodule Cartographer.ElixirFacts do
 
   alias Cartographer.{ElixirDeps, ElixirHTTP, ElixirSource}
 
-  @version "0.5.0"
+  @version "0.6.0"
   @public ~w(def defmacro defdelegate defguard)
   # defguard defines a macro; defdelegate a function.
   @macro_kinds ~w(defmacro defmacrop defguard defguardp)
