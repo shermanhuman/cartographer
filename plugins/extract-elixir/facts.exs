@@ -398,6 +398,10 @@ defmodule Cartographer.ElixirFacts do
               {module, kind} = classify(c, defined)
               external(c, module, kind, ctx)
 
+            # The enclosing record was cut: no verdict (X5-M9).
+            :unknown ->
+              {nil, c.kind, false}
+
             owner ->
               {owner, "external", true}
           end
@@ -537,15 +541,24 @@ defmodule Cartographer.ElixirFacts do
     depth = length(enclosing)
     api = query_api(ctx, lock)
 
-    with owner when owner != nil <- api_owner(api, c.name, c.arity),
-         {macro, j} <- Enum.with_index(enclosing) |> Enum.find(fn {e, _} -> query_macro?(e, c, ctx, lock) end),
-         true <- expression_arg?(macro),
-         true <- Enum.all?(Enum.take(enclosing, j), &api_link?(&1, api)),
-         pin = Map.get(c, :pinned),
-         false <- is_integer(pin) and pin >= depth - j do
-      owner
-    else
-      _ -> nil
+    case api_owner(api, c.name, c.arity) do
+      nil ->
+        nil
+
+      owner ->
+        case Enum.with_index(enclosing) |> Enum.find(fn {e, _} -> query_macro?(e, c, ctx, lock) end) do
+          # No query macro in view. If the record was cut, it may sit past
+          # the cap: no verdict, never a project or library label (X5-M9).
+          nil ->
+            if Map.get(c, :enclosing_cut, false), do: :unknown
+
+          {macro, j} ->
+            pin = Map.get(c, :pinned)
+
+            if expression_arg?(macro) and Enum.all?(Enum.take(enclosing, j), &api_link?(&1, api)) and
+                 not (is_integer(pin) and pin >= depth - j),
+               do: owner
+        end
     end
   end
 

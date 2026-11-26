@@ -1658,6 +1658,10 @@ defmodule Cartographer.ElixirExtractTest do
           def piped_exists(q, o), do: where(q, [u], count(o) |> exists())
           def piped_any(q, o), do: where(q, [u], u.x > (count(o) |> any()))
           def piped_fragment(q, o), do: where(q, [u], count(o) |> fragment(u.x))
+          def piped_link(q), do: where(q, [u], count(u.id) |> coalesce(0))
+          def piped_dynamic, do: fragment("now()") |> dynamic()
+          def deep(q), do: where(q, [u], u.a |> coalesce(1) |> coalesce(2) |> coalesce(3) |> coalesce(4) |> coalesce(5) |> coalesce(6) |> coalesce(7) |> coalesce(8) |> coalesce(9))
+          def coalesce(a, b), do: {a, b}
         end
         """)
 
@@ -1670,6 +1674,12 @@ defmodule Cartographer.ElixirExtractTest do
       # join's on: is a query expression; fragment's later arguments too.
       assert {"external", "Ecto.Query.API"} in for(c <- from(doc, "T.join_kind/2", "count"), do: {c.kind, c.target[:module]})
       assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "T.fragment_later/1", "count")
+      # A pipe continues a chain too (X5-m9).
+      assert {"external", "Ecto.Query.API"} in for(c <- from(doc, "T.piped_link/1", "count"), do: {c.kind, c.target[:module]})
+      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "T.piped_dynamic/0", "fragment")
+      # Past the depth cap: no verdict, never the project's coalesce/2 (X5-M9).
+      refute Enum.any?(from(doc, "T.deep/1", "coalesce"), &(&1.kind == "local"))
+
       # Matched by name and arity: coalesce/3 is the project's macro.
       assert [%{kind: "local"}] = from(doc, "T.arity/1", "coalesce")
     end

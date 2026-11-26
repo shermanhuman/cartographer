@@ -1150,7 +1150,13 @@ defmodule Cartographer.ElixirSource do
 
   defp enclose(env, module, fun, arity, index) do
     outer = Map.get(env, :enclosing, [])
-    Map.put(env, :enclosing, [%{module: module, name: str(fun), arity: arity, arg: index} | Enum.take(outer, @enclosing_depth - 1)])
+    # Whether the record was ever cut: then the query rule can't see every
+    # enclosing call, and gives no verdict for vocabulary names (X5-M9).
+    cut = Map.get(env, :enclosing_cut, false) or length(outer) >= @enclosing_depth
+
+    env
+    |> Map.put(:enclosing, [%{module: module, name: str(fun), arity: arity, arg: index} | Enum.take(outer, @enclosing_depth - 1)])
+    |> Map.put(:enclosing_cut, cut)
   end
 
   # Module aliases among a `use`'s options (`adapter: Ecto.Adapters.Postgres`):
@@ -1591,6 +1597,7 @@ defmodule Cartographer.ElixirSource do
       imports: env.imports,
       uses: Map.get(env, :uses, []),
       enclosing: Map.get(env, :enclosing, []),
+      enclosing_cut: Map.get(env, :enclosing_cut, false),
       pinned: Map.get(env, :pinned),
       file: env.file
     }
