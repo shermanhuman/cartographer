@@ -20,6 +20,9 @@ defmodule Cartographer.ElixirSource do
 
   @defs [:def, :defp, :defmacro, :defmacrop, :defdelegate, :defguard, :defguardp]
   @special [
+    # `super(...)` at any arity calls the overridden definition, not a
+    # function named super.
+    :super,
     :__block__,
     :__aliases__,
     :{},
@@ -391,7 +394,7 @@ defmodule Cartographer.ElixirSource do
         _ -> nil
       end
 
-    expand_use(name(mod, env), kind, env, acc, 0)
+    expand_use(name(mod, env), kind, env, acc, 0, option_aliases(rest, env))
   end
 
   defp walk({:embed_templates, meta, [pattern | rest]}, %{module: m, caller: nil} = env, acc)
@@ -586,7 +589,23 @@ defmodule Cartographer.ElixirSource do
   defp walk({:__pipe_arg__, _, nil}, env, acc), do: {env, acc}
 
   defp walk({:|>, _, [left, right]}, env, acc) do
-    {_, acc} = walk(left, env, acc)
+    # The left side is inside the call it's piped into, as Elixir expands
+    # it: the query rule reads the enclosing calls.
+    left_env =
+      case right do
+        {{:., _, [mod, fun]}, _, args} when ident?(fun) and is_list(args) ->
+          enclose(env, if(literal_module?(mod), do: name(mod, env), else: :dynamic), fun, length(args) + 1)
+
+        {fun, _, args} when ident?(fun) and is_list(args) ->
+          if fun in @special or {fun, length(args) + 1} in @special_forms or (is_atom(fun) and Macro.operator?(fun, length(args) + 1)),
+            do: env,
+            else: enclose(env, nil, fun, length(args) + 1)
+
+        _ ->
+          env
+      end
+
+    {_, acc} = walk(left, left_env, acc)
     # The piped value stands first in the call's arguments as a placeholder
     # (walked as a variable, so the left side's calls aren't recorded twice)
     # that carries the left side for readers of the arguments: a literal
@@ -640,9 +659,12 @@ defmodule Cartographer.ElixirSource do
       end
 
     {_, acc} = walk(mod, env, acc)
-    {_, acc} = walk(args, env, acc)
+    # A call on a value (`repo.update(...)`) is no module's macro.
+    module = if literal, do: name(mod, env), else: :dynamic
+    {_, acc} = walk_args(args, env, acc, module, fun)
     {env, acc}
   end
+
 
   defp walk({{:., _, [fun_expr]}, meta, args}, env, acc) when is_list(args) do
     acc = call(acc, env, nil, :anonymous, length(args), meta, "dynamic")
@@ -660,13 +682,13 @@ defmodule Cartographer.ElixirSource do
   defp walk({fun, meta, args}, env, acc) when ident?(fun) and is_list(args) do
     arity = length(args)
 
-    acc =
-      if env.caller && fun not in @special && {fun, arity} not in @special_forms &&
-           not (is_atom(fun) and Macro.operator?(fun, arity)),
-         do: call(acc, env, nil, fun, arity, meta, "local_or_import", args),
-         else: acc
+    is_call =
+      env.caller && fun not in @special && {fun, arity} not in @special_forms &&
+        not (is_atom(fun) and Macro.operator?(fun, arity))
 
-    {_, acc} = walk(args, env, acc)
+    acc = if is_call, do: call(acc, env, nil, fun, arity, meta, "local_or_import", args), else: acc
+
+    {_, acc} = if is_call, do: walk_args(args, env, acc, nil, fun), else: walk(args, env, acc)
     {env, acc}
   end
 
@@ -1100,12 +1122,43 @@ defmodule Cartographer.ElixirSource do
     found |> Enum.reverse() |> Enum.uniq()
   end
 
+  # The calls a call sits inside, nearest first, up to @enclosing_depth: the
+  # query rule (facts.exs query_dsl/2) gives no verdict to a query-function
+  # name inside an Ecto.Query macro, or anywhere past the cap.
+  @enclosing_depth 8
+
+  defp walk_args(args, env, acc, module, fun),
+    do: walk(args, enclose(env, module, fun, length(args)), acc)
+
+  defp enclose(env, module, fun, arity) do
+    outer = Map.get(env, :enclosing, [])
+    # Whether the record was ever cut: past the cap, the query rule can't
+    # see every enclosing call.
+    cut = Map.get(env, :enclosing_cut, false) or length(outer) >= @enclosing_depth
+
+    env
+    |> Map.put(:enclosing, [%{module: module, name: str(fun), arity: arity} | Enum.take(outer, @enclosing_depth - 1)])
+    |> Map.put(:enclosing_cut, cut)
+  end
+
+  # Module aliases among a `use`'s options (`adapter: Ecto.Adapters.Postgres`):
+  # the library reader follows them (map-coverage-2 decision 16).
+  defp option_aliases(opts, env) do
+    {_, found} =
+      Macro.prewalk(opts, [], fn
+        {:__aliases__, _, _} = a, acc -> {a, [name(a, env) | acc]}
+        n, acc -> {n, acc}
+      end)
+
+    Enum.reverse(found)
+  end
+
   # `use` expansion: the forms of an in-repo module's __using__ quote (or,
   # for `use X, :kind`, of its `kind/0` quote), applied to this module's
   # scope. `unquote(helper())` follows another quote of the same module;
   # a nested `use` follows up to three levels.
-  defp expand_use(module, kind, env, acc, depth) do
-    acc = %{acc | uses: [%{module: env.module, use: module, kind: kind} | acc.uses]}
+  defp expand_use(module, kind, env, acc, depth, opts) do
+    acc = %{acc | uses: [%{module: env.module, use: module, kind: kind, opts: opts} | acc.uses]}
     h = Map.get(env.helpers, module)
     env = %{env | uses: [module | Map.get(env, :uses, [])]}
 
@@ -1145,7 +1198,7 @@ defmodule Cartographer.ElixirSource do
         _ -> nil
       end
 
-    expand_use(name(mod, env), kind, env, acc, depth + 1)
+    expand_use(name(mod, env), kind, env, acc, depth + 1, option_aliases(rest, env))
   end
 
   defp expand_form({:unquote, _, [{fun, _, args}]}, module, h, env, acc, depth)
@@ -1525,6 +1578,8 @@ defmodule Cartographer.ElixirSource do
       kind: kind,
       imports: env.imports,
       uses: Map.get(env, :uses, []),
+      enclosing: Map.get(env, :enclosing, []),
+      enclosing_cut: Map.get(env, :enclosing_cut, false),
       file: env.file
     }
 

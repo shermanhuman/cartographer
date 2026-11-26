@@ -14,7 +14,10 @@ Not traced: dynamic dispatch in Elixir (`apply/3` with variables,
 `var.fun()`), behaviour callbacks invoked by a framework, macro-generated
 functions (including handlers injected by `__using__` and `attach_hook`),
 calls into dependencies and the functions a library's `use` generates
-(`Repo.all/1`; counted as external), requests to outside services (counted
+(`Repo.all/1`; counted as external only with evidence: the locked Hex
+packages' verified source from the Hex cache, or the runtime's exports,
+and unresolved otherwise; a `dependency_missing` note in `status` names a
+package the cache lacks), requests to outside services (counted
 as external on the `http` row), requests whose path is built across
 functions or piped, JavaScript calls on untyped values (`this.el`), and
 LiveView event names built at runtime (counted as dynamic, never guessed).

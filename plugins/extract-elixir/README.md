@@ -16,6 +16,7 @@ mise exec -- elixir plugins/extract-elixir/extract.exs \
   --repo shop-app --root /path/to/snapshot --revision "$SHA" \
   [--source-roots lib,test] \
   [--schema-facts schema.json] [--ref-roots lib,priv/repo/migrations,scripts]
+  [--hex-cache DIR]
 ```
 
 | Argument | Default | Meaning |
@@ -26,6 +27,7 @@ mise exec -- elixir plugins/extract-elixir/extract.exs \
 | `--source-roots` | `lib` | Comma-separated directories (relative to root) whose `.ex`/`.exs` files are parsed. Paths are literal (no globbing); symlinks are never followed; dot-files and dot-directories are skipped. |
 | `--schema-facts` | none | A facts document from `extract-postgres-schema`. Enables `table_refs`. |
 | `--ref-roots` | `lib,priv/repo/migrations,scripts` | Directories scanned for table names (`.ex .exs .sql .sh`). |
+| `--hex-cache` | `$HEX_HOME/packages/hexpm`, else `~/.hex/packages/hexpm` | Hex's package cache: the evidence for library calls (see below). Read only. |
 
 Exit status 2 means bad arguments; nothing is written to stdout.
 
@@ -56,7 +58,7 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   | `dynamic` | `var.fun()`, `fun.()`, `apply/2,3` with non-literal parts | omitted; never resolved |
 
   Operators, special forms, string-interpolation `to_string`, field access
-  (`map.field`) and `quote` bodies are not calls. A pipe adds one to the
+  (`map.field`), `super(...)` and `quote` bodies are not calls. A pipe adds one to the
   arity.
 - `table_refs` (with `--schema-facts`): lines naming a captured table,
   plus Ecto `schema "table"` declarations. `#` and `--` comment lines are
@@ -149,16 +151,54 @@ Exit status 2 means bad arguments; nothing is written to stdout.
 - `hook_mounts`: each `phx-hook` (a colocated `.Name` as `<Module>.Name`), with
   the `handle_event` functions of the LiveViews that render it as
   `receivers`. The core links a JavaScript hook's `pushEvent` through these.
-- Library calls are `external` (kind `external`). An unqualified call is
-  external when no project module defines that name and arity publicly,
-  its own module doesn't define it, and a library is imported (admitting
-  the name under `only:`/`except:`) or `use`d in scope. The target names
-  the library only when it is the one candidate and the scope has no
-  project `use` the walk can't expand and no project import that passes a
-  library on. A call to a project module that `use`s a library and doesn't
-  define the function (`Repo.all/1` from `use Ecto.Repo`) is external and
-  keeps its module; so are its captures and `apply/3`, keeping their
-  kinds. Component calls keep their kind and count as external.
+- **Evidence for library calls** (0.6.0). A call counts as external only
+  when the evidence defines it and the call reaches it; otherwise it is
+  unresolved, never a guess. The evidence:
+  - the Hex packages the nearest `mix.lock` pins, read from the Hex cache
+    (`--hex-cache`, default `$HEX_HOME/packages/hexpm` or
+    `~/.hex/packages/hexpm`). A tarball counts only when its SHA-256
+    equals the lock's outer checksum; nothing is fetched, installed or
+    evaluated, and the lock is parsed as data. A missing or mismatched
+    package gives a `dependency_missing` note naming it (`file` is
+    `name-version`). A build with no Hex cache (a CI runner, a fresh
+    machine) has no dependency evidence: those calls are unresolved, with a
+    note per package. Running `mix deps.get` once in any checkout fills
+    the cache, and cartographer then rebuilds the map: the cache's state is
+    part of its inputs digest;
+  - the running Elixir and OTP: each module on the code path and its
+    exports, and Elixir's own `use` quotes from its bundled sources (a
+    runtime without them gives a `stdlib_sources_missing` note);
+  - a library module's exports: its definitions (under a module-level
+    `if` too), a top-level `for` over literal atoms, `defexception`,
+    `defprotocol`, and what its own top-level `use`s generate;
+  - what a library `use` applies (a superset reader): every definition in
+    any quote of each library module the `use` reaches through `use`,
+    `import`, `@before_compile` and module aliases passed as options
+    (`adapter: Ecto.Adapters.Postgres`), and the exports of the modules
+    those quotes import. A superset is sound here because the project's
+    own definitions are checked first.
+- **The rules**, in order:
+  1. query-function names: a call named like an `Ecto.Query.API` or
+     `WindowAPI` function (any arity) gets no verdict, neither Ecto's nor
+     the project's, when it sits anywhere in the arguments of a proven
+     `Ecto.Query` macro, or more than 8 calls deep anywhere (the walker
+     records 8 enclosing calls, so past that a query macro may be out of
+     sight; such a call named `count`, `max` or `is_nil` loses its label
+     there even outside a query). Ecto decides per argument whether such a
+     call is query syntax or code, which can't be told without running its
+     macros;
+  2. the project's own definitions: the caller's module, a project module
+     it imports, and what a project `use` put there;
+  3. a bare call is external when an admitting import of a module that
+     exports it, a project module a library `use` generated it into, or a
+     library `use` in scope defines it. One candidate names the owner,
+     several none, none leaves it unresolved. A hole in scope (functions
+     the inventory can't list, an unexpandable project `use`, an
+     unreadable import, a library with no evidence) leaves it unresolved;
+  4. a remote call (or capture, or `apply/3`) is external when the
+     module's evidence holds the function, including a function a library
+     `use` generated into a project module (`Repo.all/1`, keeping its
+     module). Component calls keep their kind.
 - What a project `use` defines: the walk that applies a `use` (through
   Phoenix's `use AppWeb, :kind`, `unquote(helpers())` and nested uses,
   three levels deep) records each `def`, `defp`, `defmacro` and
@@ -170,15 +210,13 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   named after a library. ExUnit.CaseTemplate `using` blocks are expanded
   the same way.
 - Requests: a request's base comes from a `base_url:` in its own function:
-  a string, a module attribute, the literals of a local function it calls
-  (`base_url(opts)`), or a variable whose every possible value (each
-  branch of a `case`/`cond`/`if`, a tuple position, `||` alternatives,
-  `<>` of literals) is a literal URL, bound only by `=` at the top of the
-  function. It sets `base` to `scheme://host` and joins the URL's path;
+  a string, a module attribute, or the literals of a local function it
+  calls (`base_url(opts)`). A variable gives no base (0.6.0). It sets
+  `base` to `scheme://host` and joins the URL's path;
   with several hosts the first in source order is used and no path joined.
   A function with no `base_url:` takes its module's host when every
   `base_url:` in the module is a literal naming one host. An interpolated
-  string, a loopback URL or a variable with a computed value sets none
+  string, a loopback URL or a variable sets none
   (an expression written in `base_url:` itself, such as
   `Application.get_env(:app, :api, "https://…")`, takes the literal
   default inside it), and a base joined
@@ -186,8 +224,7 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   keeps its module as its base.
 - `stats`: one entry, language `elixir`. `call_sites` counts `calls`;
   `in_repo` those whose target is a function in this document, `external`
-  those naming a module outside it (Kernel and Erlang included) and the
-  library calls above, `unresolved` the rest (dynamic calls, unattributed
+  the calls the evidence above proves, `unresolved` the rest (dynamic calls, unattributed
   unqualified calls, a function missing from a module that is here).
   Coverage shows dynamic calls (`kind` `dynamic`) on their own and leaves
   them out of unresolved. `not_extracted` counts the
@@ -207,6 +244,8 @@ Exit status 2 means bad arguments; nothing is written to stdout.
   | `duplicate_module` / `duplicate_definition` | The same module or function id in a second place. |
   | `symlink_skipped` | A symlinked file or directory, noted once and never followed. |
   | `empty_root` | A source or ref root has no matching files (or does not exist). |
+  | `dependency_missing` | A locked package gives no evidence (not in the Hex cache, a checksum that differs from the lock, another repository, no outer checksum) or a lock can't be read; `file` is `name-version` (or `mix.lock`). |
+  | `stdlib_sources_missing` | The runtime has no bundled sources for an Elixir app (`ex_unit`, `elixir`): its `use` quotes give no evidence. |
   | `unknown_table` | An Ecto schema whose table is not in the schema facts. |
   | `duplicate_route` | A route with the method and path of an earlier one. |
   | `heex_parse_error` | A template the tokenizer rejected (the message has its line). |

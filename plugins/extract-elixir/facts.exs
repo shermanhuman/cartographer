@@ -7,9 +7,9 @@ defmodule Cartographer.ElixirFacts do
   See docs/facts-format.md.
   """
 
-  alias Cartographer.{ElixirHTTP, ElixirSource}
+  alias Cartographer.{ElixirDeps, ElixirHTTP, ElixirSource}
 
-  @version "0.5.0"
+  @version "0.6.0"
   @public ~w(def defmacro defdelegate defguard)
   # defguard defines a macro; defdelegate a function.
   @macro_kinds ~w(defmacro defmacrop defguard defguardp)
@@ -79,14 +79,17 @@ defmodule Cartographer.ElixirFacts do
 
     {modules, module_notes} = modules(parsed.modules, repo)
     {functions, clauses, function_notes} = functions(parsed.clauses, repo)
-    {calls, classified, defined, marked} = calls(parsed, functions, helpers)
+    # Evidence for library calls (map-coverage-2): nil hex_cache reads no
+    # dependency source, only the runtime.
+    ev = ElixirDeps.load(root, sources ++ heex_files, opts[:hex_cache])
+    {calls, classified, defined, marked} = calls(parsed, functions, helpers, ev)
     {routes, route_notes} = routes(parsed.routes, functions, repo)
     {http_refs, http_skipped} = ElixirHTTP.refs(parsed.clauses, classified, functions, parsed.attrs)
     browser = events(parsed, classified, functions, repo)
 
     stats =
       marked
-      |> call_stats(defined, MapSet.new(modules, & &1.name))
+      |> call_stats(defined)
       |> Map.merge(%{
         language: "elixir",
         dispatch: 0,
@@ -107,7 +110,7 @@ defmodule Cartographer.ElixirFacts do
       |> Enum.map(&file_entry/1)
 
     notes =
-      (parsed.notes ++ skipped ++ module_notes ++ function_notes ++ ref_notes ++ route_notes)
+      (parsed.notes ++ skipped ++ module_notes ++ function_notes ++ ref_notes ++ route_notes ++ ev.notes)
       |> Enum.uniq()
       |> Enum.sort_by(&{&1[:file] || "", &1.kind, &1.message})
 
@@ -374,7 +377,7 @@ defmodule Cartographer.ElixirFacts do
   # Returns the output calls (without `ext`), the raw calls classified with
   # `:target_module`, `:kind` and `:external` (for the HTTP analysis), the
   # definitions index, and the output calls with `ext` (for stats).
-  defp calls(parsed, functions, helpers) do
+  defp calls(parsed, functions, helpers, ev) do
     raw = parsed.calls
 
     defined =
@@ -385,12 +388,21 @@ defmodule Cartographer.ElixirFacts do
         Map.update(acc, {module, f.name}, [entry], &[entry | &1])
       end)
 
-    ctx = external_context(parsed, defined, helpers)
+    ctx = external_context(parsed, defined, helpers, ev)
 
     classified =
       Enum.map(raw, fn c ->
-        {module, kind} = classify(c, defined)
-        {module, kind, ext} = external(c, module, kind, ctx)
+        {module, kind, ext} =
+          case query_dsl(c, ctx) do
+            nil ->
+              {module, kind} = classify(c, defined)
+              external(c, module, kind, ctx)
+
+            # Inside an Ecto query: no verdict.
+            :unknown ->
+              {nil, c.kind, false}
+          end
+
         %{c | kind: kind} |> Map.put(:target_module, module) |> Map.put(:external, ext)
       end)
 
@@ -428,7 +440,7 @@ defmodule Cartographer.ElixirFacts do
   end
 
   # What the external rules need, worked out once per repo.
-  defp external_context(parsed, defined, helpers) do
+  defp external_context(parsed, defined, helpers, ev) do
     project = MapSet.new(parsed.modules, & &1.name)
 
     # Functions a project `use` puts in the using module, as the
@@ -448,14 +460,6 @@ defmodule Cartographer.ElixirFacts do
         Map.update(acc, {d.module, d.name}, [entry], &[entry | &1])
       end)
 
-    # Every {name, arity} some project module defines publicly (decision 15).
-    public =
-      Enum.reduce(defined, MapSet.new(), fn {{_module, name}, entries}, acc ->
-        Enum.reduce(entries, acc, fn {min, max, pub, _}, acc ->
-          if pub, do: Enum.reduce(min..max, acc, &MapSet.put(&2, {name, &1})), else: acc
-        end)
-      end)
-
     # A project helper the walk could expand (its __using__, a CaseTemplate
     # `using` block, or Phoenix's dispatch).
     expandable =
@@ -468,6 +472,13 @@ defmodule Cartographer.ElixirFacts do
     uses =
       Enum.group_by(parsed.uses, & &1.module, & &1.use)
       |> Map.new(fn {m, us} -> {m, Enum.uniq(us)} end)
+
+    # The module aliases each `use` passed (`adapter: ...`), by module and
+    # used library.
+    use_opts =
+      Enum.reduce(parsed.uses, %{}, fn u, acc ->
+        Map.update(acc, {u.module, u.use}, Map.get(u, :opts, []), &Enum.uniq(&1 ++ Map.get(u, :opts, [])))
+      end)
 
     # Modules defined in a file with a dynamic_definition note keep their
     # missing functions unresolved (decision 21, P1-12).
@@ -484,95 +495,190 @@ defmodule Cartographer.ElixirFacts do
 
     %{
       project: project,
-      public: public,
       expandable: expandable,
       uses: uses,
+      use_opts: use_opts,
       dynamic: dynamic,
-      defined: defined
+      defined: defined,
+      ev: ev
     }
   end
 
-  # The library owners of a call's scope: its non-project imports and
-  # non-project `use`s (decision 14). `opaque` when the scope uses a project
-  # module the walk couldn't expand: then no owner is named (decision 21).
-  defp owners(c, ctx) do
-    fa = {c.name, c.arity}
+  # --- external, on evidence (map-coverage-2) -------------------------------
 
-    # Only imports that admit the name (`only:`/`except:`, H1-m1); an entry
-    # the walk couldn't read admits everything.
-    imported =
-      for {m, entry} <- c.imports,
-          m != "Kernel",
-          not is_map(entry) or ElixirSource.imports?(entry, :functions, fa) or
-            ElixirSource.imports?(entry, :macros, fa),
-          do: m
+  # The modules whose function names Ecto treats as query syntax.
+  @query_api ["Ecto.Query.API", "Ecto.Query.WindowAPI"]
 
-    used = Map.get(c, :uses, [])
+  # Inside an Ecto query (board item 285, option a): a call named like an
+  # Ecto.Query.API or WindowAPI function, anywhere in the arguments of a
+  # proven Ecto.Query macro (or where the walker's record of enclosing
+  # calls was cut, so a macro may sit past it), gets no verdict: never
+  # Ecto's, never the project's. Ecto decides per argument whether such a
+  # call is query syntax or code, and that can't be told without running
+  # its macros, so the map says unknown.
+  defp query_dsl(%{module: nil, kind: "local_or_import"} = c, ctx) do
+    lock = ElixirDeps.lock_of(ctx.ev, c.file)
+    enclosing = Map.get(c, :enclosing, [])
 
-    set =
-      (imported ++ used)
-      |> Enum.reject(&MapSet.member?(ctx.project, &1))
-      |> Enum.uniq()
-      |> Enum.sort()
-
-    # A project import whose module uses a library may pass that library's
-    # functions on (`import AppWeb.Gettext`): no owner is named then either.
-    opaque =
-      Enum.any?(used, &(MapSet.member?(ctx.project, &1) and not MapSet.member?(ctx.expandable, &1))) or
-        Enum.any?(imported, fn m ->
-          MapSet.member?(ctx.project, m) and
-            Enum.any?(Map.get(ctx.uses, m, []), &(not MapSet.member?(ctx.project, &1)))
-        end)
-
-    {set, opaque}
+    if api_name?(ctx, lock, c.name) and
+         (Map.get(c, :enclosing_cut, false) or Enum.any?(enclosing, &query_macro?(&1, c, ctx, lock))),
+       do: :unknown
   end
 
-  # Decisions 2, 4, 14, 15, 21: a call nothing in the project defines goes
-  # to a library when its scope imports or uses one. Returns the target
-  # module, the kind and whether it's external.
+  defp query_dsl(_c, _ctx), do: nil
+
+  defp api_name?(ctx, lock, name) do
+    Enum.any?(@query_api, fn mod ->
+      case ElixirDeps.exports(ctx.ev, lock, mod) do
+        nil -> false
+        ex -> Enum.any?(ex, &(elem(&1, 0) == name))
+      end
+    end)
+  end
+
+  defp query_macro?(%{module: m, name: n, arity: a}, c, ctx, lock) do
+    module =
+      cond do
+        # A call on a value (`repo.update(...)`) has module :dynamic.
+        m != nil -> m
+        admits?(Map.get(c.imports, "Ecto.Query"), {n, a}) -> "Ecto.Query"
+        true -> nil
+      end
+
+    module == "Ecto.Query" and ElixirDeps.macro?(ctx.ev, lock, "Ecto.Query", n, a)
+  end
+
+  defp admits?(entry, fa) when is_map(entry),
+    do: ElixirSource.imports?(entry, :functions, fa) or ElixirSource.imports?(entry, :macros, fa)
+
+  defp admits?(_, _), do: false
+
+  # Decisions 1, 18, 19, 22 and 27. Returns the target module, the kind and
+  # whether the call is external. A call is external only when the evidence
+  # (verified dependency source, the runtime, the quotes a library `use`
+  # applies) defines it and the call reaches it; otherwise it stays as
+  # classified (a project edge, or unresolved).
   defp external(c, module, kind, ctx) do
-    fa = {c.name, c.arity}
+    lock = ElixirDeps.lock_of(ctx.ev, c.file)
+    project? = &MapSet.member?(ctx.project, &1)
 
     cond do
-      # A bare call (or capture) left unresolved: the scope's library owners.
-      # Unless the caller, or a project module it imports, has functions
-      # the inventory can't list (H1-M1): then the call may be theirs.
-      module == nil and kind in ["local_or_import", "capture"] and
-        not MapSet.member?(ctx.public, fa) and not reaches_dynamic?(c, ctx) and
-          not defined?(ctx.defined, c.caller_module, c.name, c.arity, false) ->
-        case owners(c, ctx) do
-          {[], _} -> {nil, kind, false}
-          {[owner], false} -> {owner, external_kind(kind), true}
-          {_, _} -> {nil, external_kind(kind), true}
+      # A bare call (or capture) no project definition took.
+      module == nil and kind in ["local_or_import", "capture"] ->
+        if project_defines?(c, ctx) or hole?(c, ctx, lock) do
+          {nil, kind, false}
+        else
+          case candidates(c, ctx, lock) do
+            [] -> {nil, kind, false}
+            [owner] -> {owner, external_kind(kind), true}
+            _ -> {nil, external_kind(kind), true}
+          end
         end
 
-      # Mod.f/a to a project module that doesn't define it but uses a
-      # library: a function that library generated (`use Ecto.Repo`).
-      # Captures and apply/3 of such a function too, keeping their kinds
-      # (H1-m2).
-      module != nil and kind in ["remote", "capture", "apply"] and MapSet.member?(ctx.project, module) and
-          not MapSet.member?(ctx.dynamic, module) ->
-        libs =
-          ctx.uses
-          |> Map.get(module, [])
-          |> Enum.reject(&MapSet.member?(ctx.project, &1))
+      # Mod.f/a, a capture or apply/3 to a project module that doesn't
+      # define it: a function a library `use` applied to that module
+      # generated (`Repo.all/1`), when the library's quotes define it.
+      module != nil and kind in ["remote", "capture", "apply"] and project?.(module) ->
+        cond do
+          defined?(ctx.defined, module, c.name, c.arity, false) -> {module, kind, false}
+          MapSet.member?(ctx.dynamic, module) -> {module, kind, false}
+          generated?(module, c, ctx, lock) -> {module, if(kind == "remote", do: "external", else: kind), true}
+          true -> {module, kind, false}
+        end
 
-        if libs != [] and not defined?(ctx.defined, module, c.name, c.arity, false),
-          do: {module, if(kind == "remote", do: "external", else: kind), true},
-          else: {module, kind, false}
-
-      # Already a library module (Enum.map/2): external, as before.
-      module != nil and not MapSet.member?(ctx.project, module) ->
-        {module, kind, true}
+      # A call to a module outside the project (Enum.map/2, :lists,
+      # Kernel's imports, a dependency's module): external when its exports
+      # hold the function.
+      module != nil and not project?.(module) ->
+        {module, kind, ElixirDeps.exported?(ElixirDeps.exports(ctx.ev, lock, module), c.name, c.arity)}
 
       true ->
         {module, kind, false}
     end
   end
 
-  defp reaches_dynamic?(c, ctx) do
+  # The library modules a bare call can reach that define it: imports in
+  # scope that admit the name and whose module exports it, and what the
+  # library `use`s in scope apply (definitions in their quotes, exports of
+  # the modules their quotes import). Sorted and unique.
+  defp candidates(c, ctx, lock) do
+    fa = {c.name, c.arity}
+    project? = &MapSet.member?(ctx.project, &1)
+
+    imported =
+      for {m, entry} <- c.imports,
+          m != "Kernel",
+          admits?(entry, fa),
+          if(project?.(m),
+            # A project module a library `use` generated the function into
+            # (`import AppWeb.Gettext` from `use Gettext.Backend`).
+            do: generated?(m, c, ctx, lock),
+            else: ElixirDeps.exported?(ElixirDeps.exports(ctx.ev, lock, m), c.name, c.arity)
+          ),
+          do: m
+
+    used =
+      for u <- Enum.uniq(Map.get(c, :uses, [])), not project?.(u), reduce: [] do
+        acc ->
+          r = ElixirDeps.reach(ctx.ev, lock, u, Map.get(ctx.use_opts, {c.caller_module, u}, []))
+
+          via_imports =
+            for m <- r.imports,
+                not project?.(m),
+                ElixirDeps.exported?(ElixirDeps.exports(ctx.ev, lock, m), c.name, c.arity),
+                do: m
+
+          if(ElixirDeps.exported?(r.defs, c.name, c.arity), do: [u], else: []) ++ via_imports ++ acc
+      end
+
+    Enum.uniq(Enum.sort(imported ++ used))
+  end
+
+  # Whether a library `use` applied to a project module generates the
+  # function (`use Ecto.Repo` -> `Repo.all/1`).
+  defp generated?(module, c, ctx, lock) do
+    ctx.uses
+    |> Map.get(module, [])
+    |> Enum.reject(&MapSet.member?(ctx.project, &1))
+    |> Enum.any?(fn u ->
+      r = ElixirDeps.reach(ctx.ev, lock, u, Map.get(ctx.use_opts, {module, u}, []))
+      ElixirDeps.exported?(r.defs, c.name, c.arity)
+    end)
+  end
+
+  # Project first: a function the caller's module, or a project module it
+  # imports (admitting the name), defines, including what a project `use`
+  # put there (quoted definitions, which the inventory doesn't list).
+  defp project_defines?(c, ctx) do
+    fa = {c.name, c.arity}
+
+    defined?(ctx.defined, c.caller_module, c.name, c.arity, false) or
+      Enum.any?(c.imports, fn {m, entry} ->
+        MapSet.member?(ctx.project, m) and admits?(entry, fa) and defined?(ctx.defined, m, c.name, c.arity, true)
+      end)
+  end
+
+  # Decisions 22 and 27: a hole in scope, where a project function the
+  # extractor can't list, or a library it can't read, could be what the
+  # call reaches. Superset evidence isn't used there.
+  defp hole?(c, ctx, lock) do
+    project? = &MapSet.member?(ctx.project, &1)
+    uses = Map.get(c, :uses, [])
+
     MapSet.member?(ctx.dynamic, Map.get(c, :caller_module)) or
-      Enum.any?(Map.keys(c.imports), &MapSet.member?(ctx.dynamic, &1))
+      Enum.any?(Map.keys(c.imports), &MapSet.member?(ctx.dynamic, &1)) or
+      Enum.any?(uses, &(project?.(&1) and not MapSet.member?(ctx.expandable, &1))) or
+      Enum.any?(c.imports, fn {_m, entry} -> entry == :unknown end) or
+      Enum.any?(Map.keys(c.imports) ++ uses, fn m ->
+        m != "Kernel" and not project?.(m) and not ElixirDeps.known?(ctx.ev, lock, m)
+      end) or
+      Enum.any?(uses, &(not project?.(&1) and not ElixirDeps.has_quotes?(ctx.ev, lock, &1))) or
+      # A library `use` that reaches a module with no evidence (a package
+      # the cache lacks, behind the library's own quotes): X1-m4.
+      Enum.any?(uses, fn u ->
+        not project?.(u) and
+          Enum.any?(ElixirDeps.reach(ctx.ev, lock, u, Map.get(ctx.use_opts, {c.caller_module, u}, [])).unknown, &(not project?.(&1)))
+      end)
   end
 
   defp external_kind("capture"), do: "capture"
@@ -580,7 +686,7 @@ defmodule Cartographer.ElixirFacts do
 
   # Call sites by outcome: in-repo when the target names a function in this
   # document, external when it names a module outside it, else unresolved.
-  defp call_stats(calls, defined, modules) do
+  defp call_stats(calls, defined) do
     Enum.reduce(calls, %{call_sites: 0, in_repo: 0, external: 0, unresolved: 0}, fn c, acc ->
       module = c.target[:module]
 
@@ -588,7 +694,6 @@ defmodule Cartographer.ElixirFacts do
         cond do
           module && defined?(defined, module, c.target.name, c.target.arity, false) -> :in_repo
           Map.get(c, :ext, false) -> :external
-          module && not MapSet.member?(modules, module) -> :external
           true -> :unresolved
         end
 

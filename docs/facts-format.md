@@ -126,9 +126,12 @@ producer says it found no target, so a same-named function in the caller's
 module is not one. Nor are calls with `kind` `external`: a call into a
 library, or into a function a library's `use` generates. Its `target` may
 name a `module`; that module is the one the function **arrives through**
-(the single library import or `use` in scope, or the project module whose
-`use` generated it), not where it is defined. With no single such module
-the target has no `module`. See each plugin's README for its call kinds.
+(the one library module that exports it, or the project module a
+library's `use` generated it into), not where it is defined. With several
+such modules the target has no `module`. A producer labels a call
+external only with evidence (the Elixir extractor: verified dependency
+source and the runtime's exports); without it the call is unresolved.
+See each plugin's README for its call kinds.
 
 ## Precision
 

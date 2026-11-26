@@ -3,6 +3,7 @@
 Code.require_file("heex_tokenizer.exs", __DIR__)
 Code.require_file("heex.exs", __DIR__)
 Code.require_file("source.exs", __DIR__)
+Code.require_file("deps.exs", __DIR__)
 Code.require_file("http.exs", __DIR__)
 Code.require_file("facts.exs", __DIR__)
 
@@ -11,6 +12,8 @@ defmodule Cartographer.ElixirExtractCLI do
   usage: elixir extract.exs --repo NAME --root DIR [--revision SHA]
                             [--source-roots lib,test] [--schema-facts FILE]
                             [--ref-roots lib,priv/repo/migrations,scripts]
+                            [--hex-cache DIR]   (default $HEX_HOME/packages/hexpm,
+                                                 or ~/.hex/packages/hexpm)
   """
 
   def main(argv) do
@@ -23,6 +26,7 @@ defmodule Cartographer.ElixirExtractCLI do
           source_roots: :string,
           ref_roots: :string,
           schema_facts: :string,
+          hex_cache: :string,
           help: :boolean
         ]
       )
@@ -50,10 +54,17 @@ defmodule Cartographer.ElixirExtractCLI do
         revision: opts[:revision],
         source_roots: roots(opts[:source_roots], "--source-roots"),
         ref_roots: roots(opts[:ref_roots], "--ref-roots"),
-        schema_facts: schema
+        schema_facts: schema,
+        hex_cache: opts[:hex_cache] || default_hex_cache()
       )
 
     IO.binwrite(:stdio, Cartographer.ElixirFacts.encode(doc))
+  end
+
+  # Hex's package cache: $HEX_HOME/packages/hexpm, else ~/.hex/packages/hexpm.
+  defp default_hex_cache do
+    home = System.get_env("HEX_HOME") || Path.expand("~/.hex")
+    Path.join(home, "packages/hexpm")
   end
 
   defp roots(nil, _), do: nil

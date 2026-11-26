@@ -2,8 +2,11 @@
 Code.require_file("../heex_tokenizer.exs", __DIR__)
 Code.require_file("../heex.exs", __DIR__)
 Code.require_file("../source.exs", __DIR__)
+Code.require_file("../deps.exs", __DIR__)
 Code.require_file("../http.exs", __DIR__)
 Code.require_file("../facts.exs", __DIR__)
+Code.require_file("support/hex_fixture.exs", __DIR__)
+Code.require_file("support/stub_libs.exs", __DIR__)
 ExUnit.start()
 
 defmodule Cartographer.ElixirExtractTest do
@@ -16,10 +19,13 @@ defmodule Cartographer.ElixirExtractTest do
   @schema Path.expand("schema.json", __DIR__)
   @web Path.expand("web_fixture", __DIR__)
 
+  # The fixture project, copied to a scratch root beside the stub libraries.
   defp fixture_doc(opts \\ []) do
-    ElixirFacts.build(
-      Keyword.merge([repo: "shop", root: @fixture, source_roots: ["lib", "test"]], opts)
-    )
+    root = Path.join(System.tmp_dir!(), "extract-fixture-#{System.unique_integer([:positive])}")
+    File.cp_r!(@fixture, root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    Cartographer.StubLibs.install(root)
+    build(Keyword.merge([repo: "shop", root: root, source_roots: ["lib", "test"]], opts))
   end
 
   defp fun(doc, id), do: Enum.find(doc.functions, &(&1.id == "shop:" <> id))
@@ -39,7 +45,7 @@ defmodule Cartographer.ElixirExtractTest do
       File.write!(Path.join(root, path), text)
     end
 
-    root
+    Cartographer.StubLibs.install(root)
   end
 
   defp atom_exists?(name) do
@@ -49,8 +55,15 @@ defmodule Cartographer.ElixirExtractTest do
     ArgumentError -> false
   end
 
+  # Every build reads the stub library package (test/support/stub_libs.exs)
+  # from the root's own Hex cache.
+  defp build(opts) do
+    root = Keyword.fetch!(opts, :root)
+    ElixirFacts.build(Keyword.put_new(opts, :hex_cache, Path.join(root, ".hex")))
+  end
+
   defp extract(source) do
-    ElixirFacts.build(repo: "fixture", root: tmp_root(%{"lib/scope.ex" => source}))
+    build(repo: "fixture", root: tmp_root(%{"lib/scope.ex" => source}))
   end
 
   defp from(doc, function, name) do
@@ -66,7 +79,7 @@ defmodule Cartographer.ElixirExtractTest do
 
       assert doc.producer == %{
                name: "extract-elixir",
-               version: "0.5.0",
+               version: "0.6.0",
                call_precision: "precise"
              }
 
@@ -145,12 +158,10 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{target: %{module: "Kernel"}, kind: "import"}] =
                calls_from(doc, "Shop.Orders.label/1", "to_string")
 
-      # A dependency's function is external. Its scope has two library
-      # owners (use Ecto.Schema, import Ecto.Query), so none is named.
-      assert [%{target: t, kind: "external"}] =
+      # A dependency's function is external.
+      # map-coverage-2: only Ecto.Query exports from/2, so the owner is named.
+      assert [%{target: %{module: "Ecto.Query"}, kind: "external"}] =
                calls_from(doc, "Shop.Orders.Order.recent_query/0", "from")
-
-      refute Map.has_key?(t, :module)
 
       # String interpolation is not a Kernel.to_string call; field access is not a call.
       assert calls_from(doc, "Shop.Format.cents/1") == []
@@ -205,7 +216,7 @@ defmodule Cartographer.ElixirExtractTest do
           "scripts/x.sh" => "psql -c 'select 1' orders\n"
         })
 
-      doc = ElixirFacts.build(repo: "fixture", root: root, schema_facts: @schema)
+      doc = build(repo: "fixture", root: root, schema_facts: @schema)
 
       assert Enum.map(doc.table_refs, &{&1.file, &1.line, &1.table}) == [
                {"lib/a.ex", 7, "public.orders"},
@@ -425,8 +436,9 @@ defmodule Cartographer.ElixirExtractTest do
       refs = Map.new(doc.http_refs, &{&1.from, {&1.base, &1.path}})
       assert refs["fixture:Pay.charge/1"] == {"https://api.stripe.com", "/v1/charges/:p1"}
       assert refs["fixture:Llm.ask/1"] == {"https://api.openai.com", "/v1/chat/completions"}
-      # Two hosts: the first, and no path joined.
-      assert refs["fixture:Bank.list/1"] == {"https://api.stripe.com", "/accounts"}
+      # A base bound to a variable (here from a case of tuples) is not read
+      # (map-coverage-2 decision 2).
+      assert refs["fixture:Bank.list/1"] == {"Bank", "/accounts"}
       # Nothing literal: the module, as before.
       assert refs["fixture:Conf.get_it/1"] == {"Conf", "/things/:p1"}
     end
@@ -572,12 +584,11 @@ defmodule Cartographer.ElixirExtractTest do
       assert refs["fixture:Two.ping/1"] == {"Two", "/ping"}
       # A binding with a literal branch and a config branch (H3-m12).
       assert refs["fixture:Two.either/1"] == {"Two", "/e"}
-      # Decision 31 (H4-m13): a variable branch is unknown; literal-only
-      # branches, literal concatenation and a tuple position are read.
-      assert refs["fixture:Two.param/1"] == {"Two", "/p"}
-      assert refs["fixture:Two.lit_case/0"] == {"https://api.stripe.com", "/v1/c"}
-      assert refs["fixture:Two.concat/0"] == {"https://api.stripe.com", "/v1/k"}
-      assert refs["fixture:Two.pair/0"] == {"https://api.stripe.com", "/v1/t"}
+      # map-coverage-2 decision 2: a base held in a variable is never read,
+      # whatever it was bound to.
+      for f <- ~w(param/1 lit_case/0 concat/0 pair/0) do
+        assert {"Two", _} = refs["fixture:Two.#{f}"], f
+      end
       # H5-M11: a name bound other than by a top-level `=` has no base.
       for f <- ~w(by_param/1 by_case/1 by_with/1 by_fn/1) do
         assert {"Two", _} = refs["fixture:Two.#{f}"], f
@@ -691,7 +702,7 @@ defmodule Cartographer.ElixirExtractTest do
       new = edit.(old)
       assert new != old
       File.write!(path, new)
-      doc = ElixirFacts.build(repo: "shop", root: root)
+      doc = build(repo: "shop", root: root)
       Map.new(doc.functions, &{&1.id, &1.fingerprint})
     end
 
@@ -730,7 +741,7 @@ defmodule Cartographer.ElixirExtractTest do
           "lib/good.ex" => "defmodule Good do\n  def ok, do: :ok\nend\n"
         })
 
-      doc = ElixirFacts.build(repo: "fixture", root: root)
+      doc = build(repo: "fixture", root: root)
       assert [%{kind: "parse_error", file: "lib/bad.ex", message: "line " <> _}] = doc.notes
       assert Enum.map(doc.functions, & &1.id) == ["fixture:Good.ok/0"]
       assert Enum.any?(doc.files, &(&1.path == "lib/bad.ex"))
@@ -740,7 +751,7 @@ defmodule Cartographer.ElixirExtractTest do
       outside = tmp_root(%{"secret.ex" => "defmodule Secret do\n  def x, do: 1\nend\n"})
       root = tmp_root(%{"lib/real.ex" => "defmodule Real do\nend\n"})
       File.ln_s!(Path.join(outside, "secret.ex"), Path.join(root, "lib/link.ex"))
-      doc = ElixirFacts.build(repo: "fixture", root: root)
+      doc = build(repo: "fixture", root: root)
       assert Enum.map(doc.modules, & &1.name) == ["Real"]
       assert [%{kind: "symlink_skipped", file: "lib/link.ex"}] = doc.notes
     end
@@ -754,7 +765,7 @@ defmodule Cartographer.ElixirExtractTest do
           "scripts/load.sql" => "insert into orders values ('caf\xe9');\n"
         })
 
-      doc = ElixirFacts.build(repo: "fixture", root: root, schema_facts: @schema)
+      doc = build(repo: "fixture", root: root, schema_facts: @schema)
       json = ElixirFacts.encode(doc)
       assert String.valid?(json)
       decoded = JSON.decode!(json)
@@ -781,7 +792,7 @@ defmodule Cartographer.ElixirExtractTest do
           end) <> "\nend\n"
 
       before = :erlang.system_info(:atom_count)
-      doc = ElixirFacts.build(repo: "fixture", root: tmp_root(%{"lib/many.ex" => source}))
+      doc = build(repo: "fixture", root: tmp_root(%{"lib/many.ex" => source}))
       assert doc.notes == []
       assert length(doc.functions) == 1000
       assert :erlang.system_info(:atom_count) - before < 200
@@ -807,7 +818,7 @@ defmodule Cartographer.ElixirExtractTest do
       root = Path.join(parent, "pro[j]{a,b}*?")
       File.mkdir_p!(Path.join(root, "lib"))
       File.write!(Path.join(root, "lib/a.ex"), "defmodule A do\n  def x, do: 1\nend\n")
-      doc = ElixirFacts.build(repo: "fixture", root: root, source_roots: ["lib", "missing"])
+      doc = build(repo: "fixture", root: root, source_roots: ["lib", "missing"])
       assert Enum.map(doc.functions, & &1.id) == ["fixture:A.x/0"]
       assert [%{kind: "empty_root", message: "missing has no .ex/.exs files" <> _}] = doc.notes
     end
@@ -815,7 +826,7 @@ defmodule Cartographer.ElixirExtractTest do
     test "symlinked directories are noted once and never followed" do
       root = tmp_root(%{"lib/a.ex" => "defmodule A do\nend\n"})
       File.ln_s!(Path.join(root, "lib"), Path.join(root, "lib/loop"))
-      doc = ElixirFacts.build(repo: "fixture", root: root, source_roots: ["lib"])
+      doc = build(repo: "fixture", root: root, source_roots: ["lib"])
       assert Enum.map(doc.modules, & &1.name) == ["A"]
       assert [%{kind: "symlink_skipped", file: "lib/loop"}] = doc.notes
     end
@@ -1161,7 +1172,7 @@ defmodule Cartographer.ElixirExtractTest do
         defmodule Two do
           use Phoenix.LiveView
           import Phoenix.HTML
-          def m(s), do: assign(s, :a, 1)
+          def m(s), do: {assign(s, :a, 1), lib_only(s)}
         end
         defmodule Bare do
           def n(x), do: not_anywhere(x)
@@ -1169,7 +1180,11 @@ defmodule Cartographer.ElixirExtractTest do
         """)
 
       assert [%{target: %{module: "Ecto.Query"}, kind: "external"}] = from(doc, "One.q/0", "from")
-      assert [%{target: t, kind: "external"}] = from(doc, "Two.m/1", "assign")
+      # map-coverage-2: the owner is the library whose source exports it,
+      # here through LiveView's quote importing Phoenix.Component.
+      assert [%{target: %{module: "Phoenix.Component"}, kind: "external"}] = from(doc, "Two.m/1", "assign")
+      # Two libraries in scope export it: external, no owner named.
+      assert [%{target: t, kind: "external"}] = from(doc, "Two.m/1", "lib_only")
       refute Map.has_key?(t, :module)
       # No library in scope: still unresolved.
       assert [%{kind: "local_or_import"}] = from(doc, "Bare.n/1", "not_anywhere")
@@ -1196,7 +1211,7 @@ defmodule Cartographer.ElixirExtractTest do
     # Round 1, H1-M2: a standalone template sees its module's `use`s.
     test "a template's library call has the module's uses as owners" do
       doc =
-        ElixirFacts.build(
+        build(
           repo: "fixture",
           root:
             tmp_root(%{
@@ -1255,12 +1270,16 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{target: %{module: "App.ConnCase"}, kind: "import"}] =
                from(doc, "App.PageTest.t/1", "log_in_user")
 
-      # Owners: Plug.Conn (imported) and ExUnit.Case (the template's own use).
-      assert [%{target: t, kind: "external"}] = from(doc, "App.PageTest.t/1", "put_req_header")
-      refute Map.has_key?(t, :module)
+      # map-coverage-2: only Plug.Conn exports it, so it is named; ExUnit's
+      # quotes (read from the runtime's sources) don't define it.
+      assert [%{target: %{module: "Plug.Conn"}, kind: "external"}] =
+               from(doc, "App.PageTest.t/1", "put_req_header")
     end
 
-    test "a project use the walk can't expand names no owner" do
+    # map-coverage-2 decision 27: a project `use` the walk can't expand is a
+    # hole in scope; the call stays unresolved rather than being credited
+    # to the library.
+    test "a project use the walk can't expand keeps library calls unresolved" do
       doc =
         extract(~S"""
         defmodule App.Opaque do
@@ -1274,15 +1293,14 @@ defmodule Cartographer.ElixirExtractTest do
         end
         """)
 
-      assert [%{target: t, kind: "external"}] = from(doc, "User.q/0", "from")
-      refute Map.has_key?(t, :module)
+      assert [%{kind: "local_or_import"}] = from(doc, "User.q/0", "from")
     end
 
     test "functions a library's use generated are external, keeping their target" do
       # One module per file, as in a real repo: a dynamic_definition note
       # covers the modules of its file.
       doc =
-        ElixirFacts.build(
+        build(
           repo: "fixture",
           root:
             tmp_root(%{
@@ -1308,7 +1326,7 @@ defmodule Cartographer.ElixirExtractTest do
     # Round 2, H2-M8: the definitions a `use` applies, from the expansion.
     test "a quote's definitions are the using module's, through dispatch, helpers and defaults" do
       doc =
-        ElixirFacts.build(
+        build(
           repo: "fixture",
           root:
             tmp_root(%{
@@ -1359,7 +1377,7 @@ defmodule Cartographer.ElixirExtractTest do
     # module dynamic rather than being ignored.
     test "a quoted def inside if or for keeps the using module's calls unresolved" do
       doc =
-        ElixirFacts.build(
+        build(
           repo: "fixture",
           root:
             tmp_root(%{
@@ -1407,7 +1425,7 @@ defmodule Cartographer.ElixirExtractTest do
         end
 
       doc =
-        ElixirFacts.build(
+        build(
           repo: "fixture",
           root:
             tmp_root(
@@ -1421,7 +1439,7 @@ defmodule Cartographer.ElixirExtractTest do
     # Round 4, H4-M10 and H4-n10.
     test "a private function a use defines is the caller's own; defimpl in a quote isn't a def" do
       doc =
-        ElixirFacts.build(
+        build(
           repo: "fixture",
           root:
             tmp_root(%{
@@ -1451,10 +1469,178 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{kind: "external"}] = from(doc, "App.User.go/1", "cast")
     end
 
+    # map-coverage-2, step 4.
+    test "on evidence: collisions, query functions, unknown modules, holes and super" do
+      doc =
+        build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/mine.ex" => "defmodule Mine do\n  def change(a, b), do: {a, b}\n  def count(x), do: x\nend\n",
+              "lib/user.ex" => ~S"""
+              defmodule App.User do
+                import Ecto.Changeset
+                import Ecto.Query
+                def c(x), do: change(x, %{})
+                def count(q), do: q
+                def q(id, f), do: from(u in project_source(), where: count(u.id) > ^f.(id) and fragment("x") == 1)
+                def project_source, do: "users"
+                def far(x), do: Some.Unindexed.thing(x)
+                def known(x), do: Enum.map(x, & &1)
+              end
+              """,
+              "lib/schema.ex" => ~S"""
+              defmodule App.Schema do
+                use Ecto.Schema
+                for n <- [:field] do
+                  def unquote(n)(x), do: x
+                end
+                def go(x), do: field(x)
+              end
+              """,
+              "lib/sup.ex" => "defmodule App.Sup do\n  use Phoenix.LiveView\n  def mount(a, b), do: super(a, b)\nend\n"
+            })
+        )
+
+      # Mine.change/2 is out of scope; Ecto.Changeset's source exports it.
+      assert [%{kind: "external", target: %{module: "Ecto.Changeset"}}] = from(doc, "App.User.c/1", "change")
+      # Inside a query, query-function names get no verdict (board item 285),
+      # even where the project defines count/1.
+      assert [%{kind: "local_or_import"}] = from(doc, "App.User.q/2", "count")
+      assert [%{kind: "local_or_import"}] = from(doc, "App.User.q/2", "fragment")
+      # Not named like a query function: a project call inside the query
+      # stays a project edge.
+      assert [%{kind: "local"}] = from(doc, "App.User.q/2", "project_source")
+      # A module nothing knows: unresolved, not external.
+      assert [%{kind: "remote"}] = from(doc, "App.User.far/1", "thing")
+      doc_stats = Enum.find(doc.stats, &(&1.language == "elixir"))
+      assert doc_stats.unresolved >= 1
+      # Enum is known to the runtime.
+      assert [%{kind: "remote", target: %{module: "Enum"}}] = from(doc, "App.User.known/1", "map")
+      # A computed def is a hole: field/1 isn't credited to Ecto.Schema.
+      assert [%{kind: "local_or_import"}] = from(doc, "App.Schema.go/1", "field")
+      # super(...) is not a call.
+      assert from(doc, "App.Sup.mount/2", "super") == []
+    end
+
+    # Board item 285, option a: inside an Ecto query, query-function names
+    # get no verdict, in every position; outside one, the ordinary rules.
+    test "inside an Ecto query, query-function names get no verdict" do
+      doc =
+        extract(~S"""
+        defmodule Q do
+          import Ecto.Query
+          def count(x), do: x
+          def later(q), do: where(q, [u], count(u.id) > 1)
+          def source(o), do: from(u in count(o), select: u)
+          def pinned(q, n), do: where(q, [u], u.n == ^count(n))
+          def nested(ids), do: from(u in "u", preload: [posts: ^from(p in "p", where: fragment("x"))], where: u.id in ^ids)
+          def deep(q), do: where(q, [u], u.a |> coalesce(1) |> coalesce(2) |> coalesce(3) |> coalesce(4) |> coalesce(5) |> coalesce(6) |> coalesce(7) |> coalesce(8) |> coalesce(9))
+          def coalesce(a, b), do: {a, b}
+          def plain(x), do: count(x)
+          def long(q), do: q |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1()
+          def a1(x), do: x
+        end
+        defmodule NoQuery do
+          def count(x), do: x
+          def where(q, b, e), do: {q, b, e}
+          def go(q), do: where(q, [], count(1))
+        end
+        """)
+
+      for {f, name} <- [{"later/1", "count"}, {"source/1", "count"}, {"pinned/2", "count"}, {"nested/1", "fragment"}, {"deep/1", "coalesce"}] do
+        rows = from(doc, "Q.#{f}", name)
+        assert rows != [], f
+        assert Enum.all?(rows, &(&1.kind == "local_or_import" and not Map.has_key?(&1.target, :module))), f
+      end
+
+      # Outside a query: the project's own.
+      assert [%{kind: "local"}] = from(doc, "Q.plain/1", "count")
+      assert [%{kind: "local"}] = from(doc, "NoQuery.go/1", "count")
+      # A pipeline past the cap keeps the labels of names that aren't
+      # query functions.
+      assert Enum.all?(from(doc, "Q.long/1", "a1"), &(&1.kind == "local"))
+    end
+
+    # Review round 1, X1-m1: each rule pinned by its own case.
+    test "the evidence rules, one case each" do
+      doc =
+        build(
+          repo: "fixture",
+          root:
+            tmp_root(%{
+              "lib/repo.ex" => "defmodule App.Repo do\n  use Ecto.Repo, otp_app: :app\nend\n",
+              "lib/own.ex" => "defmodule App.OwnRepo do\n  use Ecto.Repo, otp_app: :app\n  def all(q, _opts), do: q\nend\n",
+              "lib/mystery.ex" => "defmodule App.Mystery do\n  def from(a, b), do: {a, b}\nend\n",
+              "lib/a.ex" => ~S"""
+              defmodule A.UnreadableImport do
+                import Ecto.Query
+                import App.Mystery, only: opts()
+                def opts, do: []
+                def go(x), do: from(x, [])
+              end
+              defmodule A.UnknownModule do
+                import Missing.Lib
+                import Ecto.Changeset
+                def go(x), do: change(x)
+              end
+              defmodule A.UseWithoutQuotes do
+                use :lists
+                import Ecto.Changeset
+                def go(x), do: change(x)
+              end
+              defmodule A.LeakyUse do
+                use Leaky.Lib
+                import Ecto.Changeset
+                def go(x), do: change(x)
+              end
+              defmodule A.NotAdmitted do
+                import Ecto.Changeset, only: [cast: 3]
+                def go(x), do: change(x)
+              end
+              defmodule A.WrongArity do
+                def go(x), do: App.Repo.all(x, 1, 2, 3)
+              end
+              defmodule A.OwnDefinition do
+                def go(x), do: App.OwnRepo.all(x, [])
+              end
+              defmodule A.NoImport do
+                def count(x), do: x
+                def where(q, b, e), do: {q, b, e}
+                def go(q), do: where(q, [], count(1))
+              end
+              defmodule A.Deep do
+                import Ecto.Query
+                def go(q), do: where(q, [u], not is_nil(count(u.id)))
+              end
+              """
+            })
+        )
+
+      for m <- ~w(UnreadableImport UnknownModule UseWithoutQuotes NotAdmitted LeakyUse) do
+        assert [%{kind: "local_or_import"}] = from(doc, "A.#{m}.go/1", if(m == "UnreadableImport", do: "from", else: "change")), m
+      end
+
+      # No generated all/4.
+      assert [%{kind: "remote"}] = from(doc, "A.WrongArity.go/1", "all")
+      # The project module defines all/2 itself: its own, not the library's.
+      assert [%{kind: "remote"}] = from(doc, "A.OwnDefinition.go/1", "all")
+      # Without `import Ecto.Query`, a local where/3 is no query macro.
+      assert [%{kind: "local"}] = from(doc, "A.NoImport.go/1", "count")
+      # Deep inside the macro: still no verdict.
+      assert [%{kind: "local_or_import"}] = from(doc, "A.Deep.go/1", "count")
+    end
+
+    test "a call to a module with no evidence counts as unresolved, not external" do
+      doc = extract("defmodule U do\n  def go(x), do: Some.Unindexed.thing(x)\nend\n")
+      stats = Enum.find(doc.stats, &(&1.language == "elixir"))
+      assert {stats.external, stats.unresolved} == {0, 1}
+    end
+
     # Round 1, H1-m1 and H1-m2.
     test "owners respect only:, project imports that pass a library on, and captures" do
       doc =
-        ElixirFacts.build(
+        build(
           repo: "fixture",
           root:
             tmp_root(%{
@@ -1470,8 +1656,9 @@ defmodule Cartographer.ElixirExtractTest do
         )
 
       assert [%{kind: "external", target: %{module: "Ecto.Changeset"}}] = from(doc, "App.Only.c/1", "cast")
-      assert [%{kind: "external", target: t}] = from(doc, "App.View.t/0", "gettext")
-      refute Map.has_key?(t, :module)
+      # map-coverage-2: gettext/1 arrives through the project module that
+      # `use Gettext.Backend` generated it into, which is named.
+      assert [%{kind: "external", target: %{module: "App.Gettext"}}] = from(doc, "App.View.t/0", "gettext")
       assert [%{kind: "capture", target: %{module: "App.Repo"}}] = from(doc, "App.W.go/1", "insert")
       assert [%{kind: "apply", target: %{module: "App.Repo"}}] = from(doc, "App.W.go/1", "get")
 
@@ -1482,7 +1669,7 @@ defmodule Cartographer.ElixirExtractTest do
     # Round 1, H1-M1: functions the inventory can't list stay unresolved.
     test "a function defined at runtime or in a project quote is never external" do
       doc =
-        ElixirFacts.build(
+        build(
           repo: "fixture",
           root:
             tmp_root(%{
