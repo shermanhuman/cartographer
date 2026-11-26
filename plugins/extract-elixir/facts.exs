@@ -538,7 +538,10 @@ defmodule Cartographer.ElixirFacts do
   defp query_dsl(%{module: nil, kind: "local_or_import"} = c, ctx) do
     lock = ElixirDeps.lock_of(ctx.ev, c.file)
     enclosing = Map.get(c, :enclosing, [])
-    depth = length(enclosing)
+    # The uncapped depth of the call: a macro at index j of the (capped)
+    # record sits at depth total - j, and a pin taken at depth p covers the
+    # call relative to that macro when p >= total - j.
+    total = Map.get(c, :enclosing_total, length(enclosing))
     api = query_api(ctx, lock)
 
     case api_owner(api, c.name, c.arity) do
@@ -547,16 +550,17 @@ defmodule Cartographer.ElixirFacts do
 
       owner ->
         case Enum.with_index(enclosing) |> Enum.find(fn {e, _} -> query_macro?(e, c, ctx, lock) end) do
-          # No query macro in view. If the record was cut, it may sit past
-          # the cap: no verdict, never a project or library label (X5-M9).
+          # No query macro in view. If the record was cut and every visible
+          # call could continue a chain, the macro may sit past the cap: no
+          # verdict, never a project or library label (X5-M9, X6-m10).
           nil ->
-            if Map.get(c, :enclosing_cut, false), do: :unknown
+            if Map.get(c, :enclosing_cut, false) and Enum.all?(enclosing, &api_link?(&1, api)), do: :unknown
 
           {macro, j} ->
             pin = Map.get(c, :pinned)
 
             if expression_arg?(macro) and Enum.all?(Enum.take(enclosing, j), &api_link?(&1, api)) and
-                 not (is_integer(pin) and pin >= depth - j),
+                 not (is_integer(pin) and pin >= total - j),
                do: owner
         end
     end

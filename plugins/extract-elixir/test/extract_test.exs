@@ -1661,6 +1661,17 @@ defmodule Cartographer.ElixirExtractTest do
           def piped_link(q), do: where(q, [u], count(u.id) |> coalesce(0))
           def piped_dynamic, do: fragment("now()") |> dynamic()
           def deep(q), do: where(q, [u], u.a |> coalesce(1) |> coalesce(2) |> coalesce(3) |> coalesce(4) |> coalesce(5) |> coalesce(6) |> coalesce(7) |> coalesce(8) |> coalesce(9))
+          def deep_nested(q), do: where(q, [u], coalesce(coalesce(coalesce(coalesce(coalesce(coalesce(coalesce(coalesce(coalesce(u.a, 1), 2), 3), 4), 5), 6), 7), 8), 9))
+          def pinned_deep(q), do: q |> where(^dynamic([u], coalesce(u.x, 0) == 1)) |> a1() |> a2() |> a3() |> a4() |> a5() |> a6() |> a7()
+          def long_pipe(q), do: q |> count() |> a1() |> a2() |> a3() |> a4() |> a5() |> a6() |> a7() |> a8()
+          def a1(x), do: x
+          def a2(x), do: x
+          def a3(x), do: x
+          def a4(x), do: x
+          def a5(x), do: x
+          def a6(x), do: x
+          def a7(x), do: x
+          def a8(x), do: x
           def coalesce(a, b), do: {a, b}
         end
         """)
@@ -1677,8 +1688,19 @@ defmodule Cartographer.ElixirExtractTest do
       # A pipe continues a chain too (X5-m9).
       assert {"external", "Ecto.Query.API"} in for(c <- from(doc, "T.piped_link/1", "count"), do: {c.kind, c.target[:module]})
       assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "T.piped_dynamic/0", "fragment")
-      # Past the depth cap: no verdict, never the project's coalesce/2 (X5-M9).
-      refute Enum.any?(from(doc, "T.deep/1", "coalesce"), &(&1.kind == "local"))
+      # Past the depth cap: no verdict, never the project's coalesce/2,
+      # piped or nested (X5-M9, X6-m11).
+      for f <- ~w(deep/1 deep_nested/1) do
+        rows = from(doc, "T.#{f}", "coalesce")
+        assert rows != [], f
+        refute Enum.any?(rows, &(&1.kind == "local")), f
+      end
+
+      # A ^ outside the macro, with the record cut: still vocabulary, never
+      # the project's coalesce/2 (X6-M10).
+      refute Enum.any?(from(doc, "T.pinned_deep/1", "coalesce"), &(&1.kind == "local"))
+      # A long ordinary pipeline keeps its project label (X6-m10).
+      assert [%{kind: "local"}] = from(doc, "T.long_pipe/1", "count")
 
       # Matched by name and arity: coalesce/3 is the project's macro.
       assert [%{kind: "local"}] = from(doc, "T.arity/1", "coalesce")
