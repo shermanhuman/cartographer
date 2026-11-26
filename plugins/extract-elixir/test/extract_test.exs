@@ -1470,7 +1470,7 @@ defmodule Cartographer.ElixirExtractTest do
     end
 
     # map-coverage-2, step 4.
-    test "on evidence: collisions, query vocabulary, unknown modules, holes and super" do
+    test "on evidence: collisions, query functions, unknown modules, holes and super" do
       doc =
         build(
           repo: "fixture",
@@ -1508,7 +1508,8 @@ defmodule Cartographer.ElixirExtractTest do
       # even where the project defines count/1.
       assert [%{kind: "local_or_import"}] = from(doc, "App.User.q/2", "count")
       assert [%{kind: "local_or_import"}] = from(doc, "App.User.q/2", "fragment")
-      # Not vocabulary: a project call inside the query stays a project edge.
+      # Not named like a query function: a project call inside the query
+      # stays a project edge.
       assert [%{kind: "local"}] = from(doc, "App.User.q/2", "project_source")
       # A module nothing knows: unresolved, not external.
       assert [%{kind: "remote"}] = from(doc, "App.User.far/1", "thing")
@@ -1537,7 +1538,7 @@ defmodule Cartographer.ElixirExtractTest do
           def deep(q), do: where(q, [u], u.a |> coalesce(1) |> coalesce(2) |> coalesce(3) |> coalesce(4) |> coalesce(5) |> coalesce(6) |> coalesce(7) |> coalesce(8) |> coalesce(9))
           def coalesce(a, b), do: {a, b}
           def plain(x), do: count(x)
-          def long(q), do: q |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1()
+          def long(q), do: q |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1()
           def a1(x), do: x
         end
         defmodule NoQuery do
@@ -1556,7 +1557,8 @@ defmodule Cartographer.ElixirExtractTest do
       # Outside a query: the project's own.
       assert [%{kind: "local"}] = from(doc, "Q.plain/1", "count")
       assert [%{kind: "local"}] = from(doc, "NoQuery.go/1", "count")
-      # A long pipeline of other names keeps its labels.
+      # A pipeline past the cap keeps the labels of names that aren't
+      # query functions.
       assert Enum.all?(from(doc, "Q.long/1", "a1"), &(&1.kind == "local"))
     end
 

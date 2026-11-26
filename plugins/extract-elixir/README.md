@@ -178,12 +178,15 @@ Exit status 2 means bad arguments; nothing is written to stdout.
     those quotes import. A superset is sound here because the project's
     own definitions are checked first.
 - **The rules**, in order:
-  1. inside an Ecto query: a call named like an `Ecto.Query.API` or
-     `WindowAPI` function, anywhere in the arguments of a proven
-     `Ecto.Query` macro (or past the walker's depth cap), gets no verdict,
-     neither Ecto's nor the project's. Ecto decides per argument whether
-     such a call is query syntax or code, which can't be told without
-     running its macros;
+  1. query-function names: a call named like an `Ecto.Query.API` or
+     `WindowAPI` function (any arity) gets no verdict, neither Ecto's nor
+     the project's, when it sits anywhere in the arguments of a proven
+     `Ecto.Query` macro, or more than 8 calls deep anywhere (the walker
+     records 8 enclosing calls, so past that a query macro may be out of
+     sight; such a call named `count`, `max` or `is_nil` loses its label
+     there even outside a query). Ecto decides per argument whether such a
+     call is query syntax or code, which can't be told without running its
+     macros;
   2. the project's own definitions: the caller's module, a project module
      it imports, and what a project `use` put there;
   3. a bare call is external when an admitting import of a module that

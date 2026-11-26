@@ -187,9 +187,7 @@ defmodule Cartographer.CorpusTest do
   defp wrong_libraries(doc, files) do
     mods = modules_of(files)
 
-    # Query vocabulary is decided before the project's own definitions
-    # (map-coverage-2 decision 25), so it's exempt here.
-    for c <- doc.calls, c.kind == "external", c.target[:module] not in ["Ecto.Query.API", "Ecto.Query.WindowAPI"] do
+    for c <- doc.calls, c.kind == "external" do
       [_, from_mod] = Regex.run(~r/^fx:(.*)\.[^.]+\/\d+$/, c.from)
       # The caller's scope, and the target module when it's the project's
       # (a remote call to a function that module defines itself).

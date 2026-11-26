@@ -589,17 +589,17 @@ defmodule Cartographer.ElixirSource do
   defp walk({:__pipe_arg__, _, nil}, env, acc), do: {env, acc}
 
   defp walk({:|>, _, [left, right]}, env, acc) do
-    # The left side is argument 0 of the call it's piped into, as Elixir
-    # expands it: the query rule reads its position (review round 4, X4-M8).
+    # The left side is inside the call it's piped into, as Elixir expands
+    # it: the query rule reads the enclosing calls.
     left_env =
       case right do
         {{:., _, [mod, fun]}, _, args} when ident?(fun) and is_list(args) ->
-          enclose(env, if(literal_module?(mod), do: name(mod, env), else: :dynamic), fun, length(args) + 1, 0)
+          enclose(env, if(literal_module?(mod), do: name(mod, env), else: :dynamic), fun, length(args) + 1)
 
         {fun, _, args} when ident?(fun) and is_list(args) ->
           if fun in @special or {fun, length(args) + 1} in @special_forms or (is_atom(fun) and Macro.operator?(fun, length(args) + 1)),
             do: env,
-            else: enclose(env, nil, fun, length(args) + 1, 0)
+            else: enclose(env, nil, fun, length(args) + 1)
 
         _ ->
           env
@@ -1122,32 +1122,22 @@ defmodule Cartographer.ElixirSource do
     found |> Enum.reverse() |> Enum.uniq()
   end
 
-  # The calls a call sits inside (nearest first, a few levels), and whether
-  # it's under `^`: the query-DSL rule reads them (map-coverage-2 decision
-  # 17).
+  # The calls a call sits inside, nearest first, up to @enclosing_depth: the
+  # query rule (facts.exs query_dsl/2) gives no verdict to a query-function
+  # name inside an Ecto.Query macro, or anywhere past the cap.
   @enclosing_depth 8
 
-  # Each argument of a call, walked inside it with its position (the query
-  # rule reads which argument of a query macro a call sits in).
-  defp walk_args(args, env, acc, module, fun) do
-    arity = length(args)
+  defp walk_args(args, env, acc, module, fun),
+    do: walk(args, enclose(env, module, fun, length(args)), acc)
 
-    acc =
-      args
-      |> Enum.with_index()
-      |> Enum.reduce(acc, fn {arg, i}, a -> elem(walk(arg, enclose(env, module, fun, arity, i), a), 1) end)
-
-    {env, acc}
-  end
-
-  defp enclose(env, module, fun, arity, index) do
+  defp enclose(env, module, fun, arity) do
     outer = Map.get(env, :enclosing, [])
-    # Whether the record was ever cut: then the query rule can't see every
-    # enclosing call, and gives no verdict for vocabulary names (X5-M9).
+    # Whether the record was ever cut: past the cap, the query rule can't
+    # see every enclosing call.
     cut = Map.get(env, :enclosing_cut, false) or length(outer) >= @enclosing_depth
 
     env
-    |> Map.put(:enclosing, [%{module: module, name: str(fun), arity: arity, arg: index} | Enum.take(outer, @enclosing_depth - 1)])
+    |> Map.put(:enclosing, [%{module: module, name: str(fun), arity: arity} | Enum.take(outer, @enclosing_depth - 1)])
     |> Map.put(:enclosing_cut, cut)
   end
 
