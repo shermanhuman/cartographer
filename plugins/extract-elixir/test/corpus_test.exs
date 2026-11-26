@@ -263,8 +263,8 @@ defmodule Cartographer.CorpusTest do
     end
 
     assert out.("evidence/collision-out-of-scope", "U.c/1", "change") == [{"external", "Ecto.Changeset"}]
-    assert {"external", "Ecto.Query.API"} in out.("evidence/dsl-and-pin", "Q.q/1", "count")
-    assert {"local", "Q"} in out.("evidence/dsl-and-pin", "Q.q/1", "count")
+    # Inside an Ecto query, query-function names get no verdict (board 285).
+    assert Enum.uniq(out.("evidence/dsl-and-pin", "Q.q/1", "count")) == [{"local_or_import", nil}]
     # get/3 is defined under no condition in the stub; Repo.get is generated.
     assert out.("evidence/conditional-library-def", "W.go/1", "get") == [{"external", "App.Repo"}]
     assert out.("evidence/missing-package", "M.go/1", "lib_fun") == [{"local_or_import", nil}]

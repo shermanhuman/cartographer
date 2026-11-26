@@ -679,14 +679,6 @@ defmodule Cartographer.ElixirSource do
     {env, acc}
   end
 
-  # `^expr` inside a query is evaluated as ordinary code.
-  defp walk({:^, _, [expr]}, env, acc) do
-    # The pin's depth: calls entered inside the pinned expression (a whole
-    # `^from(...)` query) are not pinned relative to their own macros.
-    {_, acc} = walk(expr, Map.put(env, :pinned, Map.get(env, :enclosing_total, 0)), acc)
-    {env, acc}
-  end
-
   defp walk({fun, meta, args}, env, acc) when ident?(fun) and is_list(args) do
     arity = length(args)
 
@@ -1157,8 +1149,6 @@ defmodule Cartographer.ElixirSource do
     env
     |> Map.put(:enclosing, [%{module: module, name: str(fun), arity: arity, arg: index} | Enum.take(outer, @enclosing_depth - 1)])
     |> Map.put(:enclosing_cut, cut)
-    # The uncapped depth: pins and macros are compared on it (X6-M10).
-    |> Map.put(:enclosing_total, Map.get(env, :enclosing_total, 0) + 1)
   end
 
   # Module aliases among a `use`'s options (`adapter: Ecto.Adapters.Postgres`):
@@ -1600,8 +1590,6 @@ defmodule Cartographer.ElixirSource do
       uses: Map.get(env, :uses, []),
       enclosing: Map.get(env, :enclosing, []),
       enclosing_cut: Map.get(env, :enclosing_cut, false),
-      enclosing_total: Map.get(env, :enclosing_total, 0),
-      pinned: Map.get(env, :pinned),
       file: env.file
     }
 

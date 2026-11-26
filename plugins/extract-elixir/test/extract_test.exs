@@ -1504,10 +1504,10 @@ defmodule Cartographer.ElixirExtractTest do
 
       # Mine.change/2 is out of scope; Ecto.Changeset's source exports it.
       assert [%{kind: "external", target: %{module: "Ecto.Changeset"}}] = from(doc, "App.User.c/1", "change")
-      # Query vocabulary inside a proven Ecto.Query macro, before the
-      # project's own count/1 (decision 25).
-      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "App.User.q/2", "count")
-      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "App.User.q/2", "fragment")
+      # Inside a query, query-function names get no verdict (board item 285),
+      # even where the project defines count/1.
+      assert [%{kind: "local_or_import"}] = from(doc, "App.User.q/2", "count")
+      assert [%{kind: "local_or_import"}] = from(doc, "App.User.q/2", "fragment")
       # Not vocabulary: a project call inside the query stays a project edge.
       assert [%{kind: "local"}] = from(doc, "App.User.q/2", "project_source")
       # A module nothing knows: unresolved, not external.
@@ -1520,6 +1520,44 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{kind: "local_or_import"}] = from(doc, "App.Schema.go/1", "field")
       # super(...) is not a call.
       assert from(doc, "App.Sup.mount/2", "super") == []
+    end
+
+    # Board item 285, option a: inside an Ecto query, query-function names
+    # get no verdict, in every position; outside one, the ordinary rules.
+    test "inside an Ecto query, query-function names get no verdict" do
+      doc =
+        extract(~S"""
+        defmodule Q do
+          import Ecto.Query
+          def count(x), do: x
+          def later(q), do: where(q, [u], count(u.id) > 1)
+          def source(o), do: from(u in count(o), select: u)
+          def pinned(q, n), do: where(q, [u], u.n == ^count(n))
+          def nested(ids), do: from(u in "u", preload: [posts: ^from(p in "p", where: fragment("x"))], where: u.id in ^ids)
+          def deep(q), do: where(q, [u], u.a |> coalesce(1) |> coalesce(2) |> coalesce(3) |> coalesce(4) |> coalesce(5) |> coalesce(6) |> coalesce(7) |> coalesce(8) |> coalesce(9))
+          def coalesce(a, b), do: {a, b}
+          def plain(x), do: count(x)
+          def long(q), do: q |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1() |> a1()
+          def a1(x), do: x
+        end
+        defmodule NoQuery do
+          def count(x), do: x
+          def where(q, b, e), do: {q, b, e}
+          def go(q), do: where(q, [], count(1))
+        end
+        """)
+
+      for {f, name} <- [{"later/1", "count"}, {"source/1", "count"}, {"pinned/2", "count"}, {"nested/1", "fragment"}, {"deep/1", "coalesce"}] do
+        rows = from(doc, "Q.#{f}", name)
+        assert rows != [], f
+        assert Enum.all?(rows, &(&1.kind == "local_or_import" and not Map.has_key?(&1.target, :module))), f
+      end
+
+      # Outside a query: the project's own.
+      assert [%{kind: "local"}] = from(doc, "Q.plain/1", "count")
+      assert [%{kind: "local"}] = from(doc, "NoQuery.go/1", "count")
+      # A long pipeline of other names keeps its labels.
+      assert Enum.all?(from(doc, "Q.long/1", "a1"), &(&1.kind == "local"))
     end
 
     # Review round 1, X1-m1: each rule pinned by its own case.
@@ -1587,136 +1625,14 @@ defmodule Cartographer.ElixirExtractTest do
       assert [%{kind: "remote"}] = from(doc, "A.OwnDefinition.go/1", "all")
       # Without `import Ecto.Query`, a local where/3 is no query macro.
       assert [%{kind: "local"}] = from(doc, "A.NoImport.go/1", "count")
-      # Two calls deep inside the macro is still its argument.
-      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "A.Deep.go/1", "count")
+      # Deep inside the macro: still no verdict.
+      assert [%{kind: "local_or_import"}] = from(doc, "A.Deep.go/1", "count")
     end
 
     test "a call to a module with no evidence counts as unresolved, not external" do
       doc = extract("defmodule U do\n  def go(x), do: Some.Unindexed.thing(x)\nend\n")
       stats = Enum.find(doc.stats, &(&1.language == "elixir"))
       assert {stats.external, stats.unresolved} == {0, 1}
-    end
-
-    # Review round 1, X1-M1 and X1-m2.
-    test "query vocabulary only in a query macro's later arguments" do
-      doc =
-        extract(~S"""
-        defmodule P do
-          import Ecto.Query
-          def count(x), do: x
-          def src(o), do: from(u in count(o), select: u)
-          def first(q), do: where(count(q), [u], u.id > 1)
-          def sub(q), do: subquery(count(q))
-          def dyn(repo, x), do: repo.update(count(x), [])
-          def dyn_later(repo, x), do: repo.update(x, [], count(1))
-          def nested(ids), do: from(u in "u", preload: [posts: ^from(p in "p", where: fragment("x"))], where: u.id in ^ids)
-          def later(q), do: where(q, [u], count(u.id) > 1)
-          def in_exists(q), do: where(q, [u], exists(count(q)))
-          def in_sub(q), do: where(q, [u], u.id in subquery(count(q)))
-          def dyn_expr, do: dynamic(is_nil(1))
-          def dyn_binding, do: dynamic([u], is_nil(u.x))
-        end
-        """)
-
-      for f <- ~w(src/1 first/1 sub/1 dyn/2 dyn_later/2) do
-        assert [%{kind: "local"}] = from(doc, "P.#{f}", "count"), f
-      end
-
-      # Review round 2 (X2-M3, X2-M4): through subquery/exists the argument
-      # is code; dynamic's expression is its last argument.
-      for f <- ~w(in_exists/1 in_sub/1) do
-        assert [%{kind: "local"}] = from(doc, "P.#{f}", "count"), f
-      end
-
-      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "P.dyn_expr/0", "is_nil")
-      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "P.dyn_binding/0", "is_nil")
-
-      # A query nested under ^ keeps its own vocabulary.
-      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "P.nested/1", "fragment")
-      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "P.later/1", "count")
-    end
-
-    # Review round 3 (X3-M5..M7): one case per row of the query-position
-    # table (Ecto 3.14.3's builders, recorded with the decision).
-    test "the query-position table, one row each" do
-      doc =
-        extract(~S"""
-        defmodule T do
-          import Ecto.Query
-          def count(x), do: x
-          defmacro coalesce(a, b, c), do: {a, b, c}
-          def join_kind(q, o), do: join(q, count(o), [u], p in "p", on: count(p.id) > 0)
-          def type_arg(q, o), do: select(q, [u], type(u.x, count(o)))
-          def map_fields(q, o), do: select(q, [u], map(u, count(o)))
-          def struct_fields(q, o), do: select(q, [u], struct(u, count(o)))
-          def fragment_first(q, o), do: where(q, [u], fragment(count(o), u.x))
-          def fragment_later(q), do: where(q, [u], fragment("?", count(u.id)))
-          def in_any(q, o), do: where(q, [u], u.x > any(count(o)))
-          def in_all(q, o), do: where(q, [u], u.x > all(count(o)))
-          def in_values(q, o), do: where(q, [u], u.id in values(count(o), %{}))
-          def arity(q), do: where(q, [u], coalesce(u.a, u.b, u.c))
-          def piped_exists(q, o), do: where(q, [u], count(o) |> exists())
-          def piped_any(q, o), do: where(q, [u], u.x > (count(o) |> any()))
-          def piped_fragment(q, o), do: where(q, [u], count(o) |> fragment(u.x))
-          def piped_link(q), do: where(q, [u], count(u.id) |> coalesce(0))
-          def piped_dynamic, do: fragment("now()") |> dynamic()
-          def deep(q), do: where(q, [u], u.a |> coalesce(1) |> coalesce(2) |> coalesce(3) |> coalesce(4) |> coalesce(5) |> coalesce(6) |> coalesce(7) |> coalesce(8) |> coalesce(9))
-          def deep_nested(q), do: where(q, [u], coalesce(coalesce(coalesce(coalesce(coalesce(coalesce(coalesce(coalesce(coalesce(u.a, 1), 2), 3), 4), 5), 6), 7), 8), 9))
-          def pinned_deep(q), do: q |> where(^dynamic([u], coalesce(u.x, 0) == 1)) |> a1() |> a2() |> a3() |> a4() |> a5() |> a6() |> a7()
-          def long_pipe(q), do: q |> count() |> a1() |> a2() |> a3() |> a4() |> a5() |> a6() |> a7() |> a8()
-          def a1(x), do: x
-          def a2(x), do: x
-          def a3(x), do: x
-          def a4(x), do: x
-          def a5(x), do: x
-          def a6(x), do: x
-          def a7(x), do: x
-          def a8(x), do: x
-          def coalesce(a, b), do: {a, b}
-        end
-        """)
-
-      # Piped values are argument 0 of the call they're piped into (X4-M8).
-      for f <- ~w(join_kind/2 type_arg/2 map_fields/2 struct_fields/2 fragment_first/2 in_any/2 in_all/2 in_values/2 piped_exists/2 piped_any/2 piped_fragment/2) do
-        assert {"local", "T"} in for(c <- from(doc, "T.#{f}", "count"), do: {c.kind, c.target[:module]}), f
-        refute Enum.any?(from(doc, "T.#{f}", "count"), &(&1.kind == "external" and &1.target[:module] == "Ecto.Query.API" and f != "join_kind/2")), f
-      end
-
-      # join's on: is a query expression; fragment's later arguments too.
-      assert {"external", "Ecto.Query.API"} in for(c <- from(doc, "T.join_kind/2", "count"), do: {c.kind, c.target[:module]})
-      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "T.fragment_later/1", "count")
-      # A pipe continues a chain too (X5-m9).
-      assert {"external", "Ecto.Query.API"} in for(c <- from(doc, "T.piped_link/1", "count"), do: {c.kind, c.target[:module]})
-      assert [%{kind: "external", target: %{module: "Ecto.Query.API"}}] = from(doc, "T.piped_dynamic/0", "fragment")
-      # Past the depth cap: no verdict, never the project's coalesce/2,
-      # piped or nested (X5-M9, X6-m11).
-      for f <- ~w(deep/1 deep_nested/1) do
-        rows = from(doc, "T.#{f}", "coalesce")
-        assert rows != [], f
-        refute Enum.any?(rows, &(&1.kind == "local")), f
-      end
-
-      # A ^ outside the macro, with the record cut: still vocabulary, never
-      # the project's coalesce/2 (X6-M10).
-      refute Enum.any?(from(doc, "T.pinned_deep/1", "coalesce"), &(&1.kind == "local"))
-      # A long ordinary pipeline keeps its project label (X6-m10).
-      assert [%{kind: "local"}] = from(doc, "T.long_pipe/1", "count")
-
-      # Matched by name and arity: coalesce/3 is the project's macro.
-      assert [%{kind: "local"}] = from(doc, "T.arity/1", "coalesce")
-    end
-
-    test "under ^ a call is ordinary code, not query vocabulary" do
-      doc =
-        extract(~S"""
-        defmodule P do
-          import Ecto.Query
-          def count(x), do: x
-          def q(n), do: from(u in "t", where: u.n == ^count(n))
-        end
-        """)
-
-      assert [%{kind: "local"}] = from(doc, "P.q/1", "count")
     end
 
     # Round 1, H1-m1 and H1-m2.

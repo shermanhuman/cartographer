@@ -398,12 +398,9 @@ defmodule Cartographer.ElixirFacts do
               {module, kind} = classify(c, defined)
               external(c, module, kind, ctx)
 
-            # The enclosing record was cut: no verdict (X5-M9).
+            # Inside an Ecto query: no verdict.
             :unknown ->
               {nil, c.kind, false}
-
-            owner ->
-              {owner, "external", true}
           end
 
         %{c | kind: kind} |> Map.put(:target_module, module) |> Map.put(:external, ext)
@@ -509,91 +506,34 @@ defmodule Cartographer.ElixirFacts do
 
   # --- external, on evidence (map-coverage-2) -------------------------------
 
-  # Where query vocabulary is exported (see query_dsl/2).
+  # The modules whose function names Ecto treats as query syntax.
   @query_api ["Ecto.Query.API", "Ecto.Query.WindowAPI"]
 
-  # Query vocabulary (decisions 17 and 25), by a complete table of Ecto
-  # 3.14.3's query builders (recorded with the decision): a bare call whose
-  # name and arity Ecto.Query.API or WindowAPI exports (fragment at any
-  # arity), inside a proven Ecto.Query macro's expression arguments, reached
-  # only through such API calls at query positions, with no pin inside the
-  # macro covering it. Positions Ecto runs as code break the chain. This can
-  # lose vocabulary to "unknown", never label a project call.
-  #
-  # A macro's expression arguments: after the first (the query or source);
-  # join's from the third (its second is the join kind); dynamic's last.
-  # Positions that run as code, as {name, argument index or :all}
-  # (subquery isn't an API name, so it breaks the chain already):
-  @code_positions %{
-    "exists" => :all,
-    "all" => :all,
-    "any" => :all,
-    "values" => :all,
-    "type" => [1],
-    "map" => [1],
-    "struct" => [1],
-    "fragment" => [0]
-  }
-
+  # Inside an Ecto query (board item 285, option a): a call named like an
+  # Ecto.Query.API or WindowAPI function, anywhere in the arguments of a
+  # proven Ecto.Query macro (or where the walker's record of enclosing
+  # calls was cut, so a macro may sit past it), gets no verdict: never
+  # Ecto's, never the project's. Ecto decides per argument whether such a
+  # call is query syntax or code, and that can't be told without running
+  # its macros, so the map says unknown.
   defp query_dsl(%{module: nil, kind: "local_or_import"} = c, ctx) do
     lock = ElixirDeps.lock_of(ctx.ev, c.file)
     enclosing = Map.get(c, :enclosing, [])
-    # The uncapped depth of the call: a macro at index j of the (capped)
-    # record sits at depth total - j, and a pin taken at depth p covers the
-    # call relative to that macro when p >= total - j.
-    total = Map.get(c, :enclosing_total, length(enclosing))
-    api = query_api(ctx, lock)
 
-    case api_owner(api, c.name, c.arity) do
-      nil ->
-        nil
-
-      owner ->
-        case Enum.with_index(enclosing) |> Enum.find(fn {e, _} -> query_macro?(e, c, ctx, lock) end) do
-          # No query macro in view. If the record was cut and every visible
-          # call could continue a chain, the macro may sit past the cap: no
-          # verdict, never a project or library label (X5-M9, X6-m10).
-          nil ->
-            if Map.get(c, :enclosing_cut, false) and Enum.all?(enclosing, &api_link?(&1, api)), do: :unknown
-
-          {macro, j} ->
-            pin = Map.get(c, :pinned)
-
-            if expression_arg?(macro) and Enum.all?(Enum.take(enclosing, j), &api_link?(&1, api)) and
-                 not (is_integer(pin) and pin >= total - j),
-               do: owner
-        end
-    end
+    if api_name?(ctx, lock, c.name) and
+         (Map.get(c, :enclosing_cut, false) or Enum.any?(enclosing, &query_macro?(&1, c, ctx, lock))),
+       do: :unknown
   end
 
   defp query_dsl(_c, _ctx), do: nil
 
-  defp expression_arg?(%{name: "dynamic", arg: arg, arity: arity}), do: arg == arity - 1
-  defp expression_arg?(%{name: "join", arg: arg}), do: arg >= 2
-  defp expression_arg?(%{arg: arg}), do: arg > 0
-
-  # An enclosing API call whose argument holding the call is a query
-  # position.
-  defp api_link?(%{module: nil, name: n, arity: a, arg: arg}, api) do
-    api_owner(api, n, a) != nil and
-      case Map.get(@code_positions, n) do
-        :all -> false
-        positions when is_list(positions) -> arg not in positions
-        nil -> true
+  defp api_name?(ctx, lock, name) do
+    Enum.any?(@query_api, fn mod ->
+      case ElixirDeps.exports(ctx.ev, lock, mod) do
+        nil -> false
+        ex -> Enum.any?(ex, &(elem(&1, 0) == name))
       end
-  end
-
-  defp api_link?(_, _), do: false
-
-  defp api_owner(api, name, arity) do
-    Enum.find_value(api, fn {mod, ex} ->
-      if (name == "fragment" and Enum.any?(ex, &(elem(&1, 0) == name))) or ElixirDeps.exported?(ex, name, arity), do: mod
     end)
-  end
-
-  # [{API module, its exports}], in @query_api order.
-  defp query_api(ctx, lock) do
-    for mod <- @query_api, ex = ElixirDeps.exports(ctx.ev, lock, mod), ex != nil, do: {mod, ex}
   end
 
   defp query_macro?(%{module: m, name: n, arity: a}, c, ctx, lock) do
