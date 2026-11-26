@@ -589,7 +589,23 @@ defmodule Cartographer.ElixirSource do
   defp walk({:__pipe_arg__, _, nil}, env, acc), do: {env, acc}
 
   defp walk({:|>, _, [left, right]}, env, acc) do
-    {_, acc} = walk(left, env, acc)
+    # The left side is argument 0 of the call it's piped into, as Elixir
+    # expands it: the query rule reads its position (review round 4, X4-M8).
+    left_env =
+      case right do
+        {{:., _, [mod, fun]}, _, args} when ident?(fun) and is_list(args) ->
+          enclose(env, if(literal_module?(mod), do: name(mod, env), else: :dynamic), fun, length(args) + 1, 0)
+
+        {fun, _, args} when ident?(fun) and is_list(args) ->
+          if fun in @special or {fun, length(args) + 1} in @special_forms or (is_atom(fun) and Macro.operator?(fun, length(args) + 1)),
+            do: env,
+            else: enclose(env, nil, fun, length(args) + 1, 0)
+
+        _ ->
+          env
+      end
+
+    {_, acc} = walk(left, left_env, acc)
     # The piped value stands first in the call's arguments as a placeholder
     # (walked as a variable, so the left side's calls aren't recorded twice)
     # that carries the left side for readers of the arguments: a literal

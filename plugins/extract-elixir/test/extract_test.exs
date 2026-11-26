@@ -1655,10 +1655,14 @@ defmodule Cartographer.ElixirExtractTest do
           def in_all(q, o), do: where(q, [u], u.x > all(count(o)))
           def in_values(q, o), do: where(q, [u], u.id in values(count(o), %{}))
           def arity(q), do: where(q, [u], coalesce(u.a, u.b, u.c))
+          def piped_exists(q, o), do: where(q, [u], count(o) |> exists())
+          def piped_any(q, o), do: where(q, [u], u.x > (count(o) |> any()))
+          def piped_fragment(q, o), do: where(q, [u], count(o) |> fragment(u.x))
         end
         """)
 
-      for f <- ~w(join_kind/2 type_arg/2 map_fields/2 struct_fields/2 fragment_first/2 in_any/2 in_all/2 in_values/2) do
+      # Piped values are argument 0 of the call they're piped into (X4-M8).
+      for f <- ~w(join_kind/2 type_arg/2 map_fields/2 struct_fields/2 fragment_first/2 in_any/2 in_all/2 in_values/2 piped_exists/2 piped_any/2 piped_fragment/2) do
         assert {"local", "T"} in for(c <- from(doc, "T.#{f}", "count"), do: {c.kind, c.target[:module]}), f
         refute Enum.any?(from(doc, "T.#{f}", "count"), &(&1.kind == "external" and &1.target[:module] == "Ecto.Query.API" and f != "join_kind/2")), f
       end
